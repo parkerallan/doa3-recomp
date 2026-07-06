@@ -1,0 +1,103 @@
+{
+  "binary": "..\\doa3gamefiles\\default.xbe",
+  "base_address": "0x00010000",
+  "entry_point": "0x001651A5",
+  "total_instructions": 613009,
+  "total_functions": 5821,
+  "functions_with_prologue": 941,
+  "functions_by_method": {
+    "call_target": 4928,
+    "prologue": 878,
+    "entry_point": 1,
+    "cc_boundary": 14
+  },
+  "functions_by_section": {
+    ".text": 5007,
+    "D3D": 267,
+    "D3DX": 14,
+    "XGRPH": 11,
+    "DSOUND": 328,
+    "PSGSFD00": 10,
+    "PSGSFD_B": 3,
+    "XPP": 181
+  },
+  "total_xrefs": 133645,
+  "xrefs_by_type": {
+    "cond_jump": 42724,
+    "jump": 10841,
+    "data_read": 44182,
+    "call": 35354,
+    "kernel_call": 544
+  },
+  "total_labels": 11269,
+  "total_strings": 5336,
+  "kernel_imports": 112,
+  "sections_analyzed": [
+    {
+      "name": ".text",
+      "va": "0x00011000",
+      "size": 1703392,
+      "functions": 5007
+    },
+    {
+      "name": "D3D",
+      "va": "0x001B0DE0",
+      "size": 75724,
+      "functions": 267
+    },
+    {
+      "name": "D3DX",
+      "va": "0x001C35C0",
+      "size": 11976,
+      "functions": 14
+    },
+    {
+      "name": "XGRPH",
+      "va": "0x001C64A0",
+      "size": 1532,
+      "functions": 11
+    },
+    {
+      "name": "DSOUND",
+      "va": "0x001C6AA0",
+      "size": 110568,
+      "functions": 328
+    },
+    {
+      "name": "PSGSFD00",
+      "va": "0x001E1AA0",
+      "size": 12688,
+      "functions": 10
+    },
+    {
+      "name": "PSGSFD_I",
+      "va": "0x001E4C40",
+      "size": 496,
+      "functions": 0
+    },
+    {
+      "name": "PSGSFD_B",
+      "va": "0x001E4E40",
+      "size": 1728,
+      "functions": 3
+    },
+    {
+      "name": "PSGSFD_P",
+      "va": "0x001E5500",
+      "size": 1072,
+      "functions": 0
+    },
+    {
+      "name": "XPP",
+      "va": "0x001E5940",
+      "size": 30620,
+      "functions": 181
+    },
+    {
+      "name": "DOLBY",
+      "va": "0x00C27F60",
+      "size": 28056,
+      "functions": 0
+    }
+  ]
+}

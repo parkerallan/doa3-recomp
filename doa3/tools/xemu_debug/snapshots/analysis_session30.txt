@@ -1,0 +1,354 @@
+xemu Debug Session 30 Analysis
+===============================
+
+Date: 2026-03-06
+Game: Burnout 3: Takedown (USA) in xemu 0.8.131
+ISO: D:\recomp\xbox\Burnout 3 - Takedown (USA).iso
+
+== Key Discoveries ==
+
+1. sub_000636D0 is INPUT NORMALIZATION, not physics
+   - Reads raw integer input accumulators:
+     0x4D652C = throttle (integer, e.g. 640)
+     0x4D6530 = steering (integer, e.g. 480)
+   - Uses timing delta: 0x4AE1FC = 0.0167 (1/60s)
+   - Multiplies by screen constants: 0x557870=640.0, 0x5592C8=480.0
+   - WRITES normalized float results to vel_ptr+8 and vel_ptr+C
+   - vel_ptr = car_object+0x1B4 = 0x466DF0
+   - vel_ptr+8 = 1.0 (full throttle), vel_ptr+C = 0.933 (steering)
+
+2. Car object at 0x557880 is a COLOR/MATERIAL PALETTE
+   - Contains values in 0.0-1.0 range (RGB-like)
+   - Does NOT change during gameplay
+   - NOT the runtime car physics object
+
+3. Real physics body is NOT at 0x5FFF00
+   - 0x5FFF00 is all zeros in xemu (our recomp fabricated this)
+   - The real physics is deep in the game's object hierarchy
+
+4. Game Manager Object
+   - Pointer at 0x4AED9C = 0x3F9040
+   - +0x00: vtable at 0x3AAD78 (state machine function table)
+   - +0x40: 0x1E59000 (large heap alloc, possibly game world)
+   - +0x48: 0x3C0800 (sub-object)
+   - +0x6C: 0x83EEE200 (Xbox contiguous RAM, GPU/D3D)
+
+5. Load Queue (0x4AEDDC)
+   Files loaded during session:
+   - Data/Global.txd
+   - Data/GlobalUs.bin
+   - Data/HeadUs.bin
+   - pveh/vlist.bin
+   - Tracks/tlist.bin
+   - Data/Frontend.txd
+   - tracks/US/C5_V1/enviro.dat
+   - tracks/US/C5_V1/static.dat
+   - pveh/COMP/CAR3.bgv
+   - pveh/COMP/CAR2.bgv
+   - tracks/US/C3_V1/enviro.dat
+
+6. sub_000110E0 (frame pump)
+   - Only direct memory ref: 0x4AED9C (game manager ptr)
+   - Everything else accessed via pointer dereferences
+   - Operates through the game manager hierarchy
+
+7. Game State Area (0x4D53B0-0x4D53C0)
+   - 0x4D53B4 = 5 (could be a state value)
+   - 0x4D53B8 = 5
+   - 0x4D53BC = 1
+   - 0x4D53BE = 0 (our "game state" byte)
+   - 0x4D53C0 = float (22.35...) NOT an integer state
+
+8. Xbox Kernel addresses
+   - Idle loop: 0x002CD8E5 / 0x8001B030
+   - D3D device NOT at 0x4A2340 (NULL in xemu)
+   - NV2A GPU registers at 0xFD000000
+
+== Active Gameplay Findings (Crash Junction) ==
+
+9. Car World Transform Matrix at 0x4D6850:
+   [-0.8457  -0.1901  -0.4986   0.0000]
+   [ 0.0000   0.9344  -0.3563   0.0000]
+   [-0.5336   0.3014   0.7902   0.0000]
+   [1271.50  -53.75   146.72    1.0000]
+   This is a proper 4x4 world matrix with rotation and position!
+
+10. Camera/Viewport at 0x4D9180-0x4D9240:
+    - 0x4D9160: FOV = 60.0
+    - 0x4D9190: viewport height = 480.0
+    - 0x4D9194: near clip = 0.001
+    - 0x4D9198: camera world X = 12619.06
+    - 0x4D919C: camera world Y = -1439.40
+    - 0x4D91A0: camera world Z = 1928.95
+    - 0x4D9200: screen width = 640.0
+    - 0x4D9204: screen height = 480.0
+
+11. View Matrix at 0x4D6200:
+    Row 0: [0.646, -0.055, -0.113]
+    Row 1: [-0.008, -0.950, -0.015]
+    Row 2: [-0.577, -0.483, -0.994]
+    Position: (-344, 481, 791)
+
+12. Car Physics Parts Array at 0x5492B0-0x549800:
+    17+ copies of the same 4x4 matrix (80 bytes stride)
+    All at position (1271.50, -53.75, 146.72) with identical rotation
+    This is a per-body-part transform array (crash junction has breakable cars)
+    Each entry is 80 bytes: 64B matrix + 16B metadata
+
+13. AI/Traffic Car Transforms:
+    0x40FC90: (1131.05, 93.34, 590.84)
+    0x40FDC0: (1131.50, 97.15, 595.22)
+    0x40FEF0: (1131.05, 97.17, 590.18)
+    These are clustered around the same position - the target traffic
+
+14. Changed Memory Pages (47 of 1520 total):
+    Most active: 0x4DB000-0x4E0000 (1600+ bytes each)
+    Also active: 0x4D9000, 0x549000, 0x40F000, 0x4D6000, 0x35E000
+    The 0x4DB-4E0 region is likely the physics simulation particle buffer
+
+15. RW Camera Pointer:
+    0x4D5370 = 0x4D45D0 during gameplay (was 0x4D4008 in menus)
+    The pointer changes when entering a race
+
+== Implications for Recomp ==
+
+1. Our fake physics body at 0x5FFF00 is completely wrong - the real game
+   stores input in vel_ptr+8/+C and physics state elsewhere in the object graph
+
+2. sub_000636D0 output (vel_ptr+8, +C) feeds into the real physics engine
+   which integrates position/velocity/heading
+
+3. The game manager at 0x3F9040 is the key entry point to find all game state
+
+4. Car world matrix is at 0x4D6850 - could write our position here for rendering
+
+5. Camera viewport/frustum is at 0x4D9180 area - matches RenderWare camera struct
+
+6. Physics parts array at 0x549000 area has per-body-part transforms
+
+7. The 0x4DB000-0x4E0000 region is the hot physics simulation area
+
+== Speed and Vehicle Tuning (Confirmed) ==
+
+16. Car Speed at 0x40FB18:
+    Confirmed: increases smoothly 28→49 during acceleration
+    Game units per second (internal speed value)
+
+17. Max Speed Cap at 0x40FD7C:
+    Constant 99.9 during race — the car's top speed limit
+
+18. Race Timer at 0x40FB20:
+    Elapsed time in seconds (152.9 observed)
+
+19. Vehicle Tuning Table at 0x40F800-0x40F990:
+    0x40F804: 500.0 (max speed parameter)
+    0x40F808-0x40F814: acceleration rates (0.01, 0.04, 0.02, 0.015)
+    0x40F818-0x40F83C: friction/grip (0.4-1.0 range)
+    0x40F880-0x40F89C: tire parameters (99.0, 100.0)
+    0x40F8B0-0x40F8B4: distance thresholds (800, 1500)
+    0x40F8D0-0x40F8D4: more thresholds (800, 5000)
+    0x40F8F0-0x40F8F4: yet more (1000, 2500)
+    0x40F910-0x40F914: steering/gear (6.0, 22.0)
+    0x40F928-0x40F92C: LOD distances (5000, 10000)
+    0x40F940-0x40F944: physics distances (700, 4000)
+    0x40F970-0x40F974: view distances (100, 5000)
+    All values are floats, organized in parameter pairs/groups
+
+20. Car Runtime State (0x40FA80-0x40FE00):
+    Multiple pointers to sub-objects at 0x7Fxxxx (heap allocations)
+    0x40FAB0-0x40FAF4: pointers to car components
+    0x40FCA0: 0x6319B0 → vehicle model/mesh data?
+    0x40FD60-0x40FD74: more component pointers
+
+== Session 31 Discoveries (Menu States & Crash Mode) ==
+
+21. Game State Machine (B8 values):
+    B8=5: Frontend AND regular racing (NOT just menus!)
+    B8=4: Crash mode only (crash junctions)
+    B8=7: Loading/transition (brief, camera resets to 0x4D4008, model goes NULL)
+    B4 mirrors B8 in all observations
+    0x4D53AC: Changes between modes (1=racing, 2=crash results)
+    The B8 state does NOT change during menu navigation (stays 5 throughout)
+    IMPORTANT: Our recomp checked B8==4 for gameplay — this is WRONG for races!
+
+22. Camera Pointer Behavior (0x4D5370):
+    0x4D4008 = menu/loading camera
+    0x4D45D0 = gameplay camera (both race AND crash mode)
+    Switches to 0x4D45D0 when entering any gameplay
+    Stays at 0x4D45D0 during crash replay screens (B8=5 but still gameplay cam)
+
+23. Game Manager Object (0x3F9040) in detail:
+    +0x00: vtable (0x3AAD78)
+    +0x04: 1 (active flag?)
+    +0x0C: 5 (mirrors B8 initial state, may not update during races)
+    +0x10: 8, +0x14: 16, +0x18: 24 (fixed stride values)
+    +0x1C: self-pointer to +0x30 sub-object (0x3F9070)
+    +0x20: 1
+    +0x24: 0x000214B0 (callback/function ptr?)
+    +0x30: vtable (0x3AAD58, different from main vtable)
+    +0x38: back-pointer to self (0x3F9040)
+    +0x40: world/scene ptr (changes: 0x052DB000 menu, 0x00F70800 crash mode)
+    +0x48: streaming buffer ptr (increments by 0x20000 every ~6s)
+    +0x50: 1
+    +0x58: 16
+    +0x5C: 2
+    +0x60: object count? (64 in menu, 88 in crash mode)
+    +0x6C: GPU/kernel address (0x83EEE200 / 0x83E6D0E0)
+    +0x84: frame counter or ID
+
+24. Vehicle Identity in Crash Mode:
+    Crash event loads TSPC (Traffic Special) class car, not player's race car
+    Load queue shows: pveh/COMP/CAR1.bgv (geometry) + pveh/HEVY/CAR27.btv (texture)
+    Model ptr at 0x40FCA0 cycles during crash replay (different view angles)
+    Max speed cap differs: 78.0-78.2 (crash TSPC) vs 99.9 (race COMP)
+
+25. Tuning Table is GLOBAL (0x40F800):
+    Values are IDENTICAL between Compact Type 1 and Compact Type 2
+    max_speed_param=500, accel=(0.01,0.04,0.02,0.015), grip=(0.6,0.4,0.5,0.8)
+    Per-vehicle differences come from max speed cap at 0x40FD7C, not tuning table
+    Additional params discovered:
+      +0x028-0x044: 8 more floats (0.8, 0.8, 1.0, 1.0, 0.8, 0.8, 0.8, 1.2)
+      +0x088-0x08C: tire params (0.12, 0.12)
+
+26. Track Environment Pointer (0x464018):
+    In crash mode: 0xA837C000 — Xbox contiguous RAM (physical mapping)
+    NOT null! The track IS loaded, just in Xbox physical memory we can't map
+    Track file size table at 0x464020: pairs of (chunk_size, cumulative_offset)
+    at stride 0x10 — this is the track streaming index
+
+27. Crash Physics Data:
+    Parts Array (0x5492B0): 80-byte stride per part (64B matrix + 16B metadata)
+    During crash: parts spread to 3000+ units (car exploding)
+    Max observed spread: 3096.8 units at t=24.5s
+    Speed during crash approach: 0 → 59.0 units/s in ~7 seconds
+    Impact drops speed: 59 → 14.7 instantly
+
+28. Physics Simulation Buffer (0x4DB000):
+    Regular pattern: 0x20-byte stride entries
+    Each entry: (pad, 1.0, 1.0, pad, distance_val, velocity_val, ~0.93, 1.0)
+    The ~0.93 value is likely a friction/restitution coefficient
+    80+ active float values in first 512 bytes
+
+29. Game State Block Details (0x4D5300-0x4D5400):
+    0x4D5310-0x4D531C: lookup tables (0x03020100, 0x07060504 repeating)
+    0x4D5328: 1 (flag)
+    0x4D5344: frame/screen counter (42→75 during session)
+    0x4D534C: counter (40→3 changed)
+    0x4D5360: 1 (during gameplay)
+    0x4D5388: 23 (constant across all states)
+    0x4D5394: 3
+    0x4D53AC: mode flag (1=race, 2=crash results)
+    0x4D53C0: 22.352 (timing constant)
+    0x4D53D0: 5.0 (fixed)
+    0x4D53DC: 36.0, 0x4D53E0: 480.0 (screen dimensions)
+    0x4D53E8: 60.0, 0x4D53EC: 420.0 (viewport)
+    0x4D53F0: 123.7237 (computed value)
+
+30. Race Timer (0x40FB20) is crash-mode only:
+    Shows elapsed time during crash junctions (152.9 observed in S30)
+    Stays at 0.0 during regular races!
+    The regular race timer must be stored elsewhere
+
+31. Race Data Structure (CONFIRMED):
+    Race Timer:     0x411BF8  (float, countdown in seconds)
+    Current Lap:    0x411BDC  (uint32, 1-based)
+    Current Lap 2:  0x411B30  (uint32, duplicate/backup)
+    Player Position: 0x550520  (uint32, 1=1st, 6=last)
+    Standings:      0x550524  (uint32 array, car IDs in position order)
+    Player Car ID:  8         (6th of 6 in test race)
+
+    Race Control Block at 0x411B00:
+      +0x20: active flag (1)
+      +0x2C: fluctuating value (AI-related?)
+      +0x30: current lap (matches +0xDC)
+      +0x34: 1 (flag)
+      +0x3C: 24 (checkpoint count?)
+      +0xD8: 23 (constant)
+      +0xDC: current lap
+      +0xE0: 5 (race type?)
+      +0xF4: 22 (integer timer/counter)
+      +0xF8: countdown timer (float)
+
+    Racer Table at 0x550300 (stride 0x30 per racer):
+      +0x04: value (10, 2, 2, 19, 8 — racer-specific)
+      +0x08: value (16, 6, 3, 20, 18 — racer-specific)
+      +0x0C: value (21, 22, 21, 23, 72 — IDs?)
+      Each racer entry is 0x30 (48) bytes
+
+32. 0x40FD7C is Boost/Performance Meter (NOT max speed cap):
+    Observed values: 99.9 (normal), 1461-1889 (during Burning Lap with boost)
+    Climbs steadily during aggressive driving (near-misses, oncoming, rubbing)
+    In Burning Lap: went from 1461 → 1889 over 30 seconds of aggressive driving
+    NOT a fixed per-car max speed — it's a cumulative boost/performance value
+
+33. Burning Lap Mode:
+    Solo time trial, 2 laps, countdown timer
+    B8 stays at 5 (not crash mode)
+    Race control block identical structure to regular race
+    +0x3C = 29 (checkpoint count, was 24 for regular race track)
+    +0xF4 = 5 (race parameter, was 22 for regular race)
+    +0xDC = current lap (2), +0xE8 = total laps (2)
+    Standings array (0x550520) is STALE from previous race in solo mode
+    Track: tracks/US/C3_V1/enviro.dat (Waterfront)
+    Car speed ~50-72 game units/s at full boost
+
+34. Scoring System Summary:
+    Display buffer at 0x5566E0-0x556720 (rewritten per results screen):
+      Burnout Points: +0x14=aggressive, +0x1C=driving, +0x20=subtotal,
+                      +0x24=total, +0x28=target (10000 for car unlock)
+      Takedowns:      +0x00=total, +0x04=target (15 for car unlock)
+    Score breakdown at 0x463C80 (persistent):
+      +0x04=category_count, +0x24=aggressive, +0x2C=driving_skills
+    Event data at 0x44D160:
+      +0x00=5(type?), +0x1C=55(aggressive), +0x30=70, +0x44=48
+
+36. Road Rage Mode:
+    Timer at 0x411BF8 counts down (same as other race modes)
+    Boost at 0x40FD7C: 5-100 range (lower than Burning Lap's 1400+)
+    B8 briefly = 4 at race start, then stays 5 during gameplay
+    Race control: E0=1, E8=0xFFFFFFFF (unlimited laps?)
+
+37. Takedown Tracking:
+    Career totals (CUMULATIVE, not per-race):
+      0x44D14C: gold takedowns (was 5, went to 7 after Road Rage)
+      0x44D154: silver takedowns (3)
+      0x44D150: bronze takedowns (1)
+      0x44D160: 5 (unclear - possibly a category)
+      0x5502A8: total career takedowns (9 = 5+3+1)
+    Per-AI-car damage state:
+      Base: 0x410600, stride: 0xF0 (240 bytes per car)
+      +0x04: frame/tick counter (40, 41, 25, 63 — different per car)
+      +0x50: hit/damage count (all jumped 2->7 simultaneously = +5)
+      +0x94/+0x98: (2, 3) on all cars — takedown type flags?
+    Other increment candidates:
+      0x40B33C: 10->11 (+1) — possibly per-race takedown counter
+      0x557A64: 5->6 (+1) — event counter?
+      0x4D0038: 1->3 (+2) — game event counter (vtable neighbors)
+
+38. AI Car State Block (0x410600):
+    4 AI cars visible, stride 0xF0 (240 bytes each)
+    Car 0: base 0x410600
+    Car 1: base 0x4106F0
+    Car 2: base 0x4107E0 (approx)
+    Car 3: base 0x4108D0 (approx)
+    Contains: tick counter, hit count, damage state, takedown flags
+
+35. Track Loading Evidence:
+    Load queue at 0x4AEF00+ shows track files loaded:
+      tracks/US/C2_V1/enviro.dat (Downtown)
+      tracks/US/C3_V1/enviro.dat (Waterfront)
+      tracks/US/C5_V1/enviro.dat (seen in S30)
+    Track env pointer (0x464018) = Xbox contiguous RAM address
+    Track table at 0x464014+ has chunk size/offset pairs
+
+== Updated Implications for Recomp ==
+
+1. Our B8==4 check for gameplay is WRONG for regular races (B8 stays 5)
+   Need to use camera pointer (0x4D45D0) or speed > 0 as gameplay indicator
+2. Tuning table is global — per-vehicle tuning comes from max speed cap only
+3. Track env IS loaded (0xA837C000) but in Xbox contiguous RAM we can't reach
+4. The crash physics parts system at 0x5492B0 is fully functional
+5. 0x4D53AC distinguishes race modes (1=race, 2=crash)
+6. Race timer is countdown (0x411BF8), not elapsed — resets each lap
+7. Player position at 0x550520, standings table at 0x550524+
+8. Player is car ID 8 in the standings array

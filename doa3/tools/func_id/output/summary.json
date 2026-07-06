@@ -1,0 +1,28 @@
+{
+  "total_functions": 11858,
+  "classification": {
+    "renderware": 0,
+    "crt": 11,
+    "data_init": 0,
+    "game_classified": 0,
+    "vtable_methods": 0,
+    "unknown": 11847
+  },
+  "percentages": {
+    "renderware": 0.0,
+    "crt": 0.1,
+    "data_init": 0.0,
+    "game_classified": 0.0,
+    "unknown": 99.9
+  },
+  "by_category": {
+    "crt": 11,
+    "unknown": 11847
+  },
+  "by_method": {
+    "crt_signature": 11,
+    "none": 11847
+  },
+  "rw_modules": {},
+  "rw_module_count": 0
+}

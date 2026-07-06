@@ -1,0 +1,156 @@
+NV2A Graphics Engine Integration Plan
+======================================
+Date: 2026-03-07 (Session 33 continuation)
+
+GOAL: Use xemu's NV2A GPU emulation to render the game's graphics,
+similar to how RexGlueSDK uses Xenia's GPU backend.
+
+ARCHITECTURE:
+  [Recompiled Game Code] --> [Xbox D3D8 (recompiled)] --> [Push Buffer in RAM]
+                                                              |
+                                                              v
+                                              [NV2A PFIFO (from xemu)]
+                                                              |
+                                                              v
+                                              [NV2A PGRAPH (from xemu)]
+                                                              |
+                                                              v
+                                              [OpenGL Backend (from xemu)]
+                                                              |
+                                                              v
+                                              [Rendered Frame --> D3D11 Window]
+
+KEY COMPONENTS NEEDED:
+
+1. XEMU NV2A SOURCE (E:\xemu\hw\xbox\nv2a\)
+   - ~16K lines of C code
+   - QEMU dependencies: PCIDevice, MemoryRegion, QemuMutex, hwaddr, etc.
+   - OpenGL backend in pgraph/gl/ (~3K lines)
+   - Shader translation in pgraph/glsl/
+
+2. QEMU SHIM LAYER
+   - Replace PCIDevice with thin wrapper
+   - Replace MemoryRegion with our memory mapping
+   - Replace QemuMutex with Win32 CRITICAL_SECTION
+   - Replace hwaddr with uint64_t
+   - Replace memory_region_* with direct pointer access
+   - Replace pci_irq_assert/deassert with no-ops (or custom handler)
+
+3. MMIO ROUTING (in VEH handler, main.c)
+   Current: Allocate zero-filled pages on NV2A access (0xF0000000+)
+   New: Route MMIO reads/writes to NV2A state machine
+
+   Critical MMIO regions:
+   - 0xFD000000: PMC (power management)
+   - 0xFD001000: PBUS
+   - 0xFD002000: PFIFO (command FIFO - THE KEY ONE)
+   - 0xFD009000: PTIMER
+   - 0xFD0A0000: PFB (framebuffer config)
+   - 0xFD100000: PGRAPH (graphics processing)
+   - 0xFD400000: PCRTC (CRT controller)
+   - 0xFD600000: PRAMDAC
+   - 0xFD700000: PRAMIN (instance memory)
+
+   For push buffer approach, the critical path is:
+   a. Game writes commands to push buffer in system RAM
+   b. Game writes to PFIFO PUT register (0xFD003240)
+   c. We trigger PFIFO processing (read commands, dispatch to PGRAPH)
+   d. PGRAPH processes commands via OpenGL backend
+
+4. PUSH BUFFER PROCESSING
+   - NV2A uses DMA push buffer mode
+   - Push buffer base/limit set via PFIFO registers
+   - PUT pointer = where CPU has written commands to
+   - GET pointer = where GPU has read commands from
+   - When PUT advances past GET, GPU has new work
+
+   Key registers:
+   - NV_PFIFO_CACHE1_DMA_PUT (0xFD003240)
+   - NV_PFIFO_CACHE1_DMA_GET (0xFD003244)
+   - NV_PFIFO_CACHE1_DMA_DCOUNT (0xFD003254)
+   - NV_PFIFO_CACHE1_DMA_PUSH (0xFD003220)
+
+5. OPENGL CONTEXT
+   - Need an OpenGL context for xemu's GL backend
+   - Can create alongside our D3D11 device
+   - Render to FBO, then blit to D3D11 via shared texture
+   - Or switch to OpenGL for main window rendering
+
+6. FRAMEBUFFER OUTPUT
+   - xemu renders to OpenGL framebuffer
+   - We need to composite this onto our window
+   - Options:
+     a. Use WGL/D3D interop to share texture
+     b. Read back pixels and upload to D3D11 texture
+     c. Switch to OpenGL entirely for window rendering
+
+IMPLEMENTATION PHASES:
+
+Phase 1: Shim Layer (2-3 sessions)
+  - Create nv2a_shim.h that provides QEMU type replacements
+  - Get nv2a.c, pfifo.c, pgraph.c compiling
+  - Stub out PCI, VGA, migration code
+
+Phase 2: MMIO Hook (1 session)
+  - In VEH handler, route NV2A reads/writes to NV2AState
+  - Handle register reads (return state values)
+  - Handle register writes (update state, trigger processing)
+
+Phase 3: Push Buffer Processing (1-2 sessions)
+  - Implement PFIFO command processing
+  - Feed commands to PGRAPH
+  - Set up OpenGL context
+
+Phase 4: OpenGL Rendering (2-3 sessions)
+  - Get pgraph/gl/ rendering working
+  - Handle shader translation
+  - Composite output to window
+
+Phase 5: Un-stub RW Pipeline (1 session)
+  - Un-stub sub_00351770 and friends (the 62K render function)
+  - Let the original RW code fill the push buffer
+  - NV2A processes it and renders
+
+ALTERNATIVE APPROACH: D3D8 HLE (like Cxbx-Reloaded)
+  - Instead of NV2A-level emulation, intercept Xbox D3D8 API calls
+  - The ~891 rw_driver_xbox functions in recomp_0005.c ARE the D3D8 layer
+  - Replace key functions with D3D11 equivalents
+  - Pro: No NV2A complexity, direct to modern GPU
+  - Con: Need to identify and reimplement hundreds of D3D8 functions
+
+XEMU SOURCE FILES NEEDED:
+  E:\xemu\hw\xbox\nv2a\nv2a.c          (main device, IRQ, DMA)
+  E:\xemu\hw\xbox\nv2a\pfifo.c         (command FIFO processing)
+  E:\xemu\hw\xbox\nv2a\pgraph\pgraph.c (graphics method dispatch)
+  E:\xemu\hw\xbox\nv2a\pgraph\gl\*.c   (OpenGL backend, ~3K lines)
+  E:\xemu\hw\xbox\nv2a\pgraph\glsl\*.c (shader translation)
+  E:\xemu\hw\xbox\nv2a\pgraph\texture.c (texture handling)
+  E:\xemu\hw\xbox\nv2a\pgraph\vertex.c  (vertex processing)
+  E:\xemu\hw\xbox\nv2a\pgraph\swizzle.c (memory swizzle)
+  E:\xemu\hw\xbox\nv2a\pgraph\s3tc.c    (S3TC decompression)
+  E:\xemu\hw\xbox\nv2a\pcrtc.c          (CRT controller)
+  E:\xemu\hw\xbox\nv2a\pfb.c            (framebuffer)
+  E:\xemu\hw\xbox\nv2a\pmc.c            (power management)
+  E:\xemu\hw\xbox\nv2a\ptimer.c         (timer)
+  E:\xemu\hw\xbox\nv2a\pramdac.c        (DAC)
+
+CURRENT STATUS:
+  - RW display driver table populated (lazy-init working)
+  - sub_001DDAF0 (render callback) calls sub_00351090
+  - sub_00351090 (camera render) implemented as state-maintaining stub
+  - Camera pointer at [0x35FB48] = 0x2035FBA8 (native heap address)
+  - Game running at 30fps, state 4, load_state 0x17
+  - NV2A MMIO access minimal (4 pages) because render pipeline is stubbed
+
+FINDINGS FROM THIS SESSION:
+  1. sub_001DDAF0 (80 bytes) = gamma + call sub_00351090(0)
+  2. sub_00351090 (227 bytes) = RW camera render:
+     - Reads camera from [0x35FB48]
+     - Calls sub_00351490 (begin camera update) -- 62K render entry
+     - Calls sub_00351770 (render scene) -- 62K NV2A commands
+     - Calls sub_00350C10 (end camera update + show raster)
+     - Increments frame counter at camera+0x2478
+  3. sub_00351490 and sub_00351770 are the same 62K mega-function
+     (overlapping entry points into RW's main rendering pipeline)
+  4. Camera object at [0x35FB48] is heap-allocated (native address 0x2035FBA8)
+  5. RW function pointer table at 0x7592E8 properly populated via lazy-init

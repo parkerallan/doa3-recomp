@@ -1,0 +1,83 @@
+Session 33 - xemu Live Debug: Menu State Machine Analysis
+=========================================================
+Date: 2026-03-07
+
+CRITICAL FINDINGS:
+
+1. GAME OBJECT BASE ADDRESS
+   - In xemu: base = 0x004A71A0 (dynamically allocated)
+   - In recomp: hardcoded as 0x60EA00 (from one Xbox run)
+   - The base is passed as a parameter to sub_000165F0 and sub_001AA100
+   - sub_000165F0 reads its case at [esp+4] after entry
+   - At xemu breakpoint: ESP=0xD003ECE8, param=0x004A71A0, ret=0x001564AA
+
+2. OUTER STATE MACHINE (sub_000165F0)
+   - State variable: base + 0x2E1E8
+   - During menus: state = 23 (0x17) = RUNNING/COMPLETED
+   - Lookup table at 0x165D8: states 14-23 ALL map to case 13
+   - Case 13 (loc_000162B6) = running state with full game loop
+   - Flow: case 13 -> loc_00016C42 -> render + frontend update -> return
+
+3. CASE 13 COMMON EXIT PATH (loc_00016C42)
+   Call chain during menus:
+   a. sub_0003D9E0 (render orchestrator, esi=0x4D6170, edi=0)
+   b. sub_0002EB50 (RW scene update, esi=0x45BAD0)
+   c. sub_001D9280 (frontend prep)
+   d. sub_001D9420 (frontend tick/Present) <- THE MENU RENDERING ENTRY POINT
+   Then returns.
+
+4. FRONTEND RENDERING CHAIN
+   sub_001D9420 (3 params from stack)
+     -> sub_001DE7E0 (the actual RW display submit)
+       -> sub_001E1CD0 (linked list/queue management)
+       -> indirect call through [0x759338] = sub_001DDAF0 (RW swap chain)
+       -> indirect call through [0x759318] = sub_001DCF50 (RW render)
+
+   In recomp_manual.c, sub_001D9420 is STUBBED to just call d3d8_PresentFrame().
+   The entire menu rendering chain is bypassed!
+
+5. RW FUNCTION POINTER TABLE
+   0x759338 = 0x001DDAF0 (display driver render submit)
+   0x759318 = 0x001DCF50 (display driver viewport)
+   0x7593E4 = 0x001DAC00 (camera raster create)
+   All in 0x001D* range = RW Xbox display driver cluster
+
+6. sub_001AA100 NEVER CALLED DURING MENUS
+   - Breakpoints at 0x001AA100 never triggered during menu navigation
+   - Watchpoint on phase address (base+0x144384) never triggered
+   - The early-exit flag MEM8(0x55927C) = 0, so it wouldn't skip
+   - sub_001AA100 may only be called during gameplay/race transitions
+
+7. CALL STACK DURING MENUS (sample 9)
+   0x002447D8 -> 0x001D188A -> 0x001D27F4 -> 0x002CB2EB -> 0x001564AA
+   -> 0x00016CB0 -> 0x001D9438 -> 0x001DE7FE -> 0x001DDB37
+   -> 0x001DDAF0 -> 0x0035112E -> 0x003518A3
+
+   Decoded:
+   0x001564AA calls sub_000165F0 (outer state machine)
+   0x00016CB0 is the return point in sub_000165F0 after sub_001D9420
+   0x001D9438 returns from sub_001DE7E0
+   0x001DE7FE returns from indirect call at [0x759338]
+   0x001DDAF0 = RW display driver submit
+   0x003518A3 = in RW rendering pipeline (hot pixel processing)
+
+8. HOT CODE
+   0x002CD8E5-0x002CD94E: MMX/SSE pixel processing (most CPU time)
+   This is RenderWare's software pixel blitting
+
+9. KEY STATE VALUES DURING "LOAD PROFILE" SCREEN
+   B8 (0x4D53B8) = 5 (menus)
+   Camera (0x4D5370) = 0x4D4008 (menu camera)
+   RW Scene (0x45BAD0) = NULL (not created)
+   World ptr (base+0x40) = 0x80808080 (sentinel)
+   Frontend obj (base+0x2E1D0) = 0x4D4008
+
+IMPLICATIONS FOR RECOMP:
+- To get menus working, we need to UN-STUB sub_001D9420 and let it call
+  the real sub_001DE7E0 chain
+- The RW display driver functions (0x001D*) need a D3D11 backend connection
+- The function pointer table at 0x759338/0x759318/0x7593E4 needs to be
+  populated with our D3D11 equivalents
+- sub_001AA100 is NOT the menu state machine - it's the gameplay/race state machine
+- The actual menu flow is: sub_000165F0 case 13 -> sub_001D9420 -> sub_001DE7E0
+  -> RW rendering pipeline

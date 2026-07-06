@@ -1,0 +1,24 @@
+{
+  "total": 11858,
+  "translated": 11845,
+  "failed": 13,
+  "total_lines": 995340,
+  "files": [
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_funcs.h",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0000.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0001.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0002.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0003.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0004.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0005.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0006.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0007.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0008.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0009.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0010.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_0011.c",
+    "E:\\Projects\\doa3-pc\\doa3\\src\\game\\recomp\\gen\\recomp_dispatch.c"
+  ],
+  "num_chunks": 12,
+  "chunk_size": 1000
+}
