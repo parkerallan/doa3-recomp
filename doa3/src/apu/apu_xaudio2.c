@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "apu_xaudio2.h"
+
 #pragma comment(lib, "xaudio2.lib")
 #pragma comment(lib, "ole32.lib")
 
@@ -20,6 +22,8 @@
 #define XA2_CHANNELS      2
 #define XA2_BUF_SAMPLES   1024   /* ~21ms per submission */
 #define XA2_NUM_BUFS      3
+#define XA2_MOVIE_BUF_SAMPLES 2048
+#define XA2_MOVIE_NUM_BUFS 4
 
 static IXAudio2               *g_xa2 = NULL;
 static IXAudio2MasteringVoice *g_xa2_master = NULL;
@@ -28,6 +32,9 @@ static int16_t                 g_xa2_bufs[XA2_NUM_BUFS][XA2_BUF_SAMPLES][2];
 static int                     g_xa2_next_buf = 0;
 static int                     g_xa2_initialized = 0;
 static int                     g_xa2_frames_written = 0;
+static IXAudio2SourceVoice    *g_xa2_movie_source = NULL;
+static int16_t                 g_xa2_movie_bufs[XA2_MOVIE_NUM_BUFS][XA2_MOVIE_BUF_SAMPLES][2];
+static int                     g_xa2_movie_next_buf = 0;
 
 int xa2_init(void)
 {
@@ -87,6 +94,7 @@ void xa2_shutdown(void)
 {
     if (!g_xa2_initialized) return;
 
+    xa2_movie_stop();
     if (g_xa2_source) {
         IXAudio2SourceVoice_Stop(g_xa2_source, 0, XAUDIO2_COMMIT_NOW);
         IXAudio2SourceVoice_FlushSourceBuffers(g_xa2_source);
@@ -143,4 +151,76 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
 int xa2_get_buffer_size(void)
 {
     return XA2_BUF_SAMPLES;
+}
+
+int xa2_movie_start(void)
+{
+    WAVEFORMATEX wfx = { 0 };
+    HRESULT hr;
+
+    if (!g_xa2_initialized || !g_xa2 || g_xa2_movie_source)
+        return g_xa2_movie_source != NULL;
+
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = XA2_CHANNELS;
+    wfx.nSamplesPerSec = XA2_SAMPLE_RATE;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = XA2_CHANNELS * sizeof(int16_t);
+    wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+    hr = IXAudio2_CreateSourceVoice(g_xa2, &g_xa2_movie_source,
+        &wfx, 0, XAUDIO2_DEFAULT_FREQ_RATIO, NULL, NULL, NULL);
+    if (FAILED(hr)) {
+        fprintf(stderr, "[XA2] Movie CreateSourceVoice failed: 0x%08lX\n", hr);
+        g_xa2_movie_source = NULL;
+        return 0;
+    }
+    g_xa2_movie_next_buf = 0;
+    IXAudio2SourceVoice_Start(g_xa2_movie_source, 0, XAUDIO2_COMMIT_NOW);
+    return 1;
+}
+
+int xa2_movie_submit(const int16_t *samples, int num_samples, int end_of_stream)
+{
+    XAUDIO2_VOICE_STATE state;
+    XAUDIO2_BUFFER xbuf;
+    int idx;
+
+    if (!g_xa2_movie_source || !samples || num_samples <= 0 ||
+        num_samples > XA2_MOVIE_BUF_SAMPLES)
+        return 0;
+    IXAudio2SourceVoice_GetState(g_xa2_movie_source, &state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+    if (state.BuffersQueued >= XA2_MOVIE_NUM_BUFS)
+        return 0;
+
+    idx = g_xa2_movie_next_buf;
+    memcpy(g_xa2_movie_bufs[idx], samples,
+        (size_t)num_samples * XA2_CHANNELS * sizeof(int16_t));
+    memset(&xbuf, 0, sizeof(xbuf));
+    xbuf.AudioBytes = num_samples * XA2_CHANNELS * sizeof(int16_t);
+    xbuf.pAudioData = (const BYTE *)g_xa2_movie_bufs[idx];
+    if (end_of_stream)
+        xbuf.Flags = XAUDIO2_END_OF_STREAM;
+    if (FAILED(IXAudio2SourceVoice_SubmitSourceBuffer(g_xa2_movie_source, &xbuf, NULL)))
+        return 0;
+    g_xa2_movie_next_buf = (idx + 1) % XA2_MOVIE_NUM_BUFS;
+    return 1;
+}
+
+uint64_t xa2_movie_samples_played(void)
+{
+    XAUDIO2_VOICE_STATE state;
+    if (!g_xa2_movie_source)
+        return 0;
+    IXAudio2SourceVoice_GetState(g_xa2_movie_source, &state, 0);
+    return state.SamplesPlayed;
+}
+
+void xa2_movie_stop(void)
+{
+    if (!g_xa2_movie_source)
+        return;
+    IXAudio2SourceVoice_Stop(g_xa2_movie_source, 0, XAUDIO2_COMMIT_NOW);
+    IXAudio2SourceVoice_FlushSourceBuffers(g_xa2_movie_source);
+    g_xa2_movie_source->lpVtbl->DestroyVoice(g_xa2_movie_source);
+    g_xa2_movie_source = NULL;
 }

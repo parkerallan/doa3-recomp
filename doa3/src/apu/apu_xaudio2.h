@@ -21,4 +21,10 @@ int xa2_submit_samples(const int16_t *samples, int num_samples);
 /* Get the preferred buffer size in samples. */
 int xa2_get_buffer_size(void);
 
+/* Dedicated 48 kHz stereo voice for host-decoded movie audio. */
+int xa2_movie_start(void);
+int xa2_movie_submit(const int16_t *samples, int num_samples, int end_of_stream);
+uint64_t xa2_movie_samples_played(void);
+void xa2_movie_stop(void);
+
 #endif /* APU_XAUDIO2_H */

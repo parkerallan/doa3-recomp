@@ -20,6 +20,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <limits.h>
+
+#include "../apu/apu_xaudio2.h"
 
 #define PL_MPEG_IMPLEMENTATION
 #include "pl_mpeg.h"
@@ -44,6 +48,10 @@ static int s_host_stopped;
 static plm_video_t *s_host_video;
 static unsigned char *s_host_frame;
 static unsigned s_host_frames;
+static int16_t *s_host_audio;
+static uint32_t s_host_audio_samples;
+static uint32_t s_host_audio_submitted;
+static int s_host_audio_active;
 static LARGE_INTEGER s_host_start, s_host_frequency;
 
 static const char s_hlsl[] =
@@ -117,20 +125,23 @@ static int movie_present_init(ID3D11Device *dev, int w, int h)
 
 static unsigned s_frames = 0;
 
-static int movie_extract_video(const char *path, uint8_t **video, size_t *video_size)
+static int movie_extract_streams(const char *path, uint8_t **video, size_t *video_size,
+                                 uint8_t **audio, size_t *audio_size)
 {
     FILE *file = fopen(path, "rb");
-    uint8_t *input = NULL, *output = NULL;
+    uint8_t *input = NULL, *video_output = NULL, *audio_output = NULL;
     long file_size;
-    size_t input_size, read_size, position = 0, output_size = 0;
+    size_t input_size, read_size, position = 0;
+    size_t video_output_size = 0, audio_output_size = 0;
 
     if (!file || fseek(file, 0, SEEK_END) != 0 ||
         (file_size = ftell(file)) <= 0 || fseek(file, 0, SEEK_SET) != 0)
         goto fail;
     input_size = (size_t)file_size;
     input = (uint8_t *)malloc(input_size);
-    output = (uint8_t *)malloc(input_size);
-    if (!input || !output)
+    video_output = (uint8_t *)malloc(input_size);
+    audio_output = (uint8_t *)malloc(input_size);
+    if (!input || !video_output || !audio_output)
         goto fail;
     read_size = fread(input, 1, input_size, file);
     fclose(file);
@@ -148,7 +159,7 @@ static int movie_extract_video(const char *path, uint8_t **video, size_t *video_
         if (position + 6 > input_size)
             break;
         stream_id = input[position + 3];
-        if (stream_id != 0xE0) {
+        if (stream_id != 0xE0 && stream_id != 0xC0) {
             if (stream_id == 0xBA) {
                 if ((input[position + 4] & 0xC0) == 0x40) {
                     if (position + 14 > input_size)
@@ -191,25 +202,132 @@ static int movie_extract_video(const char *path, uint8_t **video, size_t *video_
             goto fail;
         if (payload > packet_end)
             goto fail;
-        memcpy(output + output_size, input + payload, packet_end - payload);
-        output_size += packet_end - payload;
+        if (stream_id == 0xE0) {
+            memcpy(video_output + video_output_size, input + payload, packet_end - payload);
+            video_output_size += packet_end - payload;
+        } else {
+            memcpy(audio_output + audio_output_size, input + payload, packet_end - payload);
+            audio_output_size += packet_end - payload;
+        }
         position = packet_end;
     }
     free(input);
-    if (!output_size) {
-        free(output);
+    if (!video_output_size) {
+        free(video_output);
+        free(audio_output);
         return 0;
     }
-    *video = output;
-    *video_size = output_size;
+    *video = video_output;
+    *video_size = video_output_size;
+    *audio = audio_output;
+    *audio_size = audio_output_size;
     return 1;
 
 fail:
     if (file)
         fclose(file);
     free(input);
-    free(output);
+    free(video_output);
+    free(audio_output);
     return 0;
+}
+
+static uint16_t read_be16(const uint8_t *data)
+{
+    return ((uint16_t)data[0] << 8) | data[1];
+}
+
+static uint32_t read_be32(const uint8_t *data)
+{
+    return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+           ((uint32_t)data[2] << 8) | data[3];
+}
+
+static int16_t clamp_sample(int sample)
+{
+    if (sample < -32768) return -32768;
+    if (sample > 32767) return 32767;
+    return (int16_t)sample;
+}
+
+static int movie_decode_adx(const uint8_t *data, size_t size,
+                            int16_t **pcm, uint32_t *sample_count)
+{
+    uint32_t samples, rate, frame_count;
+    uint16_t data_offset, highpass;
+    uint8_t channels, block_size;
+    size_t position;
+    int history[2][2] = { 0 };
+    int coefficient1, coefficient2;
+    double x, y, z;
+    int16_t *output;
+
+    if (size < 24 || read_be16(data) != 0x8000 || data[4] != 3 ||
+        data[6] != 4 || data[7] != 2)
+        return 0;
+    data_offset = read_be16(data + 2);
+    block_size = data[5];
+    channels = data[7];
+    rate = read_be32(data + 8);
+    samples = read_be32(data + 12);
+    highpass = read_be16(data + 16);
+    position = (size_t)data_offset + 4;
+    frame_count = (samples + 31) / 32;
+    if (rate != 48000 || block_size != 18 || position > size ||
+        (size - position) / (block_size * channels) < frame_count)
+        return 0;
+
+    output = (int16_t *)malloc((size_t)samples * channels * sizeof(int16_t));
+    if (!output)
+        return 0;
+    x = sqrt(2.0) - cos(2.0 * 3.14159265358979323846 * highpass / rate);
+    y = sqrt(2.0) - 1.0;
+    z = (x - sqrt((x + y) * (x - y))) / y;
+    coefficient1 = (int)(z * 2.0 * 4096.0 + 0.5);
+    coefficient2 = (int)(-z * z * 4096.0 - 0.5);
+
+    for (uint32_t frame = 0; frame < frame_count; frame++) {
+        for (unsigned channel = 0; channel < channels; channel++) {
+            const uint8_t *block = data + position +
+                ((size_t)frame * channels + channel) * block_size;
+            int scale = read_be16(block);
+            for (unsigned index = 0; index < 32; index++) {
+                int nibble = (index & 1) ? (block[2 + index / 2] & 15) :
+                                           (block[2 + index / 2] >> 4);
+                int sample;
+                uint32_t output_index = frame * 32 + index;
+                if (nibble >= 8) nibble -= 16;
+                sample = nibble * scale +
+                    ((coefficient1 * history[channel][0] +
+                      coefficient2 * history[channel][1]) >> 12);
+                sample = clamp_sample(sample);
+                history[channel][1] = history[channel][0];
+                history[channel][0] = sample;
+                if (output_index < samples)
+                    output[(size_t)output_index * channels + channel] = (int16_t)sample;
+            }
+        }
+    }
+    *pcm = output;
+    *sample_count = samples;
+    return 1;
+}
+
+static void movie_queue_audio(void)
+{
+    while (s_host_audio_active && s_host_audio_submitted < s_host_audio_samples) {
+        uint32_t remaining = s_host_audio_samples - s_host_audio_submitted;
+        int count = remaining > 2048 ? 2048 : (int)remaining;
+        int end = s_host_audio_submitted + count == s_host_audio_samples;
+        if (!xa2_movie_submit(s_host_audio + (size_t)s_host_audio_submitted * 2,
+                              count, end))
+            break;
+        s_host_audio_submitted += count;
+    }
+    if (s_host_audio_submitted == s_host_audio_samples) {
+        free(s_host_audio);
+        s_host_audio = NULL;
+    }
 }
 
 static const void *movie_host_frame(void)
@@ -224,7 +342,9 @@ static const void *movie_host_frame(void)
         };
         const char *asset = NULL;
         uint8_t *video_data = NULL;
+        uint8_t *audio_data = NULL;
         size_t video_size = 0;
+        size_t audio_size = 0;
         plm_buffer_t *video_buffer;
         for (unsigned i = 0; i < sizeof assets / sizeof assets[0]; i++) {
             if (GetFileAttributesA(assets[i]) != INVALID_FILE_ATTRIBUTES) {
@@ -232,7 +352,8 @@ static const void *movie_host_frame(void)
                 break;
             }
         }
-        if (!asset || !movie_extract_video(asset, &video_data, &video_size)) {
+        if (!asset || !movie_extract_streams(asset, &video_data, &video_size,
+                                             &audio_data, &audio_size)) {
             fprintf(stderr, "[HOSTFMV] ninja.sfd video stream not found\n");
             s_host_stopped = 1;
             return NULL;
@@ -244,11 +365,24 @@ static const void *movie_host_frame(void)
             plm_video_get_width(s_host_video) != WIDTH ||
             plm_video_get_height(s_host_video) != HEIGHT) {
             fprintf(stderr, "[HOSTFMV] decoder startup failed\n");
+            free(audio_data);
             s_host_stopped = 1;
             return NULL;
         }
         QueryPerformanceFrequency(&s_host_frequency);
         QueryPerformanceCounter(&s_host_start);
+        if (movie_decode_adx(audio_data, audio_size, &s_host_audio,
+                             &s_host_audio_samples) && xa2_movie_start()) {
+            s_host_audio_active = 1;
+            movie_queue_audio();
+            fprintf(stderr, "[HOSTFMV] ADX audio started (%u samples, 48 kHz stereo)\n",
+                s_host_audio_samples);
+        } else {
+            free(s_host_audio);
+            s_host_audio = NULL;
+            fprintf(stderr, "[HOSTFMV] ADX audio unavailable; using video clock\n");
+        }
+        free(audio_data);
         fprintf(stderr, "[HOSTFMV] embedded presenter streaming %s at %.2f fps\n",
             asset, plm_video_get_framerate(s_host_video));
         fflush(stderr);
@@ -256,9 +390,15 @@ static const void *movie_host_frame(void)
     {
         LARGE_INTEGER now;
         unsigned target;
+        movie_queue_audio();
         QueryPerformanceCounter(&now);
-        target = (unsigned)(((now.QuadPart - s_host_start.QuadPart) * 30) /
-                            s_host_frequency.QuadPart);
+        if (s_host_audio_active) {
+            uint64_t played = xa2_movie_samples_played();
+            target = played >= s_host_audio_samples ? UINT_MAX :
+                (unsigned)(played * 30 / 48000);
+        } else
+            target = (unsigned)(((now.QuadPart - s_host_start.QuadPart) * 30) /
+                                s_host_frequency.QuadPart);
         while (s_host_frames <= target) {
             plm_frame_t *frame = plm_video_decode(s_host_video);
             if (!frame) {
