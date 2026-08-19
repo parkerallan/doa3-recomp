@@ -12,7 +12,10 @@ target_include_directories(dsound_compat PUBLIC
 # target_link_libraries(dsound_compat xaudio2)
 
 if(MSVC)
-    target_compile_options(dsound_compat PRIVATE /W4 /O2)
+    target_compile_options(dsound_compat PRIVATE
+        /W4
+        $<$<NOT:$<CONFIG:Debug>>:/O2>
+    )
 else()
     target_compile_options(dsound_compat PRIVATE -Wall -Wextra -O2)
 endif()

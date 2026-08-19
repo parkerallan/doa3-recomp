@@ -888,35 +888,38 @@ int main(int argc, char **argv)
 {
     void *xbe_data = NULL; size_t xbe_size = 0;
     (void)argc; (void)argv;
-    setvbuf(stdout, NULL, _IONBF, 0);
-    /* Diagnostics ALWAYS go to a file: writing this build's log volume to a
-     * live console (any double-click launch) blocks the game thread, the
-     * window stops pumping messages ("Not Responding"), and closing it in
-     * that state kills the process before the movie starts. The file path
-     * makes every launch identical to the automated test runs. Set
-     * DOA3_DIAG_CONSOLE=1 to keep stderr where the launcher put it. */
-    if (!getenv("DOA3_DIAG_CONSOLE")) {
-        printf("diagnostics -> doa3_log.txt (window shows the intro movie frame after ~40s)%c", 10);
-        freopen("doa3_log.txt", "w", stderr);
-    }
-    setvbuf(stderr, NULL, _IONBF, 0);
-
-
-    /* Anchor the working directory to the project root (parent of the exe's
-     * bin folder) so the relative asset paths (../doa3gamefiles) work no
-     * matter how the exe is launched (double-click starts with CWD = bin,
-     * which silently broke every path and exited instantly). */
+    /* Find the project root so relative asset paths work from any build
+     * configuration directory. */
     {
         char exedir[MAX_PATH];
         DWORD n = GetModuleFileNameA(NULL, exedir, MAX_PATH);
         if (n > 0 && n < MAX_PATH) {
-            char *slash = strrchr(exedir, '\\');   /* strip the exe name */
-            if (slash) *slash = 0;
-            slash = strrchr(exedir, '\\');         /* strip bin */
-            if (slash && _stricmp(slash + 1, "bin") == 0) *slash = 0;
-            SetCurrentDirectoryA(exedir);
+            char *slash = strrchr(exedir, 0x5c);
+            if (slash) {
+                char asset[MAX_PATH];
+                *slash = 0;
+                for (int depth = 0; depth < 4; depth++) {
+                    snprintf(asset, sizeof(asset),
+                             "%s\\..\\doa3gamefiles\\default.xbe", exedir);
+                    if (GetFileAttributesA(asset) != INVALID_FILE_ATTRIBUTES) {
+                        SetCurrentDirectoryA(exedir);
+                        break;
+                    }
+                    slash = strrchr(exedir, 0x5c);
+                    if (!slash)
+                        break;
+                    *slash = 0;
+                }
+            }
         }
     }
+    setvbuf(stdout, NULL, _IONBF, 0);
+#ifdef NDEBUG
+    /* Release builds have no console; keep diagnostics beside the project. */
+    freopen("doa3_log.txt", "w", stderr);
+#endif
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     atexit(doa3_atexit);
     SetUnhandledExceptionFilter(doa3_unhandled);
 

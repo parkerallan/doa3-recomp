@@ -2,7 +2,7 @@
  * DOA3 - Recompiled extras: CRI WX device (wxCi*) vtable functions.
  * These are data-referenced only (device ops table at 0x3BEF68) so the
  * function detector missed them. Emitted via tools.recomp -f after
- * seed_missing_functions (see CLAUDE.md). Re-create after a full regen
+ * seed_missing_functions (see NOTES.md). Re-create after a full regen
  * (or keep functions.json seeded and they land in the normal chunks).
  */
 

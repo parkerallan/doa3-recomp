@@ -22192,6 +22192,9 @@ loc_001E2340: ;
 loc_001E25B6: ;
     ebx = MEM32(esp + 0x1C);
 
+    /* DOA3 item 116: restored dropped fall-through (recomp bug #4;
+     * PSGSFD_* was never covered by the original .text-only sweep). */
+    g_seh_ebp = ebp; sub_001E25BA(); return;
 }
 
 /**
@@ -22993,6 +22996,18 @@ loc_001E2890: ;
     MEM32(esp + 0x18) = edx;
     if ((edx != 0)) goto loc_001E2890; /* jne: not equal / not zero */
 
+    /* DOA3 item 116: RESTORED DROPPED FALL-THROUGH (recomp bug #4). This
+     * function's range (0x1E2884-0x1E2C92) ends exactly where sub_001E2C92
+     * begins, and in x86 it falls through into it. sub_001E2C92 carries the
+     * EPILOGUE (pop edi/esi/ebp/ebx + add esp,0x14 = 36 bytes) for the frame
+     * opened by sub_001E25E0. Without this the frame was never released:
+     * measured espDelta = -36 all the way up the chroma MB-worker chain
+     * (sub_001E25E0 -> sub_001E3470 -> B-decoder sub_001E5040 -> sub_0018137C
+     * -> sub_00181300), which drifted the guest stack and destroyed the sfdec
+     * handle the caller keeps in esi (item 114). bug #4's original sweep only
+     * covered .text (0x11000-0x1B0DE0); the PSGSFD_* sections were never
+     * fixed ("225 remain in XDK libs"). */
+    g_seh_ebp = ebp; sub_001E2C92(); return;
 }
 
 /**
@@ -24110,6 +24125,9 @@ void sub_001E3D2C(void)
 loc_001E3D2C: ;
     esi = MEM32(esp + 0x20);
 
+    /* DOA3 item 116: restored dropped fall-through (recomp bug #4;
+     * PSGSFD_* was never covered by the original .text-only sweep). */
+    sub_001E3D30(); return;
 }
 
 /**
@@ -24522,6 +24540,9 @@ loc_001E3EB8: ;
 loc_001E410F: ;
     eax = eax - 0x40;
 
+    /* DOA3 item 116: restored dropped fall-through (recomp bug #4;
+     * PSGSFD_* was never covered by the original .text-only sweep). */
+    g_seh_ebp = ebp; sub_001E4112(); return;
 }
 
 /**
@@ -25298,6 +25319,9 @@ loc_001E43E0: ;
     MEM32(esp + 0x1C) = ecx;
     if ((ecx != 0)) goto loc_001E43E0; /* jne: not equal / not zero */
 
+    /* DOA3 item 116: restored dropped fall-through (recomp bug #4;
+     * PSGSFD_* was never covered by the original .text-only sweep). */
+    g_seh_ebp = ebp; sub_001E478D(); return;
 }
 
 /**
@@ -25852,6 +25876,9 @@ loc_001E4EC9: ;
     ecx = MEM32(0xC0D42C);
     ebx = ebx >> 6;
 
+    /* DOA3 item 116: restored dropped fall-through (recomp bug #4;
+     * PSGSFD_* was never covered by the original .text-only sweep). */
+    sub_001E4ED2(); return;
 }
 
 /**

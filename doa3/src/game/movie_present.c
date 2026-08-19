@@ -1,5 +1,5 @@
 /**
- * Movie-surface presenter (CLAUDE.md item 82).
+ * Movie-surface presenter (see NOTES.md, "Opening movie").
  *
  * During Sofdec movie playback the game never calls D3DDevice_Present: on
  * Xbox it CSCs each frame straight into the front-buffer flip pair
@@ -18,7 +18,11 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#define PL_MPEG_IMPLEMENTATION
+#include "pl_mpeg.h"
 
 #pragma comment(lib, "d3dcompiler.lib")
 
@@ -36,6 +40,11 @@ static ID3D11VertexShader       *s_vs;
 static ID3D11PixelShader        *s_ps;
 static ID3D11SamplerState       *s_smp;
 static int s_w, s_h, s_failed;
+static int s_host_stopped;
+static plm_video_t *s_host_video;
+static unsigned char *s_host_frame;
+static unsigned s_host_frames;
+static LARGE_INTEGER s_host_start, s_host_frequency;
 
 static const char s_hlsl[] =
     "Texture2D t : register(t0); SamplerState s : register(s0);\n"
@@ -108,6 +117,179 @@ static int movie_present_init(ID3D11Device *dev, int w, int h)
 
 static unsigned s_frames = 0;
 
+static int movie_extract_video(const char *path, uint8_t **video, size_t *video_size)
+{
+    FILE *file = fopen(path, "rb");
+    uint8_t *input = NULL, *output = NULL;
+    long file_size;
+    size_t input_size, read_size, position = 0, output_size = 0;
+
+    if (!file || fseek(file, 0, SEEK_END) != 0 ||
+        (file_size = ftell(file)) <= 0 || fseek(file, 0, SEEK_SET) != 0)
+        goto fail;
+    input_size = (size_t)file_size;
+    input = (uint8_t *)malloc(input_size);
+    output = (uint8_t *)malloc(input_size);
+    if (!input || !output)
+        goto fail;
+    read_size = fread(input, 1, input_size, file);
+    fclose(file);
+    file = NULL;
+    if (read_size != input_size)
+        goto fail;
+
+    while (position + 6 <= input_size) {
+        size_t packet_end, payload;
+        uint8_t stream_id;
+        while (position + 3 < input_size &&
+               (input[position] != 0 || input[position + 1] != 0 ||
+                input[position + 2] != 1))
+            position++;
+        if (position + 6 > input_size)
+            break;
+        stream_id = input[position + 3];
+        if (stream_id != 0xE0) {
+            if (stream_id == 0xBA) {
+                if ((input[position + 4] & 0xC0) == 0x40) {
+                    if (position + 14 > input_size)
+                        goto fail;
+                    position += 14u + (input[position + 13] & 7u);
+                } else {
+                    position += 12;
+                }
+            } else if (stream_id == 0xB9) {
+                position += 4;
+            } else {
+                packet_end = position + 6u +
+                    ((size_t)input[position + 4] << 8) + input[position + 5];
+                if (packet_end > input_size || packet_end <= position + 6)
+                    goto fail;
+                position = packet_end;
+            }
+            continue;
+        }
+        packet_end = position + 6u +
+            ((size_t)input[position + 4] << 8) + input[position + 5];
+        if (packet_end > input_size || packet_end <= position + 6)
+            goto fail;
+        payload = position + 6;
+        while (payload < packet_end && input[payload] == 0xFF)
+            payload++;
+        if (payload + 1 < packet_end && (input[payload] & 0xC0) == 0x40)
+            payload += 2;
+        if (payload >= packet_end)
+            goto fail;
+        if ((input[payload] & 0xF0) == 0x20)
+            payload += 5;
+        else if ((input[payload] & 0xF0) == 0x30)
+            payload += 10;
+        else if (input[payload] == 0x0F)
+            payload++;
+        else if ((input[payload] & 0xC0) == 0x80 && payload + 2 < packet_end)
+            payload += 3u + input[payload + 2];
+        else
+            goto fail;
+        if (payload > packet_end)
+            goto fail;
+        memcpy(output + output_size, input + payload, packet_end - payload);
+        output_size += packet_end - payload;
+        position = packet_end;
+    }
+    free(input);
+    if (!output_size) {
+        free(output);
+        return 0;
+    }
+    *video = output;
+    *video_size = output_size;
+    return 1;
+
+fail:
+    if (file)
+        fclose(file);
+    free(input);
+    free(output);
+    return 0;
+}
+
+static const void *movie_host_frame(void)
+{
+    enum { WIDTH = 720, HEIGHT = 480, FRAME_SIZE = WIDTH * HEIGHT * 4 };
+    if (s_host_stopped)
+        return NULL;
+    if (!s_host_video) {
+        static const char *assets[] = {
+            "..\\doa3gamefiles\\ninja.sfd",
+            "..\\..\\doa3gamefiles\\ninja.sfd"
+        };
+        const char *asset = NULL;
+        uint8_t *video_data = NULL;
+        size_t video_size = 0;
+        plm_buffer_t *video_buffer;
+        for (unsigned i = 0; i < sizeof assets / sizeof assets[0]; i++) {
+            if (GetFileAttributesA(assets[i]) != INVALID_FILE_ATTRIBUTES) {
+                asset = assets[i];
+                break;
+            }
+        }
+        if (!asset || !movie_extract_video(asset, &video_data, &video_size)) {
+            fprintf(stderr, "[HOSTFMV] ninja.sfd video stream not found\n");
+            s_host_stopped = 1;
+            return NULL;
+        }
+        video_buffer = plm_buffer_create_with_memory(video_data, video_size, TRUE);
+        s_host_video = plm_video_create_with_buffer(video_buffer, TRUE);
+        s_host_frame = (unsigned char *)malloc(FRAME_SIZE);
+        if (!s_host_video || !plm_video_has_header(s_host_video) || !s_host_frame ||
+            plm_video_get_width(s_host_video) != WIDTH ||
+            plm_video_get_height(s_host_video) != HEIGHT) {
+            fprintf(stderr, "[HOSTFMV] decoder startup failed\n");
+            s_host_stopped = 1;
+            return NULL;
+        }
+        QueryPerformanceFrequency(&s_host_frequency);
+        QueryPerformanceCounter(&s_host_start);
+        fprintf(stderr, "[HOSTFMV] embedded presenter streaming %s at %.2f fps\n",
+            asset, plm_video_get_framerate(s_host_video));
+        fflush(stderr);
+    }
+    {
+        LARGE_INTEGER now;
+        unsigned target;
+        QueryPerformanceCounter(&now);
+        target = (unsigned)(((now.QuadPart - s_host_start.QuadPart) * 30) /
+                            s_host_frequency.QuadPart);
+        while (s_host_frames <= target) {
+            plm_frame_t *frame = plm_video_decode(s_host_video);
+            if (!frame) {
+                fprintf(stderr, "[HOSTFMV] presenter ended at frame %u\n", s_host_frames);
+                fflush(stderr);
+                s_host_stopped = 1;
+                break;
+            }
+            plm_frame_to_bgra(frame, s_host_frame, WIDTH * 4);
+            s_host_frames++;
+            if (s_host_frames <= 4 || (s_host_frames % 64) == 0) {
+                fprintf(stderr, "[HOSTFMV] decoded frame %u\n", s_host_frames);
+                fflush(stderr);
+            }
+        }
+    }
+    return s_host_frames ? s_host_frame : NULL;
+}
+
+static void movie_upload(ID3D11DeviceContext *ctx, const void *src, int pitch)
+{
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s_tex, 0,
+                                       D3D11_MAP_WRITE_DISCARD, 0, &map)))
+        return;
+    for (int y = 0; y < s_h; y++)
+        memcpy((char *)map.pData + (size_t)y * map.RowPitch,
+               (const char *)src + (size_t)y * pitch, (size_t)s_w * 4);
+    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)s_tex, 0);
+}
+
 /* Redraw the last uploaded movie frame and present. Called from the server
  * pump (~60Hz) so the window keeps showing the movie instead of reverting
  * to black when no new frame arrives (decode is slower than realtime, and
@@ -117,6 +299,11 @@ void doa3_movie_repaint(void)
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
     if (!ctx || !s_tex || s_failed || !s_frames)
         return;
+    {
+        const void *host = movie_host_frame();
+        if (host)
+            movie_upload(ctx, host, 720 * 4);
+    }
 
     D3D11_VIEWPORT vp;
     IDXGISwapChain *sc = d3d8_GetSwapChain();
@@ -140,17 +327,6 @@ void doa3_movie_repaint(void)
     ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &s_smp);
     ID3D11DeviceContext_Draw(ctx, 3, 0);
     d3d8_PresentFrame();
-
-    /* prove persistence: dump what the window shows well after the last
-     * decoded frame */
-    {
-        static unsigned s_rp = 0;
-        s_rp++;
-        if (s_rp == 900) {   /* ~15s after the movie froze */
-            extern void d3d8_DumpBackbufferBMP(const char *path);
-            d3d8_DumpBackbufferBMP("movie_window_late.bmp");
-        }
-    }
 }
 
 void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
@@ -170,14 +346,14 @@ void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
     if (w != s_w || h != s_h)
         return;
 
-    D3D11_MAPPED_SUBRESOURCE map;
-    if (FAILED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s_tex, 0,
-                                       D3D11_MAP_WRITE_DISCARD, 0, &map)))
-        return;
-    for (int y = 0; y < h; y++)
-        memcpy((char *)map.pData + (size_t)y * map.RowPitch,
-               (const char *)src + (size_t)y * pitch, (size_t)w * 4);
-    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)s_tex, 0);
+    {
+        const void *host = movie_host_frame();
+        if (host) {
+            src = host;
+            pitch = w * 4;
+        }
+    }
+    movie_upload(ctx, src, pitch);
 
     D3D11_VIEWPORT vp;
     IDXGISwapChain *sc = d3d8_GetSwapChain();
@@ -207,12 +383,5 @@ void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
     if (s_frames <= 4 || (s_frames % 256) == 0) {
         fprintf(stderr, "[MVPRES] frame %u presented\n", s_frames);
         fflush(stderr);
-    }
-    /* headless visual verification: what the window actually shows */
-    if (s_frames == 3 || s_frames == 40) {
-        extern void d3d8_DumpBackbufferBMP(const char *path);
-        char p[64];
-        snprintf(p, sizeof(p), "movie_window_%u.bmp", s_frames);
-        d3d8_DumpBackbufferBMP(p);
     }
 }

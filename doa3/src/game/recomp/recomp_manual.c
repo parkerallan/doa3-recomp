@@ -8,7 +8,7 @@
  * and the dispatch chain pick them up ahead of the generated versions.
  *
  * This starts empty. Add overrides during boot bring-up; record each one in
- * doa3/CLAUDE.md under "Manual Function Overrides" so it survives a regen.
+ * doa3/NOTES.md under "Runtime Architecture" so it survives a regen.
  */
 
 #define RECOMP_GENERATED_CODE
@@ -1340,10 +1340,138 @@ void sub_00179A50_gen(void);
  * pops. */
 uint32_t g_doa3_slotq[16];
 uint32_t g_doa3_slotq_w = 0, g_doa3_slotq_r = 0;
+
+static int doa3_reftrace_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = GetEnvironmentVariableA("DOA3_REFTRACE", NULL, 0) != 0;
+    return enabled;
+}
+
+static int doa3_iframe_dump_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = GetEnvironmentVariableA("DOA3_IFRAME", NULL, 0) != 0;
+    return enabled;
+}
+
+static int doa3_slot_index_from_record(uint32_t record)
+{
+    const uint32_t first = 0xC12E2Cu;
+    if (record < first || record > first + 6u * 0x50u ||
+        (record - first) % 0x50u != 0)
+        return -1;
+    return (int)((record - first) / 0x50u);
+}
+
+static uint32_t g_doa3_plane_hash[7][30];
+static uint32_t g_doa3_plane_addr[7];
+static uint32_t g_doa3_plane_serial[7];
+static uint32_t g_doa3_plane_next_serial;
+
+static uint32_t doa3_hash_bytes(const uint8_t *data, uint32_t size, uint32_t hash)
+{
+    for (uint32_t i = 0; i < size; i++) {
+        hash ^= data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static uint32_t doa3_hash_plane_row(uint32_t plane, int macroblock_row)
+{
+    const uint8_t *y = (const uint8_t *)XBOX_PTR(plane);
+    const uint8_t *u = y + 736u * 480u;
+    const uint8_t *v = u + 384u * 240u;
+    uint32_t hash = 2166136261u;
+    for (int row = 0; row < 16; row++)
+        hash = doa3_hash_bytes(y + (macroblock_row * 16 + row) * 736u, 720, hash);
+    for (int row = 0; row < 8; row++) {
+        hash = doa3_hash_bytes(u + (macroblock_row * 8 + row) * 384u, 360, hash);
+        hash = doa3_hash_bytes(v + (macroblock_row * 8 + row) * 384u, 360, hash);
+    }
+    return hash;
+}
+
+static void doa3_snapshot_completed_plane(uint32_t record)
+{
+    static uint32_t completion = 0;
+    int slot = doa3_slot_index_from_record(record);
+    int trace = doa3_reftrace_enabled();
+    int dump = doa3_iframe_dump_enabled();
+    if ((!trace && !dump) || slot < 0)
+        return;
+    uint32_t plane = MEM32(record + 4);
+    if (plane < 0x1000 || plane + 736u * 480u + 2u * 384u * 240u >= 0x8000000u)
+        return;
+    if (trace) {
+        g_doa3_plane_addr[slot] = plane;
+        g_doa3_plane_serial[slot] = ++g_doa3_plane_next_serial;
+        for (int row = 0; row < 30; row++)
+            g_doa3_plane_hash[slot][row] = doa3_hash_plane_row(plane, row);
+    }
+    if (dump && (completion < 36u || (completion % 6u) == 0)) {
+        char path[64];
+        snprintf(path, sizeof path, "iframe_%04u.raw", completion);
+        FILE *frame = fopen(path, "wb");
+        if (frame) {
+            const uint8_t *y = (const uint8_t *)XBOX_PTR(plane);
+            const uint8_t *u = y + 736u * 480u;
+            const uint8_t *v = u + 384u * 240u;
+            for (int row = 0; row < 480; row++) fwrite(y + row * 736, 1, 720, frame);
+            for (int row = 0; row < 240; row++) fwrite(u + row * 384, 1, 360, frame);
+            for (int row = 0; row < 240; row++) fwrite(v + row * 384, 1, 360, frame);
+            fclose(frame);
+        }
+        FILE *index = fopen("iframe_index.csv", completion ? "ab" : "wb");
+        if (index) {
+            if (!completion)
+                fputs("completion,slot,record,plane,pts,picture_type\n", index);
+            fprintf(index, "%u,%d,%08X,%08X,%d,%u\n", completion, slot,
+                    record, plane, (int)MEM32(record + 8), MEM32(0xC0F7C0 + 0x35F8));
+            fclose(index);
+        }
+    }
+    completion++;
+}
+
+static void doa3_compare_completed_plane(uint32_t plane)
+{
+    if (!doa3_reftrace_enabled())
+        return;
+    for (int slot = 0; slot < 7; slot++) {
+        if (g_doa3_plane_addr[slot] != plane || !g_doa3_plane_serial[slot])
+            continue;
+        uint32_t changed = 0;
+        for (int row = 0; row < 30; row++)
+            if (g_doa3_plane_hash[slot][row] != doa3_hash_plane_row(plane, row))
+                changed |= 1u << row;
+        fprintf(stderr, "[PLANECHECK] serial=%u slot=%d plane=%X changed=%08X%c",
+                g_doa3_plane_serial[slot], slot, plane, changed, 10);
+        fflush(stderr);
+        g_doa3_plane_serial[slot] = 0;
+        return;
+    }
+    fprintf(stderr, "[PLANECHECK] plane=%X no-completion-snapshot%c", plane, 10);
+    fflush(stderr);
+}
+
 void sub_00179A50(void)
 {
     static int s_n = 0;
     uint32_t h = MEM32(esp + 4), outp = MEM32(esp + 0xC);
+    uint32_t old_states[7] = {0};
+    uint32_t old_ref0 = 0, old_ref1 = 0, old_display = 0;
+    int reftrace = doa3_reftrace_enabled();
+    if (reftrace && h >= 0x1000 && h < 0x8000000u) {
+        old_ref0 = MEM32(h + 0x3660);
+        old_ref1 = MEM32(h + 0x3664);
+        old_display = MEM32(h + 0x35C4);
+        for (int i = 0; i < 7; i++)
+            old_states[i] = MEM32(0xC12E2Cu + (uint32_t)i * 0x50u);
+    }
     /* item 104: DECODE-AHEAD CAP. On hardware the 2-ref + 2-B-flip buffer
      * budget physically stops decode from running more than a few pictures
      * past display; our port had no such bound — decode raced ~47 pictures
@@ -1355,9 +1483,60 @@ void sub_00179A50(void)
     /* item 110 (user revert): the item-104 decode-ahead CAP is REMOVED. It
      * starved the MPEG parser and only swapped one freeze mode for another. */
     sub_00179A50_gen();
+    if (reftrace && eax != 0) {
+        static uint32_t failures = 0;
+        if (failures++ < 32) {
+            fprintf(stderr, "[PALLOCFAIL] #%u tr=%u type=%u refs=%X/%X display=%X states=",
+                    failures, MEM32(h + 0x35F4), MEM32(h + 0x35F8),
+                    MEM32(h + 0x3660), MEM32(h + 0x3664), MEM32(h + 0x35C4));
+            for (int i = 0; i < 7; i++)
+                fprintf(stderr, "%s%u", i ? "," : "", MEM32(0xC12E2Cu + (uint32_t)i * 0x50u));
+            fputc(10, stderr);
+            fflush(stderr);
+        }
+    }
     if (eax == 0 && outp >= 0x1000 && outp < 0x8000000u &&
         g_doa3_slotq_w - g_doa3_slotq_r < 16)
         g_doa3_slotq[g_doa3_slotq_w++ & 15] = MEM32(outp);
+    if (reftrace && h >= 0x1000 && h < 0x8000000u &&
+        outp >= 0x1000 && outp < 0x8000000u) {
+        static uint32_t event = 0;
+        uint32_t record = eax == 0 ? MEM32(outp) : 0;
+        int slot = doa3_slot_index_from_record(record);
+        uint32_t plane = slot >= 0 ? MEM32(record + 4) : 0;
+        uint32_t duplicate = 0;
+        if (plane) {
+            for (int i = 0; i < 7; i++) {
+                uint32_t other = 0xC12E2Cu + (uint32_t)i * 0x50u;
+                if (i != slot && MEM32(other) != 0 && MEM32(other + 4) == plane)
+                    duplicate |= 1u << i;
+            }
+        }
+        if (eax == 0 || duplicate || record == old_ref0 || record == old_ref1) {
+            uint32_t new_ref0 = MEM32(h + 0x3660), new_ref1 = MEM32(h + 0x3664);
+            fprintf(stderr,
+                "[REFTRACE] #%u result=%d slot=%d oldst=%u rec=%X plane=%X "
+                "pic=%u/%u oldref=%X(%u/%u)/%X(%u/%u) "
+                "newref=%X(%u/%u)/%X(%u/%u) display=%X dup=%02X hazard=%c%c%c%c",
+                event++, (int)eax, slot, slot >= 0 ? old_states[slot] : 0,
+                record, plane, MEM32(h + 0x35F4), MEM32(h + 0x35F8),
+                old_ref0, doa3_slot_index_from_record(old_ref0) >= 0 ? MEM32(old_ref0 + 0x30) : 0,
+                doa3_slot_index_from_record(old_ref0) >= 0 ? MEM32(old_ref0 + 0x34) : 0,
+                old_ref1, doa3_slot_index_from_record(old_ref1) >= 0 ? MEM32(old_ref1 + 0x30) : 0,
+                doa3_slot_index_from_record(old_ref1) >= 0 ? MEM32(old_ref1 + 0x34) : 0,
+                new_ref0, doa3_slot_index_from_record(new_ref0) >= 0 ? MEM32(new_ref0 + 0x30) : 0,
+                doa3_slot_index_from_record(new_ref0) >= 0 ? MEM32(new_ref0 + 0x34) : 0,
+                new_ref1, doa3_slot_index_from_record(new_ref1) >= 0 ? MEM32(new_ref1 + 0x30) : 0,
+                doa3_slot_index_from_record(new_ref1) >= 0 ? MEM32(new_ref1 + 0x34) : 0,
+                old_display, duplicate,
+                record && record == old_ref0 ? 'R' : '-',
+                record && record == old_ref1 ? 'R' : '-',
+                record && record == old_display ? 'D' : '-',
+                duplicate ? 'P' : '-');
+            fputc(10, stderr);
+            fflush(stderr);
+        }
+    }
     if (s_n < 10) {
         s_n++;
         fprintf(stderr, "[PALLOC] #%d h=0x%X -> eax=0x%X out=0x%X%c",
@@ -1394,7 +1573,7 @@ void sub_0017A6D0(void)
      * at ANY boundary tried so far breaks it. (void) the saves. */
     (void)s_edi; (void)s_esi; (void)s_ebx;
 }
-/* ── item 103b: slot-lifecycle legality guards (see CLAUDE.md item 103) ──
+/* Slot-lifecycle legality guards (see NOTES.md "Diagnostics").
  * The cooperative decode workers deliver picture lifecycle events OUT OF
  * ORDER vs real hardware: the user's stalled runs show ref-releases firing
  * on slots still DECODING (state 1 -> freed -> buffer reused mid-write =
@@ -1477,6 +1656,11 @@ void sub_0017DB10_gen(void);
 void sub_0017DB10(void)
 {
     uint32_t rec = MEM32(esp + 4);
+    if (doa3_reftrace_enabled() && doa3_slot_rec_ok(rec) && MEM32(rec) == 1) {
+        fprintf(stderr, "[RELTRACE] DB10 releasing DECODING slot=%X plane=%X%c",
+                rec, MEM32(rec + 4), 10);
+        fflush(stderr);
+    }
     if (doa3_release_must_defer(rec)) {
         static int s_g = 0;
         if (s_g < 16) { s_g++;
@@ -1492,6 +1676,11 @@ void sub_0017DB30_gen(void);
 void sub_0017DB30(void)
 {
     uint32_t rec = MEM32(esp + 4);
+    if (doa3_reftrace_enabled() && doa3_slot_rec_ok(rec) && MEM32(rec) == 1) {
+        fprintf(stderr, "[RELTRACE] DB30 releasing DECODING slot=%X plane=%X%c",
+                rec, MEM32(rec + 4), 10);
+        fflush(stderr);
+    }
     if (doa3_release_must_defer(rec)) {
         static int s_g = 0;
         if (s_g < 16) { s_g++;
@@ -1521,6 +1710,7 @@ void sub_0017DB00(void)
         g_doa3_pics_served++;
     }
     sub_0017DB00_gen();
+    doa3_snapshot_completed_plane(slot);
     {   static int s_n = 0;
         if (s_n < 10) { s_n++;
             fprintf(stderr, "[SLOT4] #%d slot=0x%X%c", s_n, slot, 10); fflush(stderr); } }
@@ -1549,6 +1739,7 @@ void sub_0017DAF0(void)
         }
     }
     sub_0017DAF0_gen();
+    doa3_snapshot_completed_plane(slot);
     if (s_n < 10) {
         s_n++;
         fprintf(stderr, "[SLOT2] #%d slot=0x%X%c", s_n, slot, 10);
@@ -1558,7 +1749,7 @@ void sub_0017DAF0(void)
 /* GUARD+POLICY: AV-sync picture decide sub_0017A540(ecx=pictype, edi=h).
  * During prep (status 2) the master clock is -1 (its hardware source is the
  * audio decode, which is stubbed) and the clock gate skips every picture, so
- * the prebuffer can never fill (see CLAUDE.md item 76 follow-up). While in
+ * the prebuffer can never fill (see NOTES.md "Opening movie"). While in
  * prep and below the prebuffer target ([h+0x35D8] < [h+0xA2C]) decide=1
  * (decode) — exactly the behavior a live audio clock produces. Once PLAYING
  * the original pacing logic runs. */
@@ -1753,7 +1944,7 @@ void sub_0017A640(void)
 /* DIAG: picture-header parse chain (bit readers on ctx h+0x35E0). One of
  * these rejects every picture -> all pictures skipped -> zero decoded
  * frames -> black movie surface. */
-#define PICPROBE(fn) void fn##_gen(void); void fn(void) {     static int s_n = 0;     uint32_t inh = eax, inc = ecx, ind = edx;     fn##_gen();     if (s_n < 10) {         s_n++;         fprintf(stderr, "[PICHDR] " #fn " #%d eax=0x%X ecx=0x%X edx=0x%X -> 0x%X%c",                 s_n, inh, inc, ind, eax, 10);         fflush(stderr);     } }
+#define PICPROBE(fn) void fn##_gen(void); void fn(void) {     static int s_n = 0;     uint32_t inh = eax, inc = ecx, ind = edx;     fn##_gen();     if (s_n < 40) {         s_n++;         fprintf(stderr, "[PICHDR] " #fn " #%d eax=0x%X ecx=0x%X edx=0x%X -> 0x%X tr=%u type=%u%c",                 s_n, inh, inc, ind, eax, MEM32(0xC0F7C0 + 0x35F4),                 MEM32(0xC0F7C0 + 0x35F8), 10);         fflush(stderr);     } }
 PICPROBE(sub_00179990)
 PICPROBE(sub_001799D0)
 PICPROBE(sub_00179A10)
@@ -3434,11 +3625,25 @@ void sub_0017DA20(void)
 /* DIAG: display-side frame pop (sub_0017EE50(h,q,&out)) + frame gate
  * (sub_0017EAD0(h,frame)) — the FPEEK "new frame?" chain. */
 void sub_0017EE50_gen(void);
+static uint32_t g_doa3_display_frame;
+static int doa3_display_trace_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = GetEnvironmentVariableA("DOA3_DISPLAYTRACE", NULL, 0) != 0;
+    return enabled;
+}
+
 void sub_0017EE50(void)
 {
     static int s_n = 0;
     uint32_t h = MEM32(esp + 4), q = MEM32(esp + 8), outp = MEM32(esp + 0xC);
     sub_0017EE50_gen();
+    if (doa3_display_trace_enabled()) {
+        uint32_t frame = (outp >= 0x1000 && outp < 0x8000000u) ? MEM32(outp) : 0;
+        if (frame >= 0x1000 && frame < 0x8000000u)
+            g_doa3_display_frame = frame;
+    }
     if (s_n < 40 || (s_n % 2048) == 0) {
         uint32_t rec = h + q * 0x388u + 0xD34u;
         uint32_t up = MEM32(rec + 0x360);
@@ -3520,8 +3725,10 @@ void sub_001762B0_gen(void);
 void sub_001762B0(void)
 {
     static int s_n = 0;
+    static uint32_t display_n = 0;
     uint32_t a[6];
     for (int k = 0; k < 6; k++) a[k] = MEM32(esp + 4 + 4u * k);
+    doa3_compare_completed_plane(a[0] & 0x07FFFFFFu);
     /* item 90: suspended pictures' slot dims fields can be zero (their
      * frame-locals were written at a different drift level). Dims are
      * stream-constant — substitute the sequence-header values. */
@@ -3547,6 +3754,35 @@ void sub_001762B0(void)
                 s_n, a[0], a[1], a[2], a[3], a[4], a[5], ysum, usum, vsum, 10);
         fflush(stderr);
     }
+    if (doa3_display_trace_enabled() && display_n < 40) {
+        uint32_t src = a[0] & 0x07FFFFFFu;
+        uint32_t frame = g_doa3_display_frame;
+        uint32_t expected = (frame >= 0x1000 && frame < 0x8000000u) ? MEM32(frame + 0x20) : 0;
+        char path[64];
+        snprintf(path, sizeof path, "display_yuv_%04u.raw", display_n);
+        FILE *dump = fopen(path, "wb");
+        if (dump && src >= 0x1000 && src + 736u * 480u + 2u * 384u * 240u < 0x8000000u) {
+            const uint8_t *y = (const uint8_t *)XBOX_PTR(src);
+            const uint8_t *u = y + 736u * 480u;
+            const uint8_t *v = u + 384u * 240u;
+            for (int row = 0; row < 480; row++) fwrite(y + row * 736, 1, 720, dump);
+            for (int row = 0; row < 240; row++) fwrite(u + row * 384, 1, 360, dump);
+            for (int row = 0; row < 240; row++) fwrite(v + row * 384, 1, 360, dump);
+        }
+        if (dump) fclose(dump);
+        FILE *index = fopen("display_index.csv", display_n ? "ab" : "wb");
+        if (index) {
+            if (!display_n)
+                fputs("display,descriptor,plane,expected_plane,width,height,field2,field3,field4,pts,rate,type\n", index);
+            fprintf(index, "%u,%08X,%08X,%08X,%u,%u,%u,%u,%u,%u,%u,%u\n",
+                    display_n, frame, src, expected,
+                    frame ? MEM32(frame) : 0, frame ? MEM32(frame + 4) : 0,
+                    frame ? MEM32(frame + 8) : 0, frame ? MEM32(frame + 0xC) : 0,
+                    frame ? MEM32(frame + 0x10) : 0, frame ? MEM32(frame + 0x14) : 0,
+                    frame ? MEM32(frame + 0x18) : 0, frame ? MEM32(frame + 0x1C) : 0);
+            fclose(index);
+        }
+    }
     sub_001762B0_gen();
     g_doa3_movie_frames++;
     /* present the finished movie frame to the host window (item 82) */
@@ -3556,6 +3792,17 @@ void sub_001762B0(void)
             extern void doa3_present_movie_surface(const void *src, int w, int h, int pitch);
             doa3_present_movie_surface(XBOX_PTR(mvdst), 720, 480, 2880);
         }
+    }
+    if (doa3_display_trace_enabled() && display_n < 40) {
+        uint32_t dst = a[1] & 0x07FFFFFFu;
+        char path[64];
+        snprintf(path, sizeof path, "display_bgra_%04u.raw", display_n);
+        FILE *dump = fopen(path, "wb");
+        if (dump && dst >= 0x1000 && dst + 2880u * 480u < 0x8000000u)
+            for (int row = 0; row < 480; row++)
+                fwrite((const uint8_t *)XBOX_PTR(dst) + row * 2880u, 1, 2880, dump);
+        if (dump) fclose(dump);
+        display_n++;
     }
     if (s_n < 8) {
         uint32_t dst = a[1] & 0x07FFFFFFu;   /* pBits from LockRect */
@@ -3595,95 +3842,6 @@ void sub_001762B0(void)
             }
         }
         fflush(stderr);
-    }
-    /* RAW PLANE DUMP (task #3): our decoded YUV for blits 0..7 ->
-     * movie_yuv_N.raw (Y 720x480 + U,V 360x240, depitched) for numeric
-     * diff against ffmpeg ground truth. */
-    if (s_n < 8) {
-        uint32_t Y = a[0] & 0x07FFFFFFu;
-        if (Y >= 0x1000 && Y < 0x7E00000u) {
-            char pn[64];
-            snprintf(pn, sizeof pn, "movie_yuv_%d.raw", s_n);
-            FILE *fp = fopen(pn, "wb");
-            if (fp) {
-                const unsigned char *py = (const unsigned char *)XBOX_PTR(Y);
-                const unsigned char *pu = py + 736 * 480;
-                const unsigned char *pv = pu + 384 * 240;
-                for (int r = 0; r < 480; r++) fwrite(py + r * 736, 1, 720, fp);
-                for (int r = 0; r < 240; r++) fwrite(pu + r * 384, 1, 360, fp);
-                for (int r = 0; r < 240; r++) fwrite(pv + r * 384, 1, 360, fp);
-                fclose(fp);
-            }
-        }
-    }
-    /* HOST REFERENCE CSC (item 93): convert the SAME decoded YUV planes with
-     * known-good BT.601 math -> movie_ref.bmp. If ref is clean, the game CSC
-     * kernel/tables are at fault; if ref shows the same tint/speckle, the
-     * decode itself does. Plane layout per [PLINF]: U=Y+736*480, V=U+384*240,
-     * Ypitch 736, Cpitch 384. */
-    if (s_n == 2) {
-        uint32_t Y = a[0] & 0x07FFFFFFu;
-        if (Y >= 0x1000 && Y < 0x7E00000u) {
-            FILE *fp = fopen("movie_ref.bmp", "wb");
-            if (fp) {
-                unsigned char hdr[54] = {0};
-                uint32_t img = 720u * 480u * 4u, off = 54, fsz = off + img;
-                hdr[0]='B'; hdr[1]='M';
-                memcpy(hdr+2,&fsz,4); memcpy(hdr+10,&off,4);
-                uint32_t bi=40, w=720; int32_t hneg=-480; uint16_t pl=1,bpp=32;
-                memcpy(hdr+14,&bi,4); memcpy(hdr+18,&w,4); memcpy(hdr+22,&hneg,4);
-                memcpy(hdr+26,&pl,2); memcpy(hdr+28,&bpp,2); memcpy(hdr+34,&img,4);
-                fwrite(hdr,1,54,fp);
-                const unsigned char *py = (const unsigned char *)XBOX_PTR(Y);
-                const unsigned char *pu = py + 736 * 480;
-                const unsigned char *pv = pu + 384 * 240;
-                for (int yy = 0; yy < 480; yy++) {
-                    unsigned char row[720 * 4];
-                    for (int xx = 0; xx < 720; xx++) {
-                        int yv = py[yy * 736 + xx];
-                        int uv = pu[(yy / 2) * 384 + (xx / 2)];
-                        int vv = pv[(yy / 2) * 384 + (xx / 2)];
-                        int c = yv - 16, d = uv - 128, e = vv - 128;
-                        int r = (298 * c + 409 * e + 128) >> 8;
-                        int g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-                        int b = (298 * c + 516 * d + 128) >> 8;
-                        row[xx*4+0] = (unsigned char)(b < 0 ? 0 : b > 255 ? 255 : b);
-                        row[xx*4+1] = (unsigned char)(g < 0 ? 0 : g > 255 ? 255 : g);
-                        row[xx*4+2] = (unsigned char)(r < 0 ? 0 : r > 255 ? 255 : r);
-                        row[xx*4+3] = 0;
-                    }
-                    fwrite(row, 1, sizeof row, fp);
-                }
-                fclose(fp);
-                fprintf(stderr, "[REFCSC] wrote movie_ref.bmp%c", 10);
-                fflush(stderr);
-            }
-        }
-    }
-    /* BMP snapshot of the movie surface (32bpp BGRA, 720x480, pitch 2880) so
-     * we can SEE what the CSC produced. */
-    if ((s_n == 2 || s_n == 6 || (s_n && (s_n % 32) == 0))) {
-        uint32_t dst = a[1] & 0x07FFFFFFu;
-        if (dst >= 0x1000 && dst + 2880 * 480 < 0x8000000u) {
-            char path[128];
-            snprintf(path, sizeof path, "movie_%04d.bmp", s_n);
-            FILE *fp = fopen(path, "wb");
-            if (fp) {
-                unsigned char hdr[54] = {0};
-                uint32_t img = 2880u * 480u, off = 54, fsz = off + img;
-                hdr[0]='B'; hdr[1]='M';
-                memcpy(hdr+2,&fsz,4); memcpy(hdr+10,&off,4);
-                uint32_t bi=40, w=720; int32_t hneg=-480; uint16_t pl=1,bpp=32;
-                memcpy(hdr+14,&bi,4); memcpy(hdr+18,&w,4); memcpy(hdr+22,&hneg,4);
-                memcpy(hdr+26,&pl,2); memcpy(hdr+28,&bpp,2);
-                memcpy(hdr+34,&img,4);
-                fwrite(hdr,1,54,fp);
-                fwrite(XBOX_PTR(dst), 1, img, fp);
-                fclose(fp);
-                fprintf(stderr, "[BMP] wrote %s%c", path, 10);
-                fflush(stderr);
-            }
-        }
     }
     s_n++;
 }
@@ -3919,7 +4077,7 @@ void sub_001B8970(void)
         doa3_pump_cri_servers();
         {
             uint32_t saved_esp2 = esp; (void)saved_esp2;
-            /* EXPERIMENT (audio bypass, see CLAUDE.md item 74+): the video
+            /* EXPERIMENT (audio bypass, see NOTES.md "Known Limitations and Next Work"): the video
              * readiness chain waits on the AUDIO substream reaching prebuffer
              * state 5, but the audio substream never starts (h+0x59CC stays
              * 0 — ADXT attach path broken separately). Clear the "has audio"
@@ -3984,14 +4142,6 @@ void sub_001B8970(void)
         }
         static unsigned fr = 0;
         ++fr;
-        /* Visual verification snapshots: dump the backbuffer at checkpoints
-         * (the game window is on a non-interactive desktop in test runs). */
-        if (fr == 120 || fr == 600 || fr == 3000 || fr == 9000 || fr == 15000) {
-            extern void d3d8_DumpBackbufferBMP(const char *path);
-            char snap[128];
-            snprintf(snap, sizeof(snap), "doa3_frame_%u.bmp", fr);
-            d3d8_DumpBackbufferBMP(snap);
-        }
         if ((fr <= 1200 ? (fr % 60) : (fr % 600)) == 1) {
             extern void pgraph_d3d11_get_stats(void *out);
             struct { uint32_t frames, draws, verts, handled, ignored, clears; } s = {0};
@@ -4007,7 +4157,7 @@ void sub_001B8970(void)
                 pgraph_diag_dump_ignored(); }
             /* DIAG: intro sequencer (sub_00081EB0) + game state. 0x4B83B0=state,
              * B1=movie idx, B2/B4=phase durations, B6=frame counter; 0x5E597C=the
-             * game-state flag gating per-frame sub_00153D90 (see CLAUDE.md). */
+             * game-state flag gating per-frame sub_00153D90 (see NOTES.md). */
             fprintf(stderr, "[INTRO] st=%u mv=%u dur=%u/%u ctr=%u  gstate=0x%X 5E5A04=0x%X 5E5978=0x%X\n",
                     MEM8(0x4B83B0), MEM8(0x4B83B1), MEM16(0x4B83B2), MEM16(0x4B83B4),
                     MEM16(0x4B83B6), MEM32(0x5E597C), MEM32(0x5E5A04), MEM32(0x5E5978));

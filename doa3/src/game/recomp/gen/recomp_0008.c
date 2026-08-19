@@ -3390,7 +3390,7 @@ loc_00164F4F: ;
  * Frame: fpo_leaf
  */
 /* DOA3: overridden in recomp_manual.c — XAPI fiber API backed by host fibers
- * (the recompiled stack-switching cannot transfer control; see CLAUDE.md). */
+ * (the recompiled stack-switching cannot transfer control; see NOTES.md). */
 void sub_00164F50_gen(void)
 {
     uint32_t ebp;
@@ -3503,7 +3503,7 @@ loc_00164FD7: ;
  * Frame: fpo_leaf
  */
 /* DOA3: overridden in recomp_manual.c — XAPI fiber API backed by host fibers
- * (the recompiled stack-switching cannot transfer control; see CLAUDE.md). */
+ * (the recompiled stack-switching cannot transfer control; see NOTES.md). */
 void sub_00164FDC_gen(void)
 {
 
@@ -3527,7 +3527,7 @@ loc_00164FEC: ;
  * Frame: fpo_leaf
  */
 /* DOA3: overridden in recomp_manual.c — XAPI fiber API backed by host fibers
- * (the recompiled stack-switching cannot transfer control; see CLAUDE.md). */
+ * (the recompiled stack-switching cannot transfer control; see NOTES.md). */
 void sub_00164FEF_gen(void)
 {
     uint32_t ebp;

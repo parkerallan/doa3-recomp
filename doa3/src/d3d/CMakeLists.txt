@@ -23,7 +23,10 @@ target_link_libraries(d3d8_compat
 )
 
 if(MSVC)
-    target_compile_options(d3d8_compat PRIVATE /W4 /O2)
+    target_compile_options(d3d8_compat PRIVATE
+        /W4
+        $<$<NOT:$<CONFIG:Debug>>:/O2>
+    )
 else()
     target_compile_options(d3d8_compat PRIVATE -Wall -Wextra -O2)
 endif()

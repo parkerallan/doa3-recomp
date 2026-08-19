@@ -170,6 +170,7 @@ def _fmt_operand_write(op, value_expr):
 
 _MMX_BINOPS = {
     "paddw": "mmx_paddw", "psubw": "mmx_psubw",
+    "pavgb": "mmx_pavgb",
     "pmullw": "mmx_pmullw", "pmulhw": "mmx_pmulhw",
     "punpcklwd": "mmx_punpcklwd", "punpckhwd": "mmx_punpckhwd",
     "punpcklbw": "mmx_punpcklbw", "punpckhbw": "mmx_punpckhbw",

@@ -2,7 +2,7 @@
  * DOA3 - Recompiled extras #2: data-referenced vtable/callback functions the
  * detector missed (CRI ADXF file-ops vtbl 0x3BEEB8, MFS/wxCi device ops, game
  * callback tables). Found by scanning .data/.rdata for unemitted .text
- * pointers; emitted transitively via tools.recomp -f. See CLAUDE.md.
+ * pointers; emitted transitively via tools.recomp -f. See NOTES.md.
  */
 
 #define RECOMP_GENERATED_CODE
@@ -9750,8 +9750,16 @@ loc_0017C020: ;
     ebx = eax;
     esp = esp + 8;
     /* cmp ebx, ebp - flags set for next jcc */
+    /* DOA3 item 195: RECOMP BUG #14, FIFTH SIGHTING — live ES-delivery path.
+     * Original at 0x0017C025:  cmp ebx, ebp / mov ebp,[esp+0x1c] / je
+     * The mov CLOBBERS ebp, an operand, before the jcc; the deferred emission
+     * evaluated the compare against the RELOADED ebp, so the FIRST video PES
+     * (the 2018-byte packet at file offset 8204 carrying the MPEG sequence
+     * header) was never delivered -> movie started 1.6s in. Hoist both
+     * operands before the clobber. */
+    uint32_t _d14_c025_a = (uint32_t)ebx, _d14_c025_b = (uint32_t)ebp;
     ebp = MEM32(esp + 0x1C);
-    if (CMP_EQ(ebx, ebp)) goto loc_0017C098; /* je: equal / zero */
+    if (CMP_EQ(_d14_c025_a, _d14_c025_b)) goto loc_0017C098; /* je: equal / zero */
 
 loc_0017C02D: ;
     PUSH32(esp, 0x37);

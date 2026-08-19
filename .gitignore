@@ -5,3 +5,9 @@
 /doa3gamefiles
 /doa3/bin
 /doa3/build
+/doa3/*.raw
+/doa3/*.bmp
+/doa3/*.csv
+/doa3/*.log
+/doa3/doa3_log.txt
+/doa3/xbox_kernel.log

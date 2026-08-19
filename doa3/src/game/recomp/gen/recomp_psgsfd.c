@@ -2,7 +2,7 @@
  * DOA3 - PSGSFD_I/_P/_B picture-type slice decoders (never emitted:
  * reached only via the data table at 0x21A2A4 tail-jump [obj+0x22C];
  * PSGSFD_I/_P had 0 detected functions; sub_001E4E80 was truncated).
- * RE-GENERATE after any pipeline regen. See CLAUDE.md item 77.
+ * RE-GENERATE after any pipeline regen. See NOTES.md "Regeneration Contract".
  */
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
@@ -2889,42 +2889,42 @@ loc_001E3B20: ;
     ecx = MEM32(esp + 4);
     edx = MEM32(esp + 0x14);
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 8, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 0x10, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 0x18, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 0x20, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 0x28, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 0x30, mm0); /* movq */
     eax = eax + edx;
     ebx = ebx + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [ebx] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(ebx)); /* pavgb */
     MMQ_STORE(ecx + 0x38, mm0); /* movq */
     /* emms */
     POP32(esp, ebx);
@@ -2957,35 +2957,35 @@ loc_001E3BD0: ;
     ecx = MEM32(esp);
     edx = MEM32(esp + 0xC);
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 8, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 0x10, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 0x18, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 0x20, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 0x28, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 0x30, mm0); /* movq */
     eax = eax + edx;
     mm0 = MMQ_LOAD(eax); /* movq */
-    /* TODO: pavgb mm0, qword ptr [eax + 1] */
+    mm0 = mmx_pavgb(mm0, MMQ_LOAD(eax + 1)); /* pavgb */
     MMQ_STORE(ecx + 0x38, mm0); /* movq */
     /* emms */
     esp = esp + 8;

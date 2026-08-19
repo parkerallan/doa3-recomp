@@ -1,6 +1,6 @@
 /**
  * DOA3 - mwPly vtable functions the detector merged into neighbors
- * (movie open/status family; see CLAUDE.md item 44). Re-emitted
+ * (movie open/status family; see NOTES.md "Generated support units"). Re-emitted
  * standalone. RE-GENERATE after any pipeline regen.
  */
 

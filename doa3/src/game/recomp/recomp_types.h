@@ -394,7 +394,7 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
          * return;" and the missing target would have consumed the fake \
          * return slot with its own "esp += 4; ret". Without this the \
          * caller leaks -4 esp per failed tail-jump (same class as the \
-         * RECOMP_ICALL_SAFE cdecl-cleanup bug, CLAUDE.md item 73). */ \
+         * RECOMP_ICALL_SAFE cdecl-cleanup bug, NOTES.md "Runtime Architecture"). */ \
         extern void recomp_itail_fail_log(uint32_t va); \
         recomp_itail_fail_log((uint32_t)(xbox_va)); \
         g_esp += 4; \
@@ -447,6 +447,13 @@ static __inline uint64_t mmx_psubw(uint64_t a, uint64_t b) {
     for (i = 0; i < 4; i++) {
         uint16_t x = (uint16_t)(a >> (i*16)), y = (uint16_t)(b >> (i*16));
         r |= (uint64_t)(uint16_t)(x - y) << (i*16);
+    } return r;
+}
+static __inline uint64_t mmx_pavgb(uint64_t a, uint64_t b) {
+    uint64_t r = 0; int i;
+    for (i = 0; i < 8; i++) {
+        uint16_t x = (uint8_t)(a >> (i*8)), y = (uint8_t)(b >> (i*8));
+        r |= (uint64_t)(uint8_t)((x + y + 1) >> 1) << (i*8);
     } return r;
 }
 static __inline uint64_t mmx_pmullw(uint64_t a, uint64_t b) {

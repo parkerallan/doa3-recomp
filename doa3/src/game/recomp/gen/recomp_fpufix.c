@@ -1,6 +1,6 @@
 /**
  * DOA3 - re-emitted functions with FIXED x87 fcom/fnstsw/parity lifting
- * (recomp bug #9; see CLAUDE.md). Originals renamed _oldfpu.
+ * (recomp bug #9; see NOTES.md). Originals renamed _oldfpu.
  * RE-GENERATE after any pipeline regen (tools/recomp/fpufix_funcs.json).
  */
 

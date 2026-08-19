@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
+if(POLICY CMP0184)
+    cmake_policy(SET CMP0184 NEW)
+endif()
 project(doa3_recomp C CXX)
 
-# Dead or Alive 3 - Static Recompilation
-# Builds the compatibility layers and the recompiled game executable.
+if(MSVC AND POLICY CMP0184)
+    foreach(language C CXX)
+        string(REPLACE "/RTC1" "" debug_flags "${CMAKE_${language}_FLAGS_DEBUG}")
+        set(CMAKE_${language}_FLAGS_DEBUG "${debug_flags}" CACHE STRING
+            "Flags used by the ${language} compiler during Debug builds" FORCE)
+    endforeach()
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

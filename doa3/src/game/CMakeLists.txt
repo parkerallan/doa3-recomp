@@ -58,11 +58,19 @@ target_include_directories(doa3 PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/recomp
     ${CMAKE_CURRENT_SOURCE_DIR}/recomp/gen
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party
     ${NV2A_DIR}
 )
 
 if(MSVC)
-    target_compile_options(doa3 PRIVATE /W3 /WX- /O2)
+    target_compile_options(doa3 PRIVATE
+        /W3
+        /WX-
+        $<$<CONFIG:Debug>:/O2>
+        $<$<CONFIG:Debug>:/Ob2>
+        $<$<NOT:$<CONFIG:Debug>>:/O2>
+    )
+    set_property(TARGET doa3 PROPERTY MSVC_RUNTIME_CHECKS "")
     # Generated/recompiled code is mechanical: silence its warnings, and allow
     # the huge translation units (/bigobj).
     set_source_files_properties(${RECOMP_GEN_SOURCES} recomp/recomp_manual.c
@@ -75,16 +83,19 @@ if(MSVC)
     target_link_options(doa3 PRIVATE
         /DYNAMICBASE:NO
         /FIXED:NO
-        /MAP
-        /DEBUG
+        $<$<CONFIG:Debug>:/MAP>
+        $<$<CONFIG:Debug>:/DEBUG>
+        $<$<CONFIG:Release>:/SUBSYSTEM:WINDOWS>
+        $<$<CONFIG:Release>:/ENTRY:mainCRTStartup>
         /STACK:33554432
         /LARGEADDRESSAWARE
     )
 endif()
 
-# Output to project bin/ for easy testing
+# Keep configuration outputs separate.
 set_target_properties(doa3 PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin"
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/bin"
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/release"
+    PDB_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/debug"
 )

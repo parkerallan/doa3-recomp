@@ -32,7 +32,7 @@ WATCH_ADDRS = {
     'eip':          (None,     'reg', 'Instruction pointer'),
 }
 
-# State names (from our CLAUDE.md analysis)
+# State names (see NOTES.md)
 STATE_NAMES = {
     0: 'S0_PREINIT',
     1: 'S1_INIT',

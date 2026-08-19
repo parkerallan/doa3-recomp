@@ -45,7 +45,7 @@ if(MSVC)
     target_compile_options(xbox_kernel PRIVATE
         /W4             # High warning level
         /WX-            # Don't treat warnings as errors (yet)
-        /O2             # Optimize for speed
+        $<$<NOT:$<CONFIG:Debug>>:/O2> # Optimize non-Debug builds
         /GS-            # Disable buffer security checks (perf)
         /Gy             # Function-level linking
     )
