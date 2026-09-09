@@ -604,8 +604,9 @@ void pgraph_method(NV2AState *d, uint32_t subchannel,
 }
 
 /* ============================================================
- * PFIFO - command FIFO (stub for Phase 1)
- * Full PFIFO with push buffer processing comes in Phase 2-3.
+ * PFIFO - command FIFO.
+ * The push buffer itself is translated in the KickOff override, so this
+ * only has to model the pusher/cache status the driver polls.
  * ============================================================ */
 
 uint64_t pfifo_read(void *opaque, hwaddr addr, unsigned int size)
@@ -620,6 +621,42 @@ uint64_t pfifo_read(void *opaque, hwaddr addr, unsigned int size)
     case NV_PFIFO_INTR_EN_0:
         r = d->pfifo.enabled_interrupts;
         break;
+
+    /* The pusher is never busy in this port.
+     *
+     * There is no GPU consuming the push buffer asynchronously: the KickOff
+     * override translates everything written so far to D3D11 synchronously, so
+     * by the time the driver asks, CACHE1 has already drained. The Xbox D3D8
+     * FIFO-idle routine (sub_001BAF60) polls exactly these four registers and
+     * spins at 0x001BB060 until CACHE1_STATUS reports LOW_MARK; with the old
+     * stub answering 0 to every read, that loop never exited and boot hung
+     * before the frame buffer was ever created.
+     *
+     * The busy/pending bits below are read-only status on hardware, so
+     * reporting them clear is the truthful answer for a drained FIFO rather
+     * than a value the driver wrote. */
+    case NV_PFIFO_CACHE1_STATUS:
+        r = NV_PFIFO_CACHE1_STATUS_LOW_MARK;         /* cache empty */
+        break;
+    case NV_PFIFO_CACHE1_DMA_PUSH:
+        /* Neither mid-method (STATE) nor actively pushing (STATUS). */
+        r = d->pfifo.regs[addr] & ~(uint32_t)(NV_PFIFO_CACHE1_DMA_PUSH_STATE |
+                                              NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
+        break;
+    case NV_PFIFO_RUNOUT_STATUS:
+        /* The runout ring is always empty: nothing is ever deferred. */
+        r = NV_PFIFO_RUNOUT_STATUS_LOW_MARK;
+        break;
+    case NV_PFIFO_CACHE1_PULL0:
+        r = d->pfifo.regs[addr] & ~(uint32_t)NV_PFIFO_CACHE1_PULL0_BUSY;
+        break;
+    case NV_PFIFO_CACHES:
+        r = d->pfifo.regs[addr] & ~(uint32_t)NV_PFIFO_CACHES_DMA_SUSPEND;
+        break;
+    case NV_PFIFO_CACHE1_DMA_GET:
+        r = d->pfifo.regs[NV_PFIFO_CACHE1_DMA_PUT];  /* GET == PUT: consumed */
+        break;
+
     default:
         r = d->pfifo.regs[addr];
         break;
@@ -752,7 +789,8 @@ const NV2ABlockInfo blocktable[NV_NUM_BLOCKS] = {
     /* NV_PRAMIN = 19 */
     { .name = NULL },
     /* NV_USER = 20 */
-    STUB_ENTRY(USER,          0x800000, 0x800000),
+    { .name = "USER", .offset = 0x800000, .size = 0x800000,
+      .ops = { .read = nv2a_user_read, .write = nv2a_user_write } },
 };
 
 #undef ENTRY

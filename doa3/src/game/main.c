@@ -1056,13 +1056,23 @@ int main(int argc, char **argv)
      * keep the device write cursor inside it — exactly as burnout's
      * sub_003518E0/sub_00351770 overrides keep device[0] in its cmd_buf. */
     {
-        /* High heap: the PB is CPU-only in this port (game writes it, the
-         * pgraph translator parses it) — no GPU physical addressing touches
-         * it, and the low 45MB heap is needed for the game's own contiguous
-         * allocations (3x4.8MB screen workspaces + 14MB frame buffers). */
+        /* Must stay in the LOW heap: the guest converts push-buffer addresses
+         * to physical with a bare 26-bit mask, so anything above 64 MB aliases
+         * onto .data. It is pure port overhead though — the console has no
+         * equivalent reservation — so keep it small. 1 MB is ample: the
+         * MakeSpace override resets the write cursor to the base on every
+         * kick, so this only ever holds one kick's worth of commands.
+         *
+         * At 4 MB the game ran out of low heap once D3DDevice_CreateDevice
+         * started allocating its 2.8 MB of back buffers again. The game's own
+         * allocations come to roughly 45 MB (14 MB pool + 4x4.8 MB screen
+         * workspaces + the back buffers + change) against the 45 MB left after
+         * this reservation, and the asset loader was the one that lost: it
+         * failed a 1.25 MB allocation and then span forever on
+         * "E9040828:'flid' is range outside". */
         extern uint32_t xbox_HeapReserveTop(uint32_t size, uint32_t alignment);
         extern uint32_t g_doa3_pb_base, g_doa3_pb_end;
-        uint32_t sz = 4u * 1024 * 1024;
+        uint32_t sz = 1u * 1024 * 1024;
         g_doa3_pb_base = xbox_HeapReserveTop(sz, 4096);
         g_doa3_pb_end  = g_doa3_pb_base + sz;
         fprintf(stderr, "  D3D8 push buffer: %u KB at Xbox VA 0x%08X-0x%08X\n",

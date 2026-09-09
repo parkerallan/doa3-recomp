@@ -59789,7 +59789,6 @@ void sub_001B18C9(void)
 loc_001B18C9: ;
     MEM32(esp + 0x10) = eax;
     ecx = eax;
-
 }
 
 /**
@@ -75559,7 +75558,7 @@ loc_001B8ECE: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B8EE0(void)
+void sub_001B8EE0_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -75875,7 +75874,7 @@ loc_001B911E: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B9130(void)
+void sub_001B9130_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -76019,11 +76018,20 @@ void sub_001B9258(void)
 loc_001B9258: ;
     ecx = MEM32(esp + 0x20);
     MEM32(esp + 0x1C) = ecx;
-    /* DROPPED FALL-THROUGH into 0x001B9260, deliberately NOT restored:
-     * restoring it runs the back-buffer/PFIFO setup this port never ran,
-     * and the NV2A stub cannot complete that channel init -- boot spins on
-     * 0xFD002080/0xFD002100 forever. The descriptors it would fill are the
-     * ones SetViewport clamps against (see recomp_manual.c notes). */
+    /* RESTORED FALL-THROUGH: 0x001B9258 runs straight into 0x001B9260.
+     *
+     * Dropping it skipped the whole of D3DDevice_CreateDevice past this
+     * point -- the frame-buffer allocation, the sub_001B4CC0 loop that fills
+     * the implicit surface descriptors at device+0x2150/+0x2168, and the
+     * FIFO channel setup. With those descriptors left zero, SetViewport
+     * clamped every viewport against a surface of size 1, so the game asking
+     * for 720x480 got width 1, the projection-viewport matrix came out all
+     * zeros, and every post-movie vertex collapsed onto the viewport centre.
+     *
+     * The FIFO setup this now runs needs pfifo_read to report a drained
+     * pusher (nv2a_core.c) -- without that the idle loop at 0x001BB060
+     * never exits. */
+    sub_001B9260(); return;
 
 }
 
@@ -80976,7 +80984,7 @@ loc_001BB23B: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001BB256(void)
+void sub_001BB256_gen(void)
 {
 
 loc_001BB256: ;
@@ -81796,7 +81804,7 @@ loc_001BB617: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001BB66A(void)
+void sub_001BB66A_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -81999,7 +82007,7 @@ loc_001BB76D: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001BB770(void)
+void sub_001BB770_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

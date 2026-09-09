@@ -718,21 +718,27 @@ void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
             }
             if (s_fake && g_doa3_post_movie) {
                 s_n++;
-                /* Pulse repeatedly rather than once: whether a single press
-                 * lands while the screen is in the right state is otherwise a
-                 * coin flip, which makes runs incomparable. */
-                if (s_n > 200 && (s_n % 300u) < 60u) {
+                /* ONE press, then released for good.
+                 *
+                 * Pulsing repeatedly restarts the pad rumble on every press,
+                 * and the screen latch is only released while the rumble is
+                 * idle: sub_00050250 bails whenever sub_00067220 (the word at
+                 * 0x0049231C) is non-zero, and bit 3 of it means "rumble
+                 * running" (set at 0x00067342, cleared at 0x000672B0). A
+                 * repeating press therefore holds the latch shut forever,
+                 * which is not what a real press does. */
+                if (s_n >= 300 && s_n < 340) {
                     buttons |= 0x0010;   /* START */
                     /* The post-movie screen gate at 0x000CDC20 wants bit 0x20
                      * or 0x200 of the pad word at 0x5E5ED8 + pad*0x2C, which
-                     * START does not produce -- assert A (analog) and BACK too
-                     * so the diagnostic covers the confirm buttons. */
+                     * START does not produce -- assert A (analog) too so the
+                     * diagnostic covers the confirm buttons. */
                     /* BACK omitted: holding it pins the screen in state 0 */
                     a = 255;             /* A */
                 }
-                if (s_n == 200 || s_n == 400)
+                if (s_n == 300 || s_n == 340)
                     fprintf(stderr, "[FAKESTART] %s at frame %u\n",
-                            s_n == 200 ? "press" : "release", s_n), fflush(stderr);
+                            s_n == 300 ? "press" : "release", s_n), fflush(stderr);
             }
         }
         if (GetAsyncKeyState(VK_UP)     & 0x8000) buttons |= 0x0001;
@@ -927,6 +933,34 @@ static int doa3_pumptrace(void)
             fflush(stderr); } \
         fn##_gen(); \
     }
+/* Does the per-frame pad-vibration service run after the movie?
+ *
+ * sub_000679A0 is what advances the rumble elapsed counter at
+ * 0x004920E0+0x24 and, when it passes the duration at +0x28, clears bit 3 of
+ * 0x0049231C at 0x00067A92. That bit is the last thing holding the screen
+ * latch shut: sub_00050250 refuses to release while sub_00067220 reports it.
+ * Measured post-movie the elapsed counter never moves, so either this never
+ * runs or it bails. Count it and its caller. */
+void sub_000679A0_gen(void);
+void sub_000679A0(void) {
+    static unsigned s_n = 0;
+    if ((++s_n % 600u) == 1) {
+        fprintf(stderr, "[VIB] sub_000679A0 #%u dur=%d elapsed=%d 49231C=%08X\n",
+                s_n, (int)MEM32(0x4920E0 + 0x28), (int)MEM32(0x4920E0 + 0x24),
+                MEM32(0x49231C));
+        fflush(stderr);
+    }
+    sub_000679A0_gen();
+}
+void sub_00068D90_gen(void);
+void sub_00068D90(void) {
+    static unsigned s_n = 0;
+    if ((++s_n % 600u) == 1) {
+        fprintf(stderr, "[VIB] sub_00068D90 #%u\n", s_n); fflush(stderr);
+    }
+    sub_00068D90_gen();
+}
+
 CALL_COUNT_PROBE(sub_0008038C)
 CALL_COUNT_PROBE(sub_000804EB)
 CALL_COUNT_PROBE(sub_0006B7E0)
@@ -1891,7 +1925,8 @@ void sub_0017DB00(void)
     doa3_snapshot_completed_plane(slot);
     {   static int s_n = 0;
         if (s_n < 10) { s_n++;
-            fprintf(stderr, "[SLOT4] #%d slot=0x%X%c", s_n, slot, 10); fflush(stderr); } }
+            fprintf(stderr, "[SLOT4] #%d slot=0x%X%c", s_n, slot, 10);
+            fflush(stderr); } }
 }
 void sub_0017DAF0_gen(void);
 void sub_0017DAF0(void)
@@ -2770,6 +2805,17 @@ void sub_00050250(void) {
                 MEM32(0x5E5ED0), MEM32(0x5E5EE0),
                 MEM8(0x4B838A), MEM8(0x48E648), (int)MEM32(0x48E638),
                 MEM8(0x48E650), eax & 0xFFu);
+        /* 0x0049231C bit 3 = "pad rumble running" (set 0x00067342, cleared
+         * 0x000672B0/0x00067350). It is the last thing holding the screen
+         * latch shut, so show the rumble record it is derived from:
+         * 0x004920E0 + pad*0x2C, +0x24 elapsed vs +0x28 duration, where the
+         * duration is (0x004A0D94 + 1) * 0xF0. */
+        fprintf(stderr, "          rumble cfg4A0D94=%d dur=(%d,%d) elapsed=(%d,%d) "
+                        "act=(%u,%u)\n",
+                (int)MEM32(0x4A0D94),
+                (int)MEM32(0x4920E0 + 0x28), (int)MEM32(0x4920E0 + 0x2C + 0x28),
+                (int)MEM32(0x4920E0 + 0x24), (int)MEM32(0x4920E0 + 0x2C + 0x24),
+                MEM8(0x4920E0 + 0x20), MEM8(0x4920E0 + 0x2C + 0x20));
         fflush(stderr);
     }
 }
@@ -2907,6 +2953,7 @@ void sub_001BA7D8(void)
 }
 
 
+
 /* D3DDevice_SetRenderTarget (0x001B1350). DIAGNOSTIC WRAPPER.
  *
  * The device keeps the current colour surface at +0x40C, and SetViewport
@@ -2926,10 +2973,16 @@ void sub_001B1350(void)
         if (s_n < 20) { s_n++;
             uint32_t d = MEM32(0x001C3390);
             void *bt[8]; int nb = (int)CaptureStackBackTrace(1, 8, bt, NULL), bi;
-            fprintf(stderr, "[SETRT] arg=%08X -> dev+40C=%08X (+410=%08X) bt:",
-                    arg, MEM32(d + 0x40C), MEM32(d + 0x410));
-            for (bi = 0; bi < nb; bi++) fprintf(stderr, " %p", bt[bi]);
-            fprintf(stderr, "\n");
+            (void)bt; (void)nb; (void)bi;
+            /* The tail of this function (loc_001B1562) resets the viewport to
+             * the render-target size -- the only route to a real viewport, and
+             * so to a non-zero projection-viewport and composite matrix. Show
+             * the target and the implicit surface descriptor it sizes from. */
+            fprintf(stderr, "[SETRT] arg=%08X -> dev+40C=%08X | surf %08X: "
+                            "[0]=%08X [C]=%08X [10]=%08X\n",
+                    arg, MEM32(d + 0x40C), d + 0x2150,
+                    MEM32(d + 0x2150), MEM32(d + 0x2150 + 0xC),
+                    MEM32(d + 0x2150 + 0x10));
             fflush(stderr); } }
 }
 
@@ -3193,13 +3246,19 @@ void sub_001B3940(void) {
 void sub_001B0EC0_gen(void);
 void sub_001B0EC0(void) {
     uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
-    {   /* DIAG: what matrix does the game actually set? */
-        static int s_n = 0;
-        if (s_n < 24) { s_n++;
+    {   /* DIAG: what matrix does the game actually set?
+         * The boot calls are all identity; the ones that matter are the
+         * post-movie ones, which is where the device copy at device+0x880
+         * comes back with two zero rows. */
+        extern volatile int g_doa3_post_movie;
+        static int s_n = 0, s_pm = 0;
+        int want = (s_n < 8) || (g_doa3_post_movie && s_pm < 24);
+        if (want) { if (s_n < 8) s_n++; else s_pm++;
             extern void doa3_dump_mat4(const char *tag, uint32_t p);
             fprintf(stderr, "[SETXF] state=%u mat=%08X ",
                     MEM32(esp + 4), MEM32(esp + 8));
             doa3_dump_mat4("M", MEM32(esp + 8));
+            fprintf(stderr, " -> dev+%03X", (MEM32(esp + 4) + 0x22) << 6);
             fprintf(stderr, "\n"); fflush(stderr); } }
     sub_001B0EC0_gen();
     edi = s_edi; esi = s_esi; ebx = s_ebx;
@@ -4248,11 +4307,11 @@ void sub_001B4B30(void)
  *
  * The ret sizes are fixed properties of each function, so enforcing them is
  * correct at every call site, not just this one. */
-/* DISABLED: ESP_FIX(sub_001BB770, 0) -- see note above */
-/* DISABLED: ESP_FIX(sub_001BB256, 4) -- see note above */
-/* DISABLED: ESP_FIX(sub_001BB66A, 0xC) -- see note above */
-/* DISABLED: ESP_FIX(sub_001B8EE0, 0) -- see note above */
-/* DISABLED: ESP_FIX(sub_001B9130, 4) -- see note above */
+ESP_FIX(sub_001BB770, 0)
+ESP_FIX(sub_001BB256, 4)
+ESP_FIX(sub_001BB66A, 0xC)
+ESP_FIX(sub_001B8EE0, 0)
+ESP_FIX(sub_001B9130, 4)
 ESP_FIX(sub_001BEA38, 4)   /* D3DDevice_ApplyStateBlock(handle), ret 4 */
 ESP_FIX(sub_001BEBC0, 4)   /* D3DDevice_CaptureStateBlock(handle), ret 4 */
 ESP_FIX(sub_001C35C0, 8)   /* D3DX context factory (dev, out), ret 8 */
@@ -4525,7 +4584,8 @@ void sub_001B88C0(void)
          * register was ever written and the spin could not exit -- the whole
          * device setup, including the initial SetRenderTarget, sat behind it.
          * Writes into the aperture go through the VEH to the NV2A USER block. */
-        if (notifier && notifier < 0xF0000000u) {
+        if (notifier && (notifier < 0xF0000000u ||
+                         (notifier >= 0xFD000000u && notifier < 0xFE000000u))) {
             MEM32(notifier + 0x40) = cursor;         /* DMA_PUT (as the gen does) */
             MEM32(notifier + 0x44) = cursor;         /* DMA_GET == PUT -> drained */
         }
@@ -4534,6 +4594,20 @@ void sub_001B88C0(void)
         {
             uint32_t fptr = MEM32(ctx + 0x3F0);
             if (fptr && fptr < 0xF0000000u) MEM32(fptr) = MEM32(ctx + 0x1C);
+        }
+        {   /* The push buffer is deliberately small (main.c). Say so loudly if
+             * a single kick ever gets close to filling it, rather than letting
+             * commands run off the end silently. */
+            static int s_warned = 0;
+            if (!s_warned && g_doa3_pb_end > g_doa3_pb_base &&
+                cursor >= g_doa3_pb_base &&
+                cursor - g_doa3_pb_base >
+                    (g_doa3_pb_end - g_doa3_pb_base) / 4 * 3) {
+                s_warned = 1;
+                fprintf(stderr, "[PBFULL] one kick reached %u of %u bytes\n",
+                        cursor - g_doa3_pb_base, g_doa3_pb_end - g_doa3_pb_base);
+                fflush(stderr);
+            }
         }
         MEM32(ctx + 0x18)   = cursor;
         MEM32(ctx + 0x2518) = MEM32(ctx + 0x2B60);   /* FIFO drained: GET = PUT */

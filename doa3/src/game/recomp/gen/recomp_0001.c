@@ -103109,7 +103109,7 @@ loc_00067993: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000679A0(void)
+void sub_000679A0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
     #define fp_push(v) (g_fp_stack[--g_fp_top & 7] = (v))
@@ -104823,7 +104823,7 @@ loc_00068C46: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00068D90(void)
+void sub_00068D90_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */

@@ -113,6 +113,10 @@ void d3d8_DebugDumpTargetState(void)
     if (rtv) ID3D11RenderTargetView_Release(rtv);
     if (dsv) ID3D11DepthStencilView_Release(dsv);
 }
+/* Actual swap-chain flips, split by who caused them. During movie playback
+ * only the host presenter may flip; a non-zero guest count there is the
+ * flicker. */
+DWORD g_flip_guest = 0, g_flip_host = 0, g_flip_blocked = 0;
 void d3d8_PresentFrame(void)
 {
     /* Pump Windows messages */
@@ -124,8 +128,10 @@ void d3d8_PresentFrame(void)
     }
 
     /* Present the backbuffer (VSync = 1) */
-    if (g_device_state.swap_chain)
+    if (g_device_state.swap_chain) {
+        g_flip_host++;
         IDXGISwapChain_Present(g_device_state.swap_chain, 0, 0);
+    }
 }
 
 /* Dump the current backbuffer to a .bmp for headless visual verification
@@ -485,6 +491,9 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
                 g_d3d_clear_count, g_d3d_draw_count,
                 g_d3d_settransform_count, g_d3d_setrs_count,
                 g_d3d_settexture_count);
+        fprintf(stderr, "  [FLIP] guest=%u host=%u blocked=%u\n",
+                g_flip_guest, g_flip_host, g_flip_blocked);
+        g_flip_guest = g_flip_host = g_flip_blocked = 0;
         fflush(stderr);
         frame_count = 0;
         g_d3d_begin_count = g_d3d_end_count = 0;
@@ -539,6 +548,7 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
         DispatchMessageA(&msg);
     }
 
+    g_flip_guest++;
     return IDXGISwapChain_Present(g_device_state.swap_chain, 0, 0);
 }
 
@@ -570,6 +580,17 @@ static HRESULT __stdcall dev_Clear(IDirect3DDevice8 *self, DWORD Count, const D3
     (void)self; (void)Count; (void)pRects; (void)Stencil;
     g_d3d_clear_count++;
 
+    /* While the intro movie is playing, movie_present.c owns the screen.
+     *
+     * Sofdec writes movie frames straight into the Xbox front-buffer pair
+     * rather than calling Present, so the host presenter is the only thing
+     * putting the movie on our swap chain. The game still runs its own frame
+     * loop underneath, and once D3DDevice_SetRenderTarget started working the
+     * guest clear finally reached the swap chain and wiped the movie frame --
+     * the background flickered away on every guest present while the overlay
+     * the game draws on top survived. Hold the clear back until the presenter
+     * hands the screen over, the same way the pgraph translator already holds
+     * back guest geometry. */
     if (Flags & D3DCLEAR_TARGET) {
         float clear_color[4] = {
             ((Color >> 16) & 0xFF) / 255.0f,  /* R */
