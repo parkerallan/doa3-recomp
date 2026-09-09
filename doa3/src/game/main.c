@@ -24,6 +24,7 @@
 #include "../d3d/d3d8_xbox.h"
 #include "../audio/dsound_xbox.h"
 #include "recomp/gen/recomp_funcs.h"
+#include "recomp/recomp_dispatch.h"   /* recomp_lookup for the CRT initializers */
 
 #define DOA3_ENTRY_POINT   0x001651A5
 #define DOA3_XBE_PATH      "../doa3gamefiles/default.xbe"
@@ -525,6 +526,12 @@ void doa3_watch_disarm(void)
     }
 }
 
+/* DOA3: generic "watch one field of a strided array" filter, used to find
+ * who overwrites the vtable pointers of the 175-object array at 0x370C48
+ * that sub_000E8BB0 dispatches through. Armed from the dispatch loop once
+ * the array has been verified intact, so any hit is real corruption. */
+uint32_t g_watch_arr_base = 0, g_watch_arr_stride = 0, g_watch_arr_n = 0;
+
 static uint32_t g_watch_last_va = 0;
 static uintptr_t g_watch_last_rip = 0;
 static uint32_t g_watch_last_old = 0;
@@ -598,6 +605,20 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
              * cannot find statically (computed addressing). */
             int slot_idx = watch_slot_state(xbva);
             int interesting = (xbva == 0xC12DB8u) || slot_idx >= 0;
+            if (!interesting && g_watch_arr_stride) {
+                uint32_t _rel = xbva - g_watch_arr_base;
+                if (xbva >= g_watch_arr_base &&
+                    _rel < g_watch_arr_n * g_watch_arr_stride &&
+                    (_rel % g_watch_arr_stride) < 4u) {
+                    interesting = 1;
+                    fprintf(stderr, "[VTHIT] elem=%u xbva=0x%08X old=0x%08X rip=0x%llX eax=%08X ebx=%08X ecx=%08X edx=%08X esi=%08X edi=%08X ebp=%08X\n",
+                            _rel / g_watch_arr_stride, xbva,
+                            *(volatile uint32_t *)f,
+                            (unsigned long long)info->ContextRecord->Rip,
+                            g_eax, g_ebx, g_ecx, g_edx, g_esi, g_edi);
+                    fflush(stderr);
+                }
+            }
             if (interesting) {
                 g_watch_last_va = xbva;
                 g_watch_last_rip = (uintptr_t)info->ContextRecord->Rip;
@@ -636,6 +657,25 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
         }
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    /* OutputDebugString with no debugger attached surfaces here. The retail
+     * build still emits its diagnostic stream this way, so decode it rather
+     * than reporting it as an unexplained non-AV crash: ExceptionInformation
+     * is { length, string pointer }. */
+    if (code == 0x40010006UL || code == 0x4001000AUL) {
+        const void *sp = (const void *)info->ExceptionRecord->ExceptionInformation[1];
+        if (sp) {
+            if (code == 0x40010006UL)
+                fprintf(stderr, "[DBGPRINT] %.*s\n",
+                        (int)info->ExceptionRecord->ExceptionInformation[0],
+                        (const char *)sp);
+            else
+                fprintf(stderr, "[DBGPRINT] %.*ls\n",
+                        (int)(info->ExceptionRecord->ExceptionInformation[0] / 2),
+                        (const wchar_t *)sp);
+            fflush(stderr);
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (code != EXCEPTION_ACCESS_VIOLATION) {
         /* Surface non-AV crashes (stack overflow, illegal instr, etc.) that would
          * otherwise terminate the process silently. */
@@ -666,6 +706,23 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
     /* Log the first 60 faults, then every 1,000,000th (to reveal a spin's
      * repeated faulting access without flooding). */
     g_fault_logged++;
+    {   /* First wild accesses: outside guest RAM and outside the GPU MMIO
+         * aperture, i.e. a genuinely corrupted pointer rather than the normal
+         * emulated-register traffic. Report the guest block of sub_00050380
+         * that was executing, so the bad value can be traced to a statement. */
+        uint32_t _xv = (uint32_t)(fault - base);
+        extern uint32_t g_blk50380;
+        static int s_wild = 0;
+        if (_xv >= 0x04000000u && (_xv & 0xFF000000u) != 0xFD000000u &&
+            g_blk50380 != 0 && s_wild < 12) {
+            s_wild++;
+            fprintf(stderr, "[WILD] #%d xbva=0x%08X rip=0x%llX blk50380=0x000%05X "
+                            "eax=%08X ecx=%08X edx=%08X ebx=%08X esi=%08X edi=%08X\n",
+                    s_wild, _xv, (unsigned long long)info->ContextRecord->Rip,
+                    g_blk50380, g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi);
+            fflush(stderr);
+        }
+    }
     if (g_fault_logged <= 60 || (g_fault_logged % 1000000ull) == 0) {
         fprintf(stderr,
             "[FAULT] #%llu %s 0x%llX (xbva 0x%08X) rip=0x%llX  eax=%08X ecx=%08X edx=%08X "
@@ -884,6 +941,8 @@ static LONG WINAPI doa3_unhandled(PEXCEPTION_POINTERS info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+unsigned g_e1660_n, g_e1660_lo = 0xFFFFFFFFu, g_e1660_hi = 0xFFFFFFFFu, g_e1660_mask[8];
+
 int main(int argc, char **argv)
 {
     void *xbe_data = NULL; size_t xbe_size = 0;
@@ -1001,10 +1060,10 @@ int main(int argc, char **argv)
          * pgraph translator parses it) — no GPU physical addressing touches
          * it, and the low 45MB heap is needed for the game's own contiguous
          * allocations (3x4.8MB screen workspaces + 14MB frame buffers). */
-        extern uint32_t xbox_HeapAllocHigh(uint32_t size, uint32_t alignment);
+        extern uint32_t xbox_HeapReserveTop(uint32_t size, uint32_t alignment);
         extern uint32_t g_doa3_pb_base, g_doa3_pb_end;
         uint32_t sz = 4u * 1024 * 1024;
-        g_doa3_pb_base = xbox_HeapAllocHigh(sz, 4096);
+        g_doa3_pb_base = xbox_HeapReserveTop(sz, 4096);
         g_doa3_pb_end  = g_doa3_pb_base + sz;
         fprintf(stderr, "  D3D8 push buffer: %u KB at Xbox VA 0x%08X-0x%08X\n",
                 sz / 1024, g_doa3_pb_base, g_doa3_pb_end);
@@ -1044,9 +1103,91 @@ int main(int argc, char **argv)
      * cooperatively (they pump the file-load queue). See src/kernel/xbox_fiber.*. */
     xbox_fiber_init();
 
+    /* CRT static initializers (_initterm).
+     *
+     * We enter at the XBE entry point and bypass the CRT startup that would
+     * normally walk these tables, so without this every C initializer and C++
+     * static constructor is skipped and the objects they build stay zeroed --
+     * which is what left the title-screen path with a null screen-definition
+     * blob, invalid texture parameters, and vtable slots dispatching to junk.
+     *
+     * Standard MSVC layout, null markers at both ends (which _initterm skips).
+     * The bodies live in recomp_ctors.c: they are only ever reached through
+     * these tables, so direct-call function detection never found them. */
+    {
+        static const struct { uint32_t lo, hi; const char *what; } s_ini[] = {
+            { 0x00219640u, 0x0021964Cu, "C initializers"   },  /* __xi_a .. __xi_z */
+            { 0x00219650u, 0x002196F4u, "C++ constructors" },  /* __xc_a .. __xc_z */
+        };
+        /* DOA3_CRTMAX=N limits how many initializers run (bisecting a bad
+         * one); DOA3_CRTMAX=0 disables them entirely. */
+        int limit = -1;
+        { const char *e = getenv("DOA3_CRTMAX"); if (e) limit = atoi(e); }
+        int done = 0;
+        for (int t = 0; t < 2; t++) {
+            unsigned ran = 0, miss = 0;
+            for (uint32_t va = s_ini[t].lo; va < s_ini[t].hi; va += 4) {
+                uint32_t fn = MEM32(va);
+                recomp_func_t f;
+                if (!fn)
+                    continue;              /* _initterm skips null slots */
+                if (limit >= 0 && done >= limit)
+                    continue;
+                done++;
+                {   /* local table first (recomp_ctors.c); the dispatch table
+                     * still covers any initializer that was already translated */
+                    extern recomp_func_t doa3_crt_lookup(uint32_t va);
+                    f = doa3_crt_lookup(fn);
+                    if (!f) f = recomp_lookup(fn);
+                }
+                if (!f) {
+                    miss++;
+                    fprintf(stderr, "  CRT init: no body for 0x%08X\n", fn);
+                    continue;
+                }
+                /* Translated bodies pop their own return slot on ret, but a
+                 * few do not balance exactly; restore the stack around each
+                 * call so a drifting initializer cannot hand the entry point a
+                 * shifted guest stack. */
+                {
+                    uint32_t saved_esp = g_esp;
+                    PUSH32(g_esp, 0);
+                    f();
+                    if (g_esp != saved_esp)
+                        fprintf(stderr, "  CRT init: 0x%08X left esp %+d\n",
+                                fn, (int)(g_esp - saved_esp));
+                    g_esp = saved_esp;
+                }
+                ran++;
+            }
+            fprintf(stderr, "  CRT init: %s: %u run, %u missing\n",
+                    s_ini[t].what, ran, miss);
+        }
+        {   extern unsigned g_e1660_n, g_e1660_lo, g_e1660_hi, g_e1660_mask[8];
+            int _m;
+            fprintf(stderr, "  [CTOR370C48] constructed=%u of 175 (idx %u..%u) mask:",
+                    g_e1660_n, g_e1660_lo, g_e1660_hi);
+            for (_m = 0; _m < 6; _m++)
+                fprintf(stderr, " %08X", g_e1660_mask[_m]);
+            fprintf(stderr, "\n");
+        }
+        fflush(stderr);
+    }
+
     printf("Init complete. Entry=0x%08X  ESP=0x%08X\n", DOA3_ENTRY_POINT, g_esp);
     printf("\n--- Calling xbe_entry_point() ---\n");
     fflush(stdout);
+
+    if (getenv("DOA3_WATCHARR")) {
+        extern uint32_t g_watch_arr_base, g_watch_arr_stride, g_watch_arr_n;
+        /* wxCi cache registry, z:\ slot (0xC057C0 + 0x30*2 = 0xC05820):
+         * +0x24 file count, +0x28 list head. Only one file ever registers,
+         * so watch both and let the VEH name the registrar. */
+        g_watch_arr_base = 0x00C05844u; g_watch_arr_stride = 4; g_watch_arr_n = 2;
+        doa3_watch_arm(0x00C05000u);
+        fprintf(stderr, "[ARR] watch armed on 0xC05844 (count) / 0xC05848 (head)\n");
+        fflush(stderr);
+    }
 
     xbe_entry_point();
 

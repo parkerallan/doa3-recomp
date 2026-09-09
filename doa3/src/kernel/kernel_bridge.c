@@ -167,7 +167,12 @@ static void kernel_data_init(void)
 static ULONG g_slot_ordinals[XBOX_KERNEL_THUNK_TABLE_SIZE];
 
 /* Log counter - limit output to avoid flooding */
-static int g_kernel_call_count = 0;
+/* 64-bit and unsigned: this counter gates every diagnostic below via
+ * <= N tests, and as a signed int it wrapped negative during the CRI
+ * resume spin (billions of calls). Once negative, every gate re-opened
+ * and the bridge logged ~1M lines per run -- enough I/O to starve the
+ * guest and make the movie teardown look like a hang. */
+static unsigned long long g_kernel_call_count = 0;
 
 /* Read Xbox stack arg as uint32_t.
  * After kernel_thunk_dispatch pops the dummy return address (g_esp += 4),
@@ -561,16 +566,16 @@ static void bridge_KeQueryPerformanceCounter(void)
      * a worker hot loop still exits via the time boost alone). */
     static uint64_t s_boost = 0;
     static uint32_t s_consec = 0;
-    static int      s_last_call = -2;
+    static long long s_last_call = -2;   /* 64-bit: see g_kernel_call_count */
     static uint32_t s_run = 0;      /* every-Nth-poll fallback, never reset */
     int hot = 0;
-    if (g_kernel_call_count <= s_last_call + 2) {   /* tolerate 1 interleaved call
+    if ((long long)g_kernel_call_count <= s_last_call + 2) {   /* tolerate 1 interleaved call
                                                      * (e.g. QPC+QueryFrequency loops) */
         if (++s_consec > 150) hot = 1;   /* >150 near-back-to-back QPC calls = hot loop */
     } else {
         s_consec = 0;
     }
-    s_last_call = g_kernel_call_count;
+    s_last_call = (long long)g_kernel_call_count;
     if (hot) {
         s_boost += 733333;   /* +~10ms of 73.3MHz Xbox QPC ticks per poll */
         {
@@ -1683,6 +1688,18 @@ static void bridge_NtDeleteFile(void)
 #define QDIR_MAX_ENUM 8
 static struct { HANDLE dir; HANDLE find; } s_qdir_enum[QDIR_MAX_ENUM];
 
+/* FATX has no "." or ".." entries, so the Xbox kernel never reports them.
+ * Win32 FindFirstFile/FindNextFile do, and handing them to the guest broke
+ * DOA3's wxCi cache scanner: it registered "." as the one and only file in
+ * z:\ (the registry at 0xC057C0 showed n=1, f0='.'), so every later
+ * wxCiOpen/wxCiGetFileSize of z:\loadfile.afs reported "not in cache" even
+ * though the file opens fine by name. That failed the post-movie load in a
+ * retry loop and the title screen never built. */
+static int qdir_is_dot_entry(const WCHAR *n)
+{
+    return n[0] == L'.' && (n[1] == 0 || (n[1] == L'.' && n[2] == 0));
+}
+
 static void bridge_NtQueryDirectoryFile(void)
 {
     HANDLE   handle      = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
@@ -1713,6 +1730,7 @@ static void bridge_NtQueryDirectoryFile(void)
     /* Find existing enumeration state for this handle. */
     for (i = 0; i < QDIR_MAX_ENUM; i++)
         if (s_qdir_enum[i].dir == handle && s_qdir_enum[i].find) { slot = i; break; }
+
 
     if (filename_va || restart || slot < 0) {
         /* (Re)start the enumeration. */
@@ -1758,6 +1776,14 @@ static void bridge_NtQueryDirectoryFile(void)
                 g_eax = 0xC000000Fu;
                 return;
             }
+            while (qdir_is_dot_entry(fd.cFileName)) {
+                if (!FindNextFileW(fh, &fd)) {
+                    FindClose(fh);
+                    bridge_write_iostatus(ios_va, 0x80000006u, 0); /* NO_MORE_FILES */
+                    g_eax = 0x80000006u;
+                    return;
+                }
+            }
             /* store enumeration state */
             if (slot < 0)
                 for (i = 0; i < QDIR_MAX_ENUM; i++)
@@ -1767,8 +1793,17 @@ static void bridge_NtQueryDirectoryFile(void)
         }
     } else {
         /* Continue the existing enumeration. */
-        if (FindNextFileW(s_qdir_enum[slot].find, &fd)) {
-            have_entry = 1;
+        {   /* Keep the result of the LAST FindNextFileW: on failure fd still
+             * holds the previous entry, and returning that again made the
+             * enumeration never terminate. */
+            BOOL more;
+            do {
+                more = FindNextFileW(s_qdir_enum[slot].find, &fd);
+            } while (more && qdir_is_dot_entry(fd.cFileName));
+            have_entry = more ? 1 : 0;
+        }
+        if (have_entry) {
+            /* fall through with the entry */
         } else {
             FindClose(s_qdir_enum[slot].find);
             s_qdir_enum[slot].find = NULL;
@@ -2430,7 +2465,7 @@ static void kernel_thunk_dispatch(void)
     g_kernel_call_count++;
 
     if (g_kernel_call_count <= 200) {
-        fprintf(stderr, "  [KERNEL] #%d: ordinal %u (slot %d) esp=0x%08X\n",
+        fprintf(stderr, "  [KERNEL] #%llu: ordinal %u (slot %d) esp=0x%08X\n",
                 g_kernel_call_count, ordinal, slot, g_esp);
         fflush(stderr);
     }
@@ -2440,7 +2475,7 @@ static void kernel_thunk_dispatch(void)
         DWORD now = GetTickCount();
         if (last_summary_tick == 0) last_summary_tick = now;
         if (now - last_summary_tick >= 2000 && g_kernel_call_count > 200) {
-            fprintf(stderr, "  [KERNEL] summary: %d total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
+            fprintf(stderr, "  [KERNEL] summary: %llu total calls, latest ordinal %u (slot %d) esp=0x%08X\n",
                     g_kernel_call_count, ordinal, slot, g_esp);
             fflush(stderr);
             last_summary_tick = now;

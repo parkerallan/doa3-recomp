@@ -5,6 +5,7 @@
 
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
+#include <stdio.h>
 #include <math.h>
 
 /**
@@ -19456,7 +19457,7 @@ loc_001972F5: ;
 loc_001972FA: ;
     /* test LO16(eax), LO16(eax) - flags set for next jcc */
     MEM16(edi) = LO16(eax);
-    if (CMP_GE(LO16(eax) & LO16(eax), 0)) goto loc_0019731B; /* jge: greater or equal (signed >=) */
+    if (!TEST_S(LO16(eax), LO16(eax))) goto loc_0019731B; /* jge: greater or equal (signed >=) */
 
 loc_00197302: ;
     ecx = eax + -2340;
@@ -58993,7 +58994,7 @@ loc_001B1339: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B1350(void)
+void sub_001B1350_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -59751,7 +59752,7 @@ loc_001B1890: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B18A0(void)
+void sub_001B18A0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -60221,7 +60222,25 @@ loc_001B1C50: ;
     if (TEST_Z(eax, eax)) goto loc_001B1C96; /* je: equal / zero */
 
 loc_001B1C78: ;
-    if (CMP_EQ(eax, ecx)) goto loc_001B1C8A; /* je: equal / zero */
+    /* Walk of the device active-resource list (head [esi+0x488], linked
+     * through +0x8C), unlinking this node before it is re-pushed below.
+     * A cycle in that chain makes this loop non-terminating, and it was:
+     * the sampling profiler put 100%% of all CPU in this one loop, which
+     * is why the game advanced at ~5%% of real time and never rendered.
+     * Same self-referencing-node corruption already seen in sub_001B4960
+     * (obj=002DD3D8 child=002DD3D8). Bound the walk: a real list is a few
+     * hundred nodes, and falling out to the not-found path is what the
+     * code does for a node that is not linked anyway. */
+    { static unsigned _spin = 0, _warned = 0;
+      if (++_spin > 65536u) {
+        _spin = 0;
+        if (!_warned) { _warned = 1;
+          fprintf(stderr, "[D3DLIST] cyclic resource list at %08X (next=%08X) - walk bounded\n",
+                  eax, (eax >= 0x1000u && eax < 0x08000000u) ? MEM32(eax + 0x8C) : 0);
+          fflush(stderr); }
+        goto loc_001B1C96;
+      }
+      if (CMP_EQ(eax, ecx)) { _spin = 0; goto loc_001B1C8A; } }
 
 loc_001B1C7C: ;
     edx = eax;
@@ -60534,6 +60553,7 @@ void sub_001B1EC0(void)
 
 loc_001B1EC0: ;
     MEM32(0x1C017C) = 0;
+    sub_001B1ECA(); return;
 
 }
 
@@ -66112,6 +66132,7 @@ void sub_001B4230_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
+    int stride_changed;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_001B4230: ;
@@ -66152,9 +66173,9 @@ loc_001B427B: ;
 loc_001B4281: ;
     ecx = MEM32(esi + 0x1C05C8);
     eax = MEM32(esp + 0x18);
-    /* cmp eax, ecx - flags set for next jcc */
+    stride_changed = CMP_NE(eax, ecx);
     ecx = MEM32(edi + 8);
-    if (CMP_NE(eax, ecx)) { g_seh_ebp = ebp; sub_001B429A(); return; } /* jne: not equal / not zero */
+    if (stride_changed) { g_seh_ebp = ebp; sub_001B429A(); return; } /* jne: not equal / not zero */
 
 loc_001B4292: ;
     ecx = ecx | 0x200;
@@ -66173,6 +66194,7 @@ void sub_001B429A(void)
 
 loc_001B429A: ;
     ecx = ecx | 0x280;
+    sub_001B42A0(); return;
 
 }
 
@@ -67202,7 +67224,7 @@ loc_001B4950: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B4960(void)
+void sub_001B4960_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -72209,6 +72231,7 @@ void sub_001B71A3(void)
 
 loc_001B71A3: ;
     edi = 1;
+    sub_001B71A8(); return;
 
 }
 
@@ -72829,7 +72852,7 @@ loc_001B771B: ;
     PUSH32(esp, ebx);
     PUSH32(esp, esi);
     PUSH32(esp, edi);
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_001B7908; /* jns: not sign (positive) */
+    if ((LO8(eax) & 0x80) == 0) goto loc_001B7908; /* jns: not sign (positive) */
 
 loc_001B7726: ;
     esi = MEM32(ebp + 0x470);
@@ -73565,30 +73588,30 @@ loc_001B7DC0: ;
  */
 void sub_001B7DF0(void)
 {
-    float xmm1, xmm2;
+    xmm128_t xmm1, xmm2;
 
 loc_001B7DF0: ;
     eax = MEM32(esp + 8);
     ecx = MEM32(esp + 0x10);
-    xmm2 = MEMF(eax); /* movss */
-    /* shufps xmm2, xmm2, 0 */
-    /* mulps: xmm2 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 4); /* movss */
-    /* shufps xmm1, xmm1, 0 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 8); /* movss */
-    /* shufps xmm1, xmm1, 0 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
+    xmm2 = xmm_load_ss(eax); /* movss */
+    xmm2 = xmm_shufps(xmm2, xmm2, 0); /* shufps */
+    xmm2 = xmm_mulps(xmm2, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load_ss(eax + 4); /* movss */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
+    xmm1 = xmm_load_ss(eax + 8); /* movss */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x20)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
     eax = MEM32(esp + 4);
-    xmm1 = MEMF(esp + 0xC); /* movss */
-    /* shufps xmm1, xmm1, 0 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
-    MEMD(eax) = xmm2; /* movlps */
-    /* shufps xmm2, xmm2, 2 */
-    MEMF(eax + 8) = xmm2; /* movss */
+    xmm1 = xmm_load_ss(esp + 0xC); /* movss */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
+    xmm_store_lo(eax, xmm2); /* movlps */
+    xmm2 = xmm_shufps(xmm2, xmm2, 2); /* shufps */
+    xmm_store_ss(eax + 8, xmm2); /* movss */
     esp += 20; return; /* ret 16 */
 
 }
@@ -73599,78 +73622,78 @@ loc_001B7DF0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B7E50(void)
+void sub_001B7E50_gen(void)
 {
-    float xmm0, xmm1, xmm2, xmm3, xmm4, xmm5;
+    xmm128_t xmm0, xmm1, xmm2, xmm3, xmm4, xmm5;
 
 loc_001B7E50: ;
     eax = MEM32(esp + 8);
     ecx = MEM32(esp + 0xC);
-    xmm2 = MEMF(eax); /* movaps */
-    /* shufps xmm2, xmm2, 0 */
-    /* mulps: xmm2 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm2 += xmm0 (packed 4xfloat) */
-    xmm3 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm3, xmm3, 0 */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
-    /* mulps: xmm3 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm3 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm3 += xmm0 (packed 4xfloat) */
-    xmm4 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm4, xmm4, 0 */
-    /* addps: xmm3 += xmm1 (packed 4xfloat) */
-    /* mulps: xmm4 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm4 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm4 += xmm0 (packed 4xfloat) */
-    xmm5 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm5, xmm5, 0 */
-    /* addps: xmm4 += xmm1 (packed 4xfloat) */
-    /* mulps: xmm5 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm5 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
+    xmm2 = xmm_load(eax); /* movaps */
+    xmm2 = xmm_shufps(xmm2, xmm2, 0); /* shufps */
+    xmm2 = xmm_mulps(xmm2, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
+    xmm1 = xmm_load(eax); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm0); /* addps */
+    xmm3 = xmm_load(eax + 0x10); /* movaps */
+    xmm3 = xmm_shufps(xmm3, xmm3, 0); /* shufps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
+    xmm3 = xmm_mulps(xmm3, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax + 0x10); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax + 0x10); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm3 = xmm_addps(xmm3, xmm1); /* addps */
+    xmm1 = xmm_load(eax + 0x10); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm3 = xmm_addps(xmm3, xmm0); /* addps */
+    xmm4 = xmm_load(eax + 0x20); /* movaps */
+    xmm4 = xmm_shufps(xmm4, xmm4, 0); /* shufps */
+    xmm3 = xmm_addps(xmm3, xmm1); /* addps */
+    xmm4 = xmm_mulps(xmm4, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax + 0x20); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax + 0x20); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm4 = xmm_addps(xmm4, xmm1); /* addps */
+    xmm1 = xmm_load(eax + 0x20); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm4 = xmm_addps(xmm4, xmm0); /* addps */
+    xmm5 = xmm_load(eax + 0x30); /* movaps */
+    xmm5 = xmm_shufps(xmm5, xmm5, 0); /* shufps */
+    xmm4 = xmm_addps(xmm4, xmm1); /* addps */
+    xmm5 = xmm_mulps(xmm5, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax + 0x30); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax + 0x30); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm5 = xmm_addps(xmm5, xmm1); /* addps */
+    xmm1 = xmm_load(eax + 0x30); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
     ecx = MEM32(esp + 4);
-    /* addps: xmm5 += xmm0 (packed 4xfloat) */
-    /* addps: xmm5 += xmm1 (packed 4xfloat) */
-    MEMF(ecx) = xmm2; /* movaps */
-    MEMF(ecx + 0x10) = xmm3; /* movaps */
-    MEMF(ecx + 0x20) = xmm4; /* movaps */
-    MEMF(ecx + 0x30) = xmm5; /* movaps */
+    xmm5 = xmm_addps(xmm5, xmm0); /* addps */
+    xmm5 = xmm_addps(xmm5, xmm1); /* addps */
+    xmm_store(ecx, xmm2); /* movaps */
+    xmm_store(ecx + 0x10, xmm3); /* movaps */
+    xmm_store(ecx + 0x20, xmm4); /* movaps */
+    xmm_store(ecx + 0x30, xmm5); /* movaps */
     esp += 16; return; /* ret 12 */
 
 }
@@ -74411,7 +74434,7 @@ loc_001B859F: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B8690(void)
+void sub_001B8690_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -75436,7 +75459,7 @@ loc_001B8DB0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B8DC0(void)
+void sub_001B8DC0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -75996,6 +76019,11 @@ void sub_001B9258(void)
 loc_001B9258: ;
     ecx = MEM32(esp + 0x20);
     MEM32(esp + 0x1C) = ecx;
+    /* DROPPED FALL-THROUGH into 0x001B9260, deliberately NOT restored:
+     * restoring it runs the back-buffer/PFIFO setup this port never ran,
+     * and the NV2A stub cannot complete that channel init -- boot spins on
+     * 0xFD002080/0xFD002100 forever. The descriptors it would fill are the
+     * ones SetViewport clamps against (see recomp_manual.c notes). */
 
 }
 
@@ -79447,7 +79475,7 @@ loc_001BA7CD: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001BA7D8(void)
+void sub_001BA7D8_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

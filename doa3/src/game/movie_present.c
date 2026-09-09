@@ -434,13 +434,123 @@ static void movie_upload(ID3D11DeviceContext *ctx, const void *src, int pitch)
  * pump (~60Hz) so the window keeps showing the movie instead of reverting
  * to black when no new frame arrives (decode is slower than realtime, and
  * after a stall/teardown nothing else presents). */
+/* One-shot capture of the presented backbuffer to a 24-bit BMP, so the actual
+ * rendered frame can be inspected without screen capture. */
+/* Hand the screen back to the game when the movie ends.
+ *
+ * Nothing here presented after the movie, but nothing cleared either, so the
+ * swapchain kept flipping between the buffers still holding the last decoded
+ * movie frames -- which looks like the FMV replaying at random in low quality.
+ * Blank every buffer once and stop the presenter so the game owns the screen. */
+/* True while the host presenter still owns the screen (the intro movie is
+ * being played by this module, not by the guest's own draws). Guest geometry
+ * submitted in that window must not be composited over the movie. */
+int doa3_movie_host_owns_screen(void)
+{
+    return !s_host_stopped;
+}
+
+void doa3_movie_present_finish(void)
+{
+    ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
+    IDXGISwapChain *sc = d3d8_GetSwapChain();
+    int i;
+    if (s_host_stopped && !s_tex)
+        return;
+    s_host_stopped = 1;
+    if (!ctx || !sc || !s_rtv)
+        return;
+    /* clear each buffer in the chain, not just the current one */
+    for (i = 0; i < 3; i++) {
+        const FLOAT black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        ID3D11DeviceContext_ClearRenderTargetView(ctx, s_rtv, black);
+        d3d8_PresentFrame();
+    }
+    fprintf(stderr, "[MVPRES] movie finished -- screen released to the game\n");
+    fflush(stderr);
+}
+
+void doa3_capture_backbuffer(const char *path)
+{
+    ID3D11Device *dev = d3d8_GetD3D11Device();
+    ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
+    IDXGISwapChain *sc = d3d8_GetSwapChain();
+    ID3D11Texture2D *bb = NULL, *stg = NULL;
+    D3D11_TEXTURE2D_DESC td, sd;
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (!dev || !ctx || !sc) return;
+    if (FAILED(IDXGISwapChain_GetBuffer(sc, 0, &IID_ID3D11Texture2D, (void **)&bb)) || !bb)
+        return;
+    ID3D11Texture2D_GetDesc(bb, &td);
+    sd = td;
+    sd.Usage = D3D11_USAGE_STAGING;
+    sd.BindFlags = 0;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    sd.MiscFlags = 0;
+    if (FAILED(ID3D11Device_CreateTexture2D(dev, &sd, NULL, &stg))) {
+        ID3D11Texture2D_Release(bb);
+        return;
+    }
+    ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource *)stg, (ID3D11Resource *)bb);
+    if (SUCCEEDED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)stg, 0,
+                                          D3D11_MAP_READ, 0, &map))) {
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            int w = (int)td.Width, h = (int)td.Height;
+            int stride = (w * 3 + 3) & ~3;
+            unsigned char hdr[54];
+            unsigned size = 54u + (unsigned)(stride * h);
+            memset(hdr, 0, sizeof hdr);
+            hdr[0] = 'B'; hdr[1] = 'M';
+            memcpy(hdr + 2, &size, 4);
+            { unsigned off = 54; memcpy(hdr + 10, &off, 4); }
+            { unsigned ih = 40; memcpy(hdr + 14, &ih, 4); }
+            memcpy(hdr + 18, &w, 4);
+            memcpy(hdr + 22, &h, 4);
+            { unsigned short pl = 1, bc = 24;
+              memcpy(hdr + 26, &pl, 2); memcpy(hdr + 28, &bc, 2); }
+            fwrite(hdr, 1, sizeof hdr, f);
+            {
+                unsigned char *row = (unsigned char *)calloc(1, (size_t)stride);
+                for (int y = h - 1; y >= 0; y--) {
+                    const unsigned char *src =
+                        (const unsigned char *)map.pData + (size_t)y * map.RowPitch;
+                    /* The swap chain is DXGI_FORMAT_R8G8B8A8_UNORM, i.e.
+                     * memory order R,G,B,A -- not BGRA as this loop used to
+                     * assume. A 24-bit BMP stores B,G,R, so copying straight
+                     * through swapped red and blue and every captured frame
+                     * read back the wrong colour (the FMV end card came out
+                     * blue in the dumps while the window showed it red). */
+                    for (int x = 0; x < w; x++) {      /* RGBA -> BGR */
+                        row[x * 3 + 0] = src[x * 4 + 2];   /* B <- R */
+                        row[x * 3 + 1] = src[x * 4 + 1];   /* G */
+                        row[x * 3 + 2] = src[x * 4 + 0];   /* R <- B */
+                    }
+                    fwrite(row, 1, (size_t)stride, f);
+                }
+                free(row);
+            }
+            fclose(f);
+            fprintf(stderr, "[CAPTURE] wrote %s (%ux%u)\n", path, td.Width, td.Height);
+            fflush(stderr);
+        }
+        ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)stg, 0);
+    }
+    ID3D11Texture2D_Release(stg);
+    ID3D11Texture2D_Release(bb);
+}
+
 void doa3_movie_repaint(void)
 {
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
-    if (!ctx || !s_tex || s_failed || !s_frames)
+    if (s_host_stopped || !ctx || !s_tex || s_failed || !s_frames)
         return;
     {
         const void *host = movie_host_frame();
+        if (s_host_stopped) {
+            doa3_movie_present_finish();
+            return;
+        }
         if (host)
             movie_upload(ctx, host, 720 * 4);
     }
@@ -473,7 +583,7 @@ void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
 {
     ID3D11Device *dev = d3d8_GetD3D11Device();
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
-    if (!dev || !ctx || !src || s_failed)
+    if (s_host_stopped || !dev || !ctx || !src || s_failed)
         return;
     if (!s_tex) {
         if (!movie_present_init(dev, w, h)) {
@@ -488,6 +598,10 @@ void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
 
     {
         const void *host = movie_host_frame();
+        if (s_host_stopped) {
+            doa3_movie_present_finish();
+            return;
+        }
         if (host) {
             src = host;
             pitch = w * 4;

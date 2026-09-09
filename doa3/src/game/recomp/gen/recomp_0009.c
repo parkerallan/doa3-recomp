@@ -3362,7 +3362,7 @@ loc_0017D318: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017D320(void)
+void sub_0017D320_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -3540,9 +3540,17 @@ loc_0017D417: ;
     PUSH32(esp, 0); sub_0017D1D0(); /* call 0x0017D1D0 */
 
 loc_0017D41E: ;
-    /* test eax, eax - flags set for next jcc */
+    /* test eax, eax: the flags come from sub_0017D1D0's return, but the
+     * next instruction overwrites eax with [esi+0x40], so the deferred
+     * compare was evaluating the wrong value (same defect as the
+     * documented 0x0017C025 case). D1D0 returns 0 and [esi+0x40] is 1 on
+     * the end-of-play path, so the branch was taken and the handle stored
+     * 1 instead of 6 (PLAYEND) -- it then cycled 1->2->4->1 forever with
+     * [esi+0x44] already 6, and the movie never reported finished.
+     * Snapshot the return before the clobber. */
+    { uint32_t _d1d0_ret = eax;
     eax = MEM32(esi + 0x40);
-    if (TEST_NZ(eax, eax)) goto loc_0017D430; /* jne: not equal / not zero */
+    if (TEST_NZ(_d1d0_ret, _d1d0_ret)) goto loc_0017D430; } /* jne: not equal / not zero */
 
 loc_0017D425: ;
     if (CMP_NE(MEM32(esi + 0x44), 6)) goto loc_0017D430; /* jne: not equal / not zero */
@@ -3646,9 +3654,17 @@ loc_0017D417: ;
     PUSH32(esp, 0); sub_0017D1D0(); /* call 0x0017D1D0 */
 
 loc_0017D41E: ;
-    /* test eax, eax - flags set for next jcc */
+    /* test eax, eax: the flags come from sub_0017D1D0's return, but the
+     * next instruction overwrites eax with [esi+0x40], so the deferred
+     * compare was evaluating the wrong value (same defect as the
+     * documented 0x0017C025 case). D1D0 returns 0 and [esi+0x40] is 1 on
+     * the end-of-play path, so the branch was taken and the handle stored
+     * 1 instead of 6 (PLAYEND) -- it then cycled 1->2->4->1 forever with
+     * [esi+0x44] already 6, and the movie never reported finished.
+     * Snapshot the return before the clobber. */
+    { uint32_t _d1d0_ret = eax;
     eax = MEM32(esi + 0x40);
-    if (TEST_NZ(eax, eax)) goto loc_0017D430; /* jne: not equal / not zero */
+    if (TEST_NZ(_d1d0_ret, _d1d0_ret)) goto loc_0017D430; } /* jne: not equal / not zero */
 
 loc_0017D425: ;
     if (CMP_NE(MEM32(esi + 0x44), 6)) goto loc_0017D430; /* jne: not equal / not zero */
@@ -9006,7 +9022,7 @@ loc_0017F709: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017F710(void)
+void sub_0017F710_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -12432,9 +12448,15 @@ void sub_001809FE(void)
 loc_001809FE: ;
     fp_push((double)SMEM32(esp + 4)); /* fild */
     esp = esp - 8;
-    /* FPU: fimul dword ptr [esp + 0x10] */
-    /* FPU: fidiv dword ptr [esp + 0x14] */
-    fp_st1() += fp_top(); fp_pop(); /* fadd */
+    /* The lifter emitted the next two as comments only and mistranslated
+     * the memory-operand fadd as faddp, so this returned the raw timestamp
+     * instead of round(time * rate / 22500000). That is the PTS -> frame
+     * conversion behind the movie timecode, so every picture timestamp came
+     * out ~750x too large, the timecode raced (31 frames read as 7m29s) and
+     * the end-of-display test could never fire. */
+    fp_top() *= (double)SMEM32(esp + 0x10); /* fimul dword ptr [esp+0x10] */
+    fp_top() /= (double)SMEM32(esp + 0x14); /* fidiv dword ptr [esp+0x14] */
+    fp_top() += MEMD(0x1F5960); /* fadd qword ptr [0x1F5960] (0.5, rounding) */
     MEMD(esp) = fp_top(); fp_popp(); /* fstp */
     PUSH32(esp, 0); sub_0018DE71(); /* call 0x0018DE71 */
 
@@ -26161,7 +26183,7 @@ loc_00186A80: ;
 loc_00186A8C: ;
     edx = MEM32(esp + 4);
     SET_LO16(eax, MEM16(edx));
-    if (CMP_GE(LO16(eax) & LO16(eax), 0)) goto loc_00186AA9; /* jge: greater or equal (signed >=) */
+    if (!TEST_S(LO16(eax), LO16(eax))) goto loc_00186AA9; /* jge: greater or equal (signed >=) */
 
 loc_00186A98: ;
     ecx = SX16(LO16(eax));

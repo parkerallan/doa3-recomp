@@ -5,6 +5,7 @@
 
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
+#include <stdio.h>
 #include <math.h>
 
 /**
@@ -1808,12 +1809,32 @@ void sub_001649A8(void)
 {
 
 loc_001649A8: ;
-    { uint32_t _icall_esp = g_esp;
-    PUSH32(esp, MEM32(esp + 0x10));
-    eax = esi;
-    esi = MEM32(esi);
-    PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(eax + 8), _icall_esp); /* indirect call */
-    }
+    /* Guest loop: walk the list (esi = [esi]) calling [node+8] on each node
+     * until esi == edi. The back-edge lives in sub_001649B3, which the lifter
+     * emitted as a CALL back to here -- so every iteration burned a host
+     * stack frame and a long or cyclic list blew the stack (0xC00000FD in
+     * sub_001649A8, with the ICALL trace alternating between two garbage
+     * targets). Run it as an actual loop, and bound it: an unterminated chain
+     * is corrupt, and forcing esi == edi makes the exit path in sub_001649B3
+     * run normally instead of recursing again. */
+    { unsigned _iter = 0;
+      for (;;) {
+        { uint32_t _icall_esp = g_esp;
+        PUSH32(esp, MEM32(esp + 0x10));
+        eax = esi;
+        esi = MEM32(esi);
+        PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(eax + 8), _icall_esp); /* indirect call */
+        }
+        if (esi == edi) break;
+        if (++_iter > 8192u) {
+            static int _warned = 0;
+            if (!_warned) { _warned = 1;
+                fprintf(stderr, "[LWALK] unterminated node list at %08X - bounded\n", esi);
+                fflush(stderr); }
+            esi = edi;   /* take the exit path in sub_001649B3 */
+            break;
+        }
+      } }
 
     sub_001649B3(); return; /* DOA3: restored dropped fall-through to sub_001649B3 */
 }
@@ -11885,76 +11906,76 @@ loc_0016867A: ;
  */
 void sub_00168684(void)
 {
-    float xmm0, xmm1, xmm2, xmm3, xmm4, xmm5;
+    xmm128_t xmm0, xmm1, xmm2, xmm3, xmm4, xmm5;
 
 loc_00168684: ;
     eax = MEM32(esp + 8);
     ecx = MEM32(esp + 0xC);
-    xmm2 = MEMF(eax); /* movaps */
-    /* shufps xmm2, xmm2, 0 */
-    /* mulps: xmm2 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm2 += xmm0 (packed 4xfloat) */
-    xmm3 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm3, xmm3, 0 */
-    /* addps: xmm2 += xmm1 (packed 4xfloat) */
-    /* mulps: xmm3 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm3 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x10); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm3 += xmm0 (packed 4xfloat) */
-    xmm4 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm4, xmm4, 0 */
-    /* addps: xmm3 += xmm1 (packed 4xfloat) */
-    /* mulps: xmm4 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm4 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x20); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
-    /* addps: xmm4 += xmm0 (packed 4xfloat) */
-    xmm5 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm5, xmm5, 0 */
-    /* addps: xmm4 += xmm1 (packed 4xfloat) */
-    /* mulps: xmm5 *= MEMF(ecx) (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm1, xmm1, 0x55 */
-    /* mulps: xmm1 *= MEMF(ecx + 0x10) (packed 4xfloat) */
-    xmm0 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm0, xmm0, 0xaa */
-    /* mulps: xmm0 *= MEMF(ecx + 0x20) (packed 4xfloat) */
-    /* addps: xmm5 += xmm1 (packed 4xfloat) */
-    xmm1 = MEMF(eax + 0x30); /* movaps */
-    /* shufps xmm1, xmm1, 0xff */
-    /* mulps: xmm1 *= MEMF(ecx + 0x30) (packed 4xfloat) */
+    xmm2 = xmm_load(eax); /* movaps */
+    xmm2 = xmm_shufps(xmm2, xmm2, 0); /* shufps */
+    xmm2 = xmm_mulps(xmm2, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
+    xmm1 = xmm_load(eax); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm2 = xmm_addps(xmm2, xmm0); /* addps */
+    xmm3 = xmm_load(eax + 0x10); /* movaps */
+    xmm3 = xmm_shufps(xmm3, xmm3, 0); /* shufps */
+    xmm2 = xmm_addps(xmm2, xmm1); /* addps */
+    xmm3 = xmm_mulps(xmm3, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax + 0x10); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax + 0x10); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm3 = xmm_addps(xmm3, xmm1); /* addps */
+    xmm1 = xmm_load(eax + 0x10); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm3 = xmm_addps(xmm3, xmm0); /* addps */
+    xmm4 = xmm_load(eax + 0x20); /* movaps */
+    xmm4 = xmm_shufps(xmm4, xmm4, 0); /* shufps */
+    xmm3 = xmm_addps(xmm3, xmm1); /* addps */
+    xmm4 = xmm_mulps(xmm4, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax + 0x20); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax + 0x20); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm4 = xmm_addps(xmm4, xmm1); /* addps */
+    xmm1 = xmm_load(eax + 0x20); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
+    xmm4 = xmm_addps(xmm4, xmm0); /* addps */
+    xmm5 = xmm_load(eax + 0x30); /* movaps */
+    xmm5 = xmm_shufps(xmm5, xmm5, 0); /* shufps */
+    xmm4 = xmm_addps(xmm4, xmm1); /* addps */
+    xmm5 = xmm_mulps(xmm5, xmm_load(ecx)); /* mulps */
+    xmm1 = xmm_load(eax + 0x30); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0x55); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x10)); /* mulps */
+    xmm0 = xmm_load(eax + 0x30); /* movaps */
+    xmm0 = xmm_shufps(xmm0, xmm0, 0xaa); /* shufps */
+    xmm0 = xmm_mulps(xmm0, xmm_load(ecx + 0x20)); /* mulps */
+    xmm5 = xmm_addps(xmm5, xmm1); /* addps */
+    xmm1 = xmm_load(eax + 0x30); /* movaps */
+    xmm1 = xmm_shufps(xmm1, xmm1, 0xff); /* shufps */
+    xmm1 = xmm_mulps(xmm1, xmm_load(ecx + 0x30)); /* mulps */
     ecx = MEM32(esp + 4);
-    /* addps: xmm5 += xmm0 (packed 4xfloat) */
-    /* addps: xmm5 += xmm1 (packed 4xfloat) */
-    MEMF(ecx) = xmm2; /* movaps */
-    MEMF(ecx + 0x10) = xmm3; /* movaps */
-    MEMF(ecx + 0x20) = xmm4; /* movaps */
-    MEMF(ecx + 0x30) = xmm5; /* movaps */
+    xmm5 = xmm_addps(xmm5, xmm0); /* addps */
+    xmm5 = xmm_addps(xmm5, xmm1); /* addps */
+    xmm_store(ecx, xmm2); /* movaps */
+    xmm_store(ecx + 0x10, xmm3); /* movaps */
+    xmm_store(ecx + 0x20, xmm4); /* movaps */
+    xmm_store(ecx + 0x30, xmm5); /* movaps */
     eax = MEM32(esp + 4);
     esp += 16; return; /* ret 12 */
 
@@ -14280,7 +14301,7 @@ loc_001696A0: ;
     SET_LO8(eax, MEM8(esi + 3));
     PUSH32(esp, edi);
     edi = 0; /* xor self */
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) goto loc_001696CC; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) goto loc_001696CC; /* jle: less or equal (signed <=) */
 
 loc_001696AF: ;
     PUSH32(esp, ebp);
@@ -15844,7 +15865,7 @@ loc_0016A022: ;
     SET_LO8(eax, MEM8(ebx + 3));
     PUSH32(esp, edi);
     edi = 0; /* xor self */
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) goto loc_0016A06C; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) goto loc_0016A06C; /* jle: less or equal (signed <=) */
 
 loc_0016A02C: ;
     PUSH32(esp, esi);
@@ -15966,7 +15987,7 @@ loc_0016A0AC: ;
 loc_0016A0B4: ;
     SET_LO8(eax, MEM8(esi + 3));
     edi = 0; /* xor self */
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) goto loc_0016A0DA; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) goto loc_0016A0DA; /* jle: less or equal (signed <=) */
 
 loc_0016A0BD: ;
     PUSH32(esp, ebp);
@@ -18333,7 +18354,7 @@ loc_0016B282: ;
 loc_0016B28A: ;
     SET_LO8(eax, MEM8(esi + 3));
     edi = 0; /* xor self */
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) goto loc_0016B2B3; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) goto loc_0016B2B3; /* jle: less or equal (signed <=) */
 
 loc_0016B293: ;
     edx = MEM32(ebx);
@@ -23652,6 +23673,27 @@ loc_0016D13E: ;
     eax = MEM32(esp + 0x128);
     esp = esp + 0x10;
     edx = esp + 0x10;
+    /* The cache lookup builds sprintf(buf, "%s%s", prefix, nodename) and
+     * strcmps it against the requested path. The registered prefix ends
+     * with a separator ("d:\\") and the stored node names begin with one
+     * ("\bgm.afs" -- the same form as the file mask the guest passes to
+     * NtQueryDirectoryFile), so the concatenation yields "d:\\bgm.afs"
+     * and never matches "d:\bgm.afs". Every wxCiOpen/wxCiGetFileSize then
+     * reports "not in cache", the post-movie load fails in a retry loop and
+     * the title screen never builds.
+     *
+     * Collapse the doubled separator in the constructed path. That is
+     * exactly the string correct prefix/name data would have produced, so
+     * it only affects paths that are already malformed. */
+    { uint32_t _r = edx, _w = edx;
+      int _prev = 0, _guard = 0;
+      for (; _guard < 260; _guard++) {
+        uint8_t _c = MEM8(_r++);
+        if (_c == 0x5C && _prev == 0x5C) continue;   /* skip a repeated backslash */
+        MEM8(_w++) = _c;
+        _prev = _c;
+        if (!_c) break;
+      } }
     PUSH32(esp, edx);
     PUSH32(esp, eax);
     PUSH32(esp, 0); sub_001651FF(); /* call 0x001651FF */
@@ -28366,7 +28408,7 @@ loc_0016EBA5: ;
     SET_LO8(eax, MEM8(esi + 3));
     PUSH32(esp, edi);
     edi = 0; /* xor self */
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) goto loc_0016EBCB; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) goto loc_0016EBCB; /* jle: less or equal (signed <=) */
 
 loc_0016EBAF: ;
     PUSH32(esp, ebx);
@@ -32789,7 +32831,7 @@ loc_001705C0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001705E0(void)
+void sub_001705E0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -36396,7 +36438,7 @@ loc_00172C38: ;
     edi = 0; /* xor self */
     /* test LO8(edx), LO8(edx) - flags set for next jcc */
     MEM8(ecx + 0xC) = LO8(edx);
-    if (CMP_LE(LO8(edx) & LO8(edx), 0)) goto loc_00172C84; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(edx), LO8(edx)) || TEST_Z(LO8(edx), LO8(edx)))) goto loc_00172C84; /* jle: less or equal (signed <=) */
 
 loc_00172C46: ;
     esi = ecx + 0x10;
@@ -40456,7 +40498,7 @@ loc_00174620: ;
     eax = eax - esi;
     /* test LO16(eax), LO16(eax) - flags set for next jcc */
     MEM16(edx) = LO16(eax);
-    if (CMP_LE(LO16(eax) & LO16(eax), 0)) goto loc_00174618; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO16(eax), LO16(eax)) || TEST_Z(LO16(eax), LO16(eax)))) goto loc_00174618; /* jle: less or equal (signed <=) */
 
 loc_0017462E: ;
     eax = MEM32(esp + 0x30);
@@ -41696,7 +41738,7 @@ loc_00174C9D: ;
     eax = eax - esi;
     /* test LO16(eax), LO16(eax) - flags set for next jcc */
     MEM16(edx) = LO16(eax);
-    if (CMP_LE(LO16(eax) & LO16(eax), 0)) goto loc_00174C95; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO16(eax), LO16(eax)) || TEST_Z(LO16(eax), LO16(eax)))) goto loc_00174C95; /* jle: less or equal (signed <=) */
 
 loc_00174CAB: ;
     eax = MEM32(esp + 0x30);
@@ -42360,7 +42402,7 @@ loc_00175053: ;
 
 loc_00175058: ;
     SET_LO8(eax, MEM8(edi));
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) goto loc_00175075; /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) goto loc_00175075; /* jle: less or equal (signed <=) */
 
 loc_0017505E: ;
     if (CMP_G(LO8(eax), 2)) goto loc_00175075; /* jg: greater (signed >) */
@@ -44131,7 +44173,7 @@ loc_00175A94: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00175AB0(void)
+void sub_00175AB0_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -46565,7 +46607,7 @@ loc_00176C70: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00176C80(void)
+void sub_00176C80_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -46628,7 +46670,7 @@ loc_00176CD5: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00176CE0(void)
+void sub_00176CE0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -47209,7 +47251,7 @@ loc_0017709C: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001770B0(void)
+void sub_001770B0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -48405,7 +48447,7 @@ loc_001778D1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001778E0(void)
+void sub_001778E0_gen(void)
 {
 
 loc_001778E0: ;

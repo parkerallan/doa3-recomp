@@ -6,6 +6,8 @@
 
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
+#include <stdio.h>
+#include <intrin.h>
 #include <math.h>
 
 /**
@@ -763,7 +765,7 @@ loc_001866B5: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B3940(void)
+void sub_001B3940_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -792,9 +794,17 @@ loc_001B3960: ;
     PUSH32(esp, 0); sub_001B8DC0(); /* call 0x001B8DC0 */
 
 loc_001B3976: ;
+    /* DOA3 probe: arg2 ([ebp+0x10]) is the SOURCE vertex pointer this
+     * function copies from. The sampling profiler puts ~72% of all CPU in
+     * here and the fault counter passed 54M, every one a read from the
+     * NV2A MMIO aperture (0xFDxxxxxx) -- i.e. the source is garbage and
+     * every movntq loop iteration traps through the VEH. */
     ecx = MEM32(ebp + 8);
     edx = MEM32(ebp + 0xC);
     ebx = eax;
+    /* DOA3 probe: eax is the pushbuffer write pointer from
+     * sub_001B8DC0. Writes through it were landing inside the game
+     * object array at 0x370C48, smashing its vtable pointers. */
     MEM32(ebx + 4) = ecx;
     ebx = ebx + 8;
     MEM32(ebx + -8) = 0x417FC;
@@ -941,6 +951,9 @@ loc_001B3AE1: ;
     PUSH32(esp, 0); sub_001B8DC0(); /* call 0x001B8DC0 */
 
 loc_001B3B0F: ;
+    /* DOA3 probe: second pushbuffer acquisition, inside the outer
+     * copy loop. The first one (loc_001B3976) is always sane, so if
+     * the destination is drifting into the game heap it starts here. */
     ebx = eax;
     eax = MEM32(ebp + 0xC);
     /* cmp eax, 0x3FE - flags set for next jcc */

@@ -524,9 +524,20 @@ MCPXAPUState *mcpx_apu_init_standalone(uint8_t *ram_ptr)
     }
 
     /* Start background frame thread */
-    qemu_thread_create(&d->apu_thread, "mcpx.apu_thread",
-                       mcpx_apu_frame_thread, d, QEMU_THREAD_JOINABLE);
-    mcpx_apu_wait_for_idle(d);
+    /* DOA3 diagnostic: the APU frame thread has been faulting inside
+     * SleepConditionVariableCS, which means its state has been trashed --
+     * most likely collateral from the recompiled code writing through
+     * native-looking pointers that land in the host address space rather
+     * than the guest mapping. Audio is not needed to reach the title
+     * screen, so allow the thread to be skipped to isolate that. */
+    if (getenv("DOA3_NOAPUTHREAD")) {
+        d->is_idle = true;
+        fprintf(stderr, "[APU] frame thread DISABLED (DOA3_NOAPUTHREAD)\n");
+    } else {
+        qemu_thread_create(&d->apu_thread, "mcpx.apu_thread",
+                           mcpx_apu_frame_thread, d, QEMU_THREAD_JOINABLE);
+        mcpx_apu_wait_for_idle(d);
+    }
     qemu_mutex_unlock(&d->lock);
 
     fprintf(stderr, "[APU] MCPX APU initialized (standalone)\n");

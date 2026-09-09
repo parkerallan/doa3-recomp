@@ -5157,6 +5157,7 @@ void sub_000DF5B1(void);
 void sub_000DF630(void);
 void sub_000DF651(void);
 void sub_000DF660(void);
+void sub_000DF670(void);
 void sub_000DF680(void);
 void sub_000DF72E(void);
 void sub_000DF740(void);
@@ -12085,6 +12086,57 @@ void sub_001C4027(void);
 void sub_001C408A(void);
 void sub_001E4C40(void);
 void sub_001E5040(void);
+
+/* CRT static initializers (see recomp_ctors.c): reachable only through the
+ * .data initializer tables, so the direct-call detector never found them. */
+void sub_00192687(void);
+void sub_0019515F(void);
+void sub_00198000(void);
+void sub_001985A0(void);
+void sub_001985D0(void);
+void sub_001986E0(void);
+void sub_001986F0(void);
+void sub_00198700(void);
+void sub_00198710(void);
+void sub_00198730(void);
+void sub_00199710(void);
+void sub_0019ABE0(void);
+void sub_0019AC50(void);
+void sub_0019C1C0(void);
+void sub_0019D1F0(void);
+void sub_0019EB70(void);
+void sub_0019EC10(void);
+void sub_001A0180(void);
+void sub_001A3BC0(void);
+void sub_001A7390(void);
+void sub_001A73B0(void);
+void sub_001A7950(void);
+void sub_001A7B70(void);
+void sub_001A7EF0(void);
+void sub_001A7F90(void);
+void sub_001A9D30(void);
+void sub_001AB820(void);
+void sub_001AB840(void);
+void sub_001AF280(void);
+void sub_001AFA60(void);
+void sub_001AFA80(void);
+void sub_001AFA90(void);
+void sub_001AFAD0(void);
+void sub_001AFB20(void);
+void sub_001AFB40(void);
+void sub_001AFB70(void);
+void sub_001AFB90(void);
+void sub_001AFD00(void);
+void sub_001B0D60(void);
+void sub_001B0D80(void);
+void sub_001B22B0(void);
+
+
+/* Resource-loader entry points (see recomp_resload.c): reached only through
+ * the loader function pointer, so direct-call detection never found them. */
+void sub_00080020(void);
+void sub_00080070(void);
+
 #endif /* RECOMP_FUNCS_H */
 void sub_001E3010(void);
 void sub_001E3060(void);

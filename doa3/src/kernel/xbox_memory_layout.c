@@ -425,7 +425,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      * writes at any mirror address correctly access the base data.
      */
     {
-        int mirrors_ok = 0;
+        int mirrors_ok = 0, mirrors_partial = 0;
         for (int m = 0; m < XBOX_NUM_MIRRORS; m++) {
             uintptr_t mirror_base = (uintptr_t)g_memory_base +
                                     (uintptr_t)(m + 1) * g_memory_size;
@@ -439,13 +439,47 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             if (g_mirror_views[m]) {
                 mirrors_ok++;
             } else {
-                fprintf(stderr, "  Mirror %d: FAILED at %p (error %lu)\n",
-                        m + 1, (void *)mirror_base, GetLastError());
+                /* A full-size view can fail simply because the address
+                 * range is a little short, and losing the whole mirror
+                 * leaves a 128 MB hole that guest code walks straight
+                 * into -- every access there faults through the VEH and
+                 * reads garbage. Mirror 11 at 0x78000000 is the case that
+                 * bit us: the range is MEM_FREE but only 0x7FE0000 bytes
+                 * of it, because KUSER_SHARED_DATA sits at 0x7FFE0000.
+                 * Map as much as will fit rather than nothing at all --
+                 * that covered every faulting address we had seen in the
+                 * hole (guest 0x5FC00004, 0x5FD1BE90, 0x5FE4F910, all
+                 * below the 0x5FFE0000 cut-off). */
+                DWORD err = GetLastError();
+                MEMORY_BASIC_INFORMATION mbi;
+                SIZE_T avail = 0;
+                if (VirtualQuery((LPCVOID)mirror_base, &mbi, sizeof mbi) &&
+                    mbi.State == MEM_FREE) {
+                    avail = mbi.RegionSize & ~(SIZE_T)0xFFFF;   /* 64K granularity */
+                    if (avail > g_memory_size) avail = g_memory_size;
+                }
+                if (avail >= 0x10000) {
+                    g_mirror_views[m] = MapViewOfFileEx(
+                        g_mapping_handle, FILE_MAP_ALL_ACCESS, 0, 0,
+                        avail, (LPVOID)mirror_base);
+                }
+                if (g_mirror_views[m]) {
+                    mirrors_partial++;
+                    fprintf(stderr, "  Mirror %d: partial at %p (%llu of %llu MB; "
+                                    "full view gave error %lu)\n",
+                            m + 1, (void *)mirror_base,
+                            (unsigned long long)(avail / (1024 * 1024)),
+                            (unsigned long long)(g_memory_size / (1024 * 1024)), err);
+                } else {
+                    fprintf(stderr, "  Mirror %d: FAILED at %p (error %lu, "
+                                    "free run %llu bytes)\n",
+                            m + 1, (void *)mirror_base, err,
+                            (unsigned long long)mbi.RegionSize);
+                }
             }
         }
-        fprintf(stderr, "  RAM mirror: %d/%d views mapped (covers %d MB)\n",
-                mirrors_ok, XBOX_NUM_MIRRORS,
-                (int)((mirrors_ok + 1) * g_memory_size / (1024 * 1024)));
+        fprintf(stderr, "  RAM mirror: %d full + %d partial of %d views\n",
+                mirrors_ok, mirrors_partial, XBOX_NUM_MIRRORS);
     }
 
     fprintf(stderr, "xbox_MemoryLayoutInit: complete\n");
@@ -502,6 +536,11 @@ ptrdiff_t xbox_GetMemoryOffset(void)
  * No free support (bump-only for now).
  */
 static uint32_t g_heap_next = XBOX_HEAP_BASE;
+/* Low-heap ceiling. Blocks reserved with xbox_HeapReserveTop() are carved
+ * off the top and this drops to match, so the bump allocator below never
+ * hands the same memory out. Reserving from the top rather than the front
+ * leaves every game allocation at the address it had before. */
+static uint32_t g_heap_limit = XBOX_HEAP_BASE + XBOX_HEAP_SIZE;
 
 static int g_heap_alloc_count = 0;
 
@@ -549,9 +588,10 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
     /* Align the next pointer */
     result = (g_heap_next + alignment - 1) & ~(alignment - 1);
 
-    if (result + size > XBOX_HEAP_BASE + XBOX_HEAP_SIZE) {
+    if (result + size > g_heap_limit) {
         fprintf(stderr, "xbox_HeapAlloc: out of memory (requested %u, used %u/%u)\n",
-                size, g_heap_next - XBOX_HEAP_BASE, XBOX_HEAP_SIZE);
+                size, g_heap_next - XBOX_HEAP_BASE,
+                g_heap_limit - XBOX_HEAP_BASE);
         return 0;
     }
 
@@ -600,6 +640,34 @@ void xbox_HeapFree(uint32_t xbox_va)
 
 /* High heap (above the console's 64 MB): CPU-only allocations — see the
  * header comment. Same bump model as xbox_HeapAlloc. */
+/* Reserve a block at the top of the low heap.
+ *
+ * Needed for anything the *guest* converts from a virtual to a physical
+ * address. Xbox RAM is 64 MB and VA == PA there, so the console D3D8
+ * library performs that conversion with a bare 26-bit mask (& 0x03FFFFFF;
+ * see recomp_0010.c). A buffer placed above 64 MB therefore aliases onto
+ * low RAM as soon as the guest masks its address: the D3D8 push buffer at
+ * 0x04000000-0x04400000 aliased onto 0x00000000-0x00400000, so its vertex
+ * writes landed in .data and corrupted the 175-object array at 0x370C48
+ * that sub_000E8BB0 dispatches through -- vtable pointers overwritten with
+ * vertex data, then called. Keeping such buffers under 64 MB makes the
+ * guest mask the identity it is on hardware. */
+uint32_t xbox_HeapReserveTop(uint32_t size, uint32_t alignment)
+{
+    uint32_t base;
+
+    if (alignment < 4) alignment = 4;
+    if (size > g_heap_limit - g_heap_next) {
+        fprintf(stderr, "xbox_HeapReserveTop: no room (requested %u, free %u)\n",
+                size, g_heap_limit - g_heap_next);
+        return 0;
+    }
+    base = (g_heap_limit - size) & ~(alignment - 1);
+    g_heap_limit = base;
+    memset((void *)((uintptr_t)base + g_memory_offset), 0, size);
+    return base;
+}
+
 static uint32_t g_high_next = XBOX_HIGH_BASE;
 
 uint32_t xbox_HeapAllocHigh(uint32_t size, uint32_t alignment)

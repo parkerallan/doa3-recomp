@@ -179,6 +179,74 @@ static __forceinline uint32_t native_to_xbox_va(uint32_t val)
 #define MEMF(addr)   (*(volatile float    *)XBOX_PTR(addr))
 #define MEMD(addr)   (*(volatile double   *)XBOX_PTR(addr))
 
+/* ---- 128-bit SSE register -----------------------------------------------
+ *
+ * The lifter models an xmm register as a single `float`, which is correct
+ * only for the scalar forms (movss, addss, ...). Every packed operation was
+ * therefore wrong: the 16-byte moves (movaps) were emitted as single-float
+ * MEMF moves and transferred 4 of 16 bytes, while the packed arithmetic
+ * (mulps, addps, subps, shufps, cmpneqps, orps) was dropped entirely and
+ * left as a bare comment doing nothing. The matrix routines in the XDK maths
+ * library are built almost entirely out of those, so they moved partial data
+ * around and performed none of the arithmetic.
+ *
+ * Lanes are kept as raw dwords so bitwise ops (xorps/orps/cmp*) and float
+ * ops share one representation without type-punning through pointers. */
+typedef union { uint32_t u[4]; float f[4]; } xmm128_t;
+
+static __forceinline xmm128_t xmm_load(uint32_t a) {
+    xmm128_t r;
+    r.u[0] = MEM32(a); r.u[1] = MEM32(a + 4);
+    r.u[2] = MEM32(a + 8); r.u[3] = MEM32(a + 12);
+    return r;
+}
+static __forceinline void xmm_store(uint32_t a, xmm128_t v) {
+    MEM32(a) = v.u[0]; MEM32(a + 4) = v.u[1];
+    MEM32(a + 8) = v.u[2]; MEM32(a + 12) = v.u[3];
+}
+static __forceinline xmm128_t xmm_zero(void) {
+    xmm128_t r; r.u[0] = r.u[1] = r.u[2] = r.u[3] = 0; return r;
+}
+/* movss from memory zeroes the upper three lanes; movlps/movhps preserve
+ * the half they do not write. */
+static __forceinline xmm128_t xmm_load_ss(uint32_t a) {
+    xmm128_t r = xmm_zero(); r.u[0] = MEM32(a); return r;
+}
+static __forceinline void xmm_store_ss(uint32_t a, xmm128_t v) { MEM32(a) = v.u[0]; }
+static __forceinline xmm128_t xmm_load_lo(xmm128_t d, uint32_t a) {
+    d.u[0] = MEM32(a); d.u[1] = MEM32(a + 4); return d;
+}
+static __forceinline void xmm_store_lo(uint32_t a, xmm128_t v) {
+    MEM32(a) = v.u[0]; MEM32(a + 4) = v.u[1];
+}
+static __forceinline xmm128_t xmm_load_hi(xmm128_t d, uint32_t a) {
+    d.u[2] = MEM32(a); d.u[3] = MEM32(a + 4); return d;
+}
+static __forceinline void xmm_store_hi(uint32_t a, xmm128_t v) {
+    MEM32(a) = v.u[2]; MEM32(a + 4) = v.u[3];
+}
+/* SHUFPS dst, src, imm: lanes 0-1 come from dst, lanes 2-3 from src. */
+static __forceinline xmm128_t xmm_shufps(xmm128_t d, xmm128_t s, unsigned imm) {
+    xmm128_t r;
+    r.u[0] = d.u[(imm >> 0) & 3]; r.u[1] = d.u[(imm >> 2) & 3];
+    r.u[2] = s.u[(imm >> 4) & 3]; r.u[3] = s.u[(imm >> 6) & 3];
+    return r;
+}
+#define XMM_PACKED_OP(name, expr)                                   \
+    static __forceinline xmm128_t name(xmm128_t a, xmm128_t b) {    \
+        xmm128_t r; int _i;                                         \
+        for (_i = 0; _i < 4; _i++) { expr; }                        \
+        return r;                                                   \
+    }
+XMM_PACKED_OP(xmm_addps, r.f[_i] = a.f[_i] + b.f[_i])
+XMM_PACKED_OP(xmm_subps, r.f[_i] = a.f[_i] - b.f[_i])
+XMM_PACKED_OP(xmm_mulps, r.f[_i] = a.f[_i] * b.f[_i])
+XMM_PACKED_OP(xmm_orps,  r.u[_i] = a.u[_i] | b.u[_i])
+/* CMPNEQPS is true for unordered operands too, which is what !(x == y)
+ * gives for NaN. */
+XMM_PACKED_OP(xmm_cmpneqps, r.u[_i] = !(a.f[_i] == b.f[_i]) ? 0xFFFFFFFFu : 0u)
+
+
 /* ── Flag computation helpers ───────────────────────────── */
 
 /**
@@ -196,15 +264,37 @@ static __forceinline uint32_t native_to_xbox_va(uint32_t val)
 #define CMP_A(a, b)   ((uint32_t)(a) >  (uint32_t)(b))   /* above */
 
 /* Signed comparison conditions */
-#define CMP_L(a, b)   ((int32_t)(a) <  (int32_t)(b))     /* less (SF!=OF) */
-#define CMP_GE(a, b)  ((int32_t)(a) >= (int32_t)(b))     /* greater or equal */
-#define CMP_LE(a, b)  ((int32_t)(a) <= (int32_t)(b))     /* less or equal */
-#define CMP_G(a, b)   ((int32_t)(a) >  (int32_t)(b))     /* greater */
+/* Signed comparisons must be evaluated at the OPERAND width, not at 32 bits.
+ *
+ * The generated code passes LO8()/LO16() results for 8- and 16-bit operations,
+ * and those are uint8_t/uint16_t -- so `sizeof` recovers the width the guest
+ * instruction actually used. Evaluating them as int32_t made every negative
+ * 8/16-bit value compare as a large positive number: `cmp ax, 0` with
+ * ax = 0xFFFF took the >= 0 branch instead of the < 0 one.
+ *
+ * That is not academic. It is why sub_000E50B0 never terminated its 16-bit
+ * index walk (the list is terminated by a negative entry) and scanned memory
+ * until the fault cap aborted the process.
+ *
+ * The right-hand operand is narrowed to the left operand's width first, so an
+ * immediate like 0xFF compares as -1 against an 8-bit register, exactly as
+ * `cmp al, 0FFh` does. 32-bit operands are unaffected. */
+#define RC_SXA(a)    (sizeof(a) == 1 ? (int32_t)(int8_t)(uint8_t)(a) : \
+                      sizeof(a) == 2 ? (int32_t)(int16_t)(uint16_t)(a) : (int32_t)(a))
+#define RC_SXB(a, b) (sizeof(a) == 1 ? (int32_t)(int8_t)(uint8_t)(b) : \
+                      sizeof(a) == 2 ? (int32_t)(int16_t)(uint16_t)(b) : (int32_t)(b))
+#define CMP_L(a, b)   (RC_SXA(a) <  RC_SXB(a, b))       /* less (SF!=OF) */
+#define CMP_GE(a, b)  (RC_SXA(a) >= RC_SXB(a, b))       /* greater or equal */
+#define CMP_LE(a, b)  (RC_SXA(a) <= RC_SXB(a, b))       /* less or equal */
+#define CMP_G(a, b)   (RC_SXA(a) >  RC_SXB(a, b))       /* greater */
 
 /* TEST-based conditions (AND without storing result) */
 #define TEST_Z(a, b)  (((uint32_t)(a) & (uint32_t)(b)) == 0)  /* ZF=1 */
 #define TEST_NZ(a, b) (((uint32_t)(a) & (uint32_t)(b)) != 0)  /* ZF=0 */
-#define TEST_S(a, b)  ((int32_t)((uint32_t)(a) & (uint32_t)(b)) < 0) /* SF=1 */
+/* SF after TEST, at the operand width (see the note above). */
+#define TEST_S(a, b)  (sizeof(a) == 1 ? (int8_t)((uint8_t)(a) & (uint8_t)(b)) < 0 : \
+                       sizeof(a) == 2 ? (int16_t)((uint16_t)(a) & (uint16_t)(b)) < 0 : \
+                       (int32_t)((uint32_t)(a) & (uint32_t)(b)) < 0)
 
 /* ── Arithmetic with carry/overflow detection ───────────── */
 

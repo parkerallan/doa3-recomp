@@ -197,6 +197,7 @@ ptrdiff_t xbox_GetMemoryOffset(void);
 
 /** Allocate CPU-only memory from the high heap (above 64 MB). */
 uint32_t xbox_HeapAllocHigh(uint32_t size, uint32_t alignment);
+uint32_t xbox_HeapReserveTop(uint32_t size, uint32_t alignment);
 
 /** Number of 64 MB mirror views to pre-map (covers 1.75 GB of address space). */
 #define XBOX_NUM_MIRRORS    28

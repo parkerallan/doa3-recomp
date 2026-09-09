@@ -520,7 +520,7 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
             d->vp.hrtf.entries[d->vp.hrtf.current_entry].itd = s6p9_to_float(itd);
         } else if (method >= NV1BA0_PIO_SET_SSL_SEGMENT_OFFSET &&
                    method < NV1BA0_PIO_SET_SSL_SEGMENT_LENGTH + 8 * 64) {
-            assert((method & 0x3) == 0);
+            assert((method & 3) == 0);
             hwaddr addr = d->regs[NV_PAPU_VPSSLADDR]
                           + (d->vp.ssl_base_page * 8)
                           + (method - NV1BA0_PIO_SET_SSL_SEGMENT_OFFSET);

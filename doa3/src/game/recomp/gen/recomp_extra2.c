@@ -3487,7 +3487,7 @@ loc_000D028E: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000D02A0(void)
+void sub_000D02A0_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -4105,7 +4105,7 @@ loc_000E00B5: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000E00D0(void)
+void sub_000E00D0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -8756,7 +8756,7 @@ loc_0017714A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00177170(void)
+void sub_00177170_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 

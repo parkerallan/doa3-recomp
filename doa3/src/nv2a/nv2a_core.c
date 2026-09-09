@@ -670,6 +670,49 @@ void nv2a_stub_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
 }
 
 /* ============================================================
+ * USER: the FIFO channel windows (32 x 64KB from BAR0 + 0x800000)
+ *
+ * Within a channel, +0x40 is DMA_PUT and +0x44 is DMA_GET. The Xbox D3D8
+ * driver publishes its push-buffer write cursor in DMA_PUT and then spins
+ * until DMA_GET catches up -- that is how it waits for the GPU to consume what
+ * it submitted (D3DDevice_CreateDevice does exactly this at 0x001B98B8 before
+ * it sets the initial render target).
+ *
+ * There is no GPU behind this port: the push buffer is translated to D3D11
+ * synchronously inside the KickOff override, so by the time the driver looks,
+ * everything it submitted has been consumed. Report GET == whatever was last
+ * written, which is the "GPU has caught up" answer. The stub this replaces
+ * returned 0 for every read, so that spin never exited.
+ * ============================================================ */
+
+static uint32_t g_user_regs[32][2];   /* [channel] = { DMA_PUT, DMA_GET } */
+
+/* NOT WIRED IN: enabling this alone breaks boot (see notes). */
+/* NOT WIRED IN -- see the note above. */
+static uint64_t nv2a_user_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    unsigned ch  = (unsigned)((addr >> 16) & 31);
+    unsigned reg = (unsigned)(addr & 0xFFFF);
+    (void)opaque; (void)size;
+    if (reg == 0x40) return g_user_regs[ch][0];
+    if (reg == 0x44) return g_user_regs[ch][1];
+    return 0;
+}
+
+static void nv2a_user_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
+{
+    unsigned ch  = (unsigned)((addr >> 16) & 31);
+    unsigned reg = (unsigned)(addr & 0xFFFF);
+    (void)opaque; (void)size;
+    if (reg == 0x40) {
+        g_user_regs[ch][0] = (uint32_t)val;
+        g_user_regs[ch][1] = (uint32_t)val;   /* consumed immediately */
+    } else if (reg == 0x44) {
+        g_user_regs[ch][1] = (uint32_t)val;
+    }
+}
+
+/* ============================================================
  * Block dispatch table (from xemu nv2a.c)
  * ============================================================ */
 

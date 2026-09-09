@@ -15,6 +15,7 @@
 #include "gen/recomp_funcs.h"
 #include <stddef.h>
 #include <stdio.h>
+#include <intrin.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
@@ -613,10 +614,30 @@ void sub_001E6958(void)   /* XGetDevices(type) -> connected mask, stdcall ret 4 
 }
 void sub_001E697A(void)   /* XGetDeviceChanges(type, &ins, &rem), stdcall ret 12 */
 {
-    uint32_t ins = MEM32(esp + 8), rem = MEM32(esp + 0xC);
-    if (ins) MEM32(ins) = 0;
-    if (rem) MEM32(rem) = 0;
-    eax = 0;              /* no changes */
+    /* MUST NOT touch the output words when nothing changed.
+     *
+     * The real XAPI returns FALSE and leaves *pdwInsertions / *pdwRemovals
+     * alone; it only writes them when a device was actually plugged or
+     * unplugged. DOA3 relies on that: sub_0009EA60 seeds its connected-pad
+     * mask at 0x005E5CC8 from XGetDevices at boot, and then hands that SAME
+     * word to XGetDeviceChanges as the insertions pointer every frame
+     * (sub_0009EAF0). Zeroing it unconditionally wiped the mask on the first
+     * per-frame poll, so from then on the game believed no controller was
+     * connected.
+     *
+     * That is what held the game on a black screen after the intro movie.
+     * The post-movie attract driver runs with 0x00480B70 == 2 and the screen
+     * latch 0x0047ADB8 == 1; the latch is cleared only when sub_00050250
+     * sees 0x0048E653 set, which only sub_000821B0 can do -- and its path to
+     * the join code at 0x0008239F is entered from 0x000822E5,
+     * `test [0x005E5CC8], 1 << port`. With the mask at zero that test never
+     * passed, the latch never cleared, sub_00083920 never created the title
+     * screen task (0x000CEF80) and never switched the mode byte to 0, so
+     * nothing was ever drawn.
+     *
+     * No hot-plug support here: the pad set is fixed for the process, so
+     * there is never a change to report. */
+    eax = 0;              /* FALSE - no changes; outputs left untouched */
     esp += 16;
 }
 void sub_001E6E3A(void)   /* XInputOpen(type, port, slot, attrs) -> handle, ret 16 */
@@ -655,6 +676,7 @@ void sub_001E70AD(void)   /* XInputPoll(handle, out) — complete instantly, ret
 }
 void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
 {
+    { extern unsigned g_in_getstate; g_in_getstate++; }
     uint32_t st = MEM32(esp + 8);
     static uint32_t s_packet = 0x1000;   /* never collide with the 0x3E5
                                           * IO_PENDING marker */
@@ -677,6 +699,42 @@ void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
         }
         /* keyboard fallback/overlay (user-driven only — no synthetic input) */
         if (GetAsyncKeyState(VK_RETURN) & 0x8000) buttons |= 0x0010;  /* START */
+        {   /* DIAGNOSTIC ONLY (DOA3_FAKESTART=1), never on by default.
+             *
+             * The post-movie screen advances only on a real button press:
+             * sub_000821B0 reaches the screen-change path at 0x0008243B via
+             * sub_00081E90, which tests bits 4-15 of the pad aggregate at
+             * 0x5E5EE0. Headless runs cannot press a key, so this pulses
+             * START after the movie purely to establish whether the rest of
+             * the chain (screen change -> title screen -> 3D draws) works.
+             * It exists to isolate input plumbing from rendering, not to
+             * stand in for input. */
+            extern volatile int g_doa3_post_movie;
+            static int s_fake = -1;
+            static unsigned s_n = 0;
+            if (s_fake < 0) {
+                const char *e = getenv("DOA3_FAKESTART");
+                s_fake = (e && *e && *e != '0') ? 1 : 0;
+            }
+            if (s_fake && g_doa3_post_movie) {
+                s_n++;
+                /* Pulse repeatedly rather than once: whether a single press
+                 * lands while the screen is in the right state is otherwise a
+                 * coin flip, which makes runs incomparable. */
+                if (s_n > 200 && (s_n % 300u) < 60u) {
+                    buttons |= 0x0010;   /* START */
+                    /* The post-movie screen gate at 0x000CDC20 wants bit 0x20
+                     * or 0x200 of the pad word at 0x5E5ED8 + pad*0x2C, which
+                     * START does not produce -- assert A (analog) and BACK too
+                     * so the diagnostic covers the confirm buttons. */
+                    /* BACK omitted: holding it pins the screen in state 0 */
+                    a = 255;             /* A */
+                }
+                if (s_n == 200 || s_n == 400)
+                    fprintf(stderr, "[FAKESTART] %s at frame %u\n",
+                            s_n == 200 ? "press" : "release", s_n), fflush(stderr);
+            }
+        }
         if (GetAsyncKeyState(VK_UP)     & 0x8000) buttons |= 0x0001;
         if (GetAsyncKeyState(VK_DOWN)   & 0x8000) buttons |= 0x0002;
         if (GetAsyncKeyState(VK_LEFT)   & 0x8000) buttons |= 0x0004;
@@ -690,15 +748,51 @@ void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
                 fflush(stderr);
             }
         }
-        MEM32(st) = s_packet;          /* dwPacketNumber */
-        MEM16(st + 4) = buttons;       /* wButtons */
-        MEM8(st + 6) = a;              /* A */
-        MEM8(st + 7) = b;              /* B */
-        for (int i = 8; i < 14; i++) MEM8(st + i) = 0;
-        MEM16(st + 14) = (uint16_t)lx; /* sThumbLX */
-        MEM16(st + 16) = (uint16_t)ly; /* sThumbLY */
-        MEM16(st + 18) = 0;
-        MEM16(st + 20) = 0;
+        /* Each pad struct (base 0x5E5CD0, stride 0x80) holds TWO consecutive
+         * XINPUT_STATEs, 0x16 bytes each: one at pad+0x19 and one at pad+0x2F.
+         * The game hands XInputGetState the second (pad+0x2F), but the
+         * per-frame aggregate builder sub_0009EB90 reads the FIRST -- it walks
+         * a cursor at 0x5E5CFB and loads wButtons from [cursor-0xE] = pad+0x1D,
+         * which is pad+0x19 plus the 4-byte packet number. Filling only the
+         * slot we were handed left the aggregates at 0x5E5ED8+i*0x2C at zero,
+         * so no button ever reached the game and the post-movie screen sat in
+         * its "press START" wait loop (0x00083480) forever.
+         *
+         * Write the state the caller asked for, and mirror it into the slot the
+         * aggregate builder actually reads. */
+        uint32_t slots[2];
+        int nslots = 1;
+        slots[0] = st;
+        for (int i = 0; i < 4; i++) {
+            if (st == 0x5E5CFFu + 0x80u * (uint32_t)i) {
+                slots[1] = 0x5E5CE9u + 0x80u * (uint32_t)i;
+                nslots = 2;
+                break;
+            }
+        }
+        for (int si = 0; si < nslots; si++) {
+            uint32_t d = slots[si];
+            MEM32(d) = s_packet;          /* dwPacketNumber */
+            MEM16(d + 4) = buttons;       /* wButtons */
+            MEM8(d + 6) = a;              /* A */
+            MEM8(d + 7) = b;              /* B */
+            for (int i = 8; i < 14; i++) MEM8(d + i) = 0;
+            MEM16(d + 14) = (uint16_t)lx; /* sThumbLX */
+            MEM16(d + 16) = (uint16_t)ly; /* sThumbLY */
+            MEM16(d + 18) = 0;
+            MEM16(d + 20) = 0;
+        }
+    }
+    {   extern unsigned g_in_getstate, g_in_build;
+        extern volatile int g_doa3_post_movie;
+        static unsigned n = 0;
+        if (g_doa3_post_movie && (g_in_getstate % 256u) == 0 && n < 20) {
+            n++;
+            fprintf(stderr, "[INCHAIN] getstate=%u build=%u pad0+19.btn=%04X pad0+2F.btn=%04X agg5E5EE0=%08X req48A528=%u\n",
+                    g_in_getstate, g_in_build,
+                    MEM16(0x5E5CE9 + 4), MEM16(0x5E5CFF + 4),
+                    MEM32(0x5E5EE0), MEM8(0x48A528));
+            fflush(stderr); }
     }
     eax = 0;    /* ERROR_SUCCESS */
     esp += 12;
@@ -810,12 +904,25 @@ void sub_0007FFB0(void)
 }
 
 /* DIAG: screen-element/texture-bind chain counters (draws=0 root hunt). */
+/* High-rate pump/service traces. These emit tens of thousands of lines per
+ * run; the write cost alone slowed the guest enough that timed runs ended
+ * before the movie finished. Off unless DOA3_PUMPTRACE=1. */
+static int doa3_pumptrace(void)
+{
+    static int s_v = -1;
+    if (s_v < 0) {
+        const char *e = getenv("DOA3_PUMPTRACE");
+        s_v = (e && *e && *e != '0') ? 1 : 0;
+    }
+    return s_v;
+}
+
 #define CALL_COUNT_PROBE(fn) \
     void fn##_gen(void); \
     void fn(void) { \
         static int s_n = 0; \
         s_n++; \
-        if (s_n <= 3 || (s_n % 5000) == 0) { \
+        if (doa3_pumptrace() && (s_n <= 3 || (s_n % 5000) == 0)) { \
             fprintf(stderr, "[CNT] " #fn " #%d a1=0x%08X ecx=0x%08X\n", s_n, MEM32(esp + 4), ecx); \
             fflush(stderr); } \
         fn##_gen(); \
@@ -923,7 +1030,7 @@ void sub_001773E0(void)
     fflush(stderr);
 }
 CALL_COUNT_PROBE(sub_00176840)   /* mwPly destroy (DF60 bail path) */
-CALL_COUNT_PROBE(sub_0009E1F0)   /* movie stop/clear (writes 0x5E5900) */
+/* sub_0009E1F0 is wrapped below with return-value counters instead. */
 CALL_COUNT_PROBE(sub_00082EB0)   /* intro sequencer configure(movie_id) */
 CALL_COUNT_PROBE(sub_00081EB0)   /* intro sequencer per-frame body */
 CALL_COUNT_PROBE(sub_0007FD90)   /* screen-flip task (clears 0x4A10D0) */
@@ -959,9 +1066,11 @@ void sub_0016EEF0(void)
 }
 /* DIAG: PES queue append (fastcall eax=substream idx): find which substream
  * overflows (FF00040B). */
+static void doa3_relocate_picture_index(void);
 void sub_0017F330_gen(void);
 void sub_0017F330(void)
 {
+    doa3_relocate_picture_index();
     static int s_n = 0;
     uint32_t q = eax, cls = ecx, h = MEM32(esp + 4), n = MEM32(esp + 8);
     uint32_t rec = (h >= 0x1000 && h < 0x8000000 && q < 8) ? h + q * 0x388u + 0xD34 : 0;
@@ -1169,6 +1278,7 @@ void sub_0017D4B0(void)
 {
     static int s_n = 0;
     if (s_n < 6 || (s_n % 512) == 0) {
+        if (doa3_pumptrace())
         fprintf(stderr, "[VPUMP] #%d cnt=%d base=0x%X%c", s_n,
                 MEM32(0xC0E514), MEM32(0xC0E518), 10);
         fflush(stderr);
@@ -1198,6 +1308,49 @@ void sub_0017D417(void)
     }
     sub_0017D417_gen();
 }
+/* The picture index ring is carved immediately after its elementary-stream
+ * ring, and the demuxer linearises a wrapped read by copying from the ring
+ * base to ring_base+capacity -- the same address -- so the copy writes video
+ * bytes straight over the index entries (verified: dst-src == capacity every
+ * time, dst == the index table base).
+ *
+ * On hardware the decoder keeps up, the ring never approaches full, and the
+ * wrapped span stays small enough to live in that slack. Here decode runs far
+ * behind, the ring sits at ~100%% (c=0x2527E6 of 0x252800) and the linearised
+ * span reaches 0x41316 bytes, shredding the table. The entries then decode as
+ * garbage timestamps, the sfd handle never reaches PLAYEND and the intro
+ * sequencer waits on a movie that never ends.
+ *
+ * Give the index its own allocation so the two cannot overlap. Cursors are
+ * indices rather than pointers, so only the base moves; entries written
+ * before the move are carried over. */
+static void doa3_relocate_picture_index(void)
+{
+    static int s_done = 0;
+    if (s_done) return;
+    for (int q = 0; q < 8; q++) {
+        uint32_t aux = 0xC0F7C0u + (uint32_t)q * 0x388u + 0xD44u;
+        uint32_t ix  = aux + 0x30u;
+        uint32_t rs  = MEM32(aux + 8), rb = MEM32(aux + 0xC);
+        uint32_t t   = MEM32(ix), cap = MEM32(ix + 4);
+        if (!rs || !rb || !t || !cap) continue;
+        if (t != rs + rb) continue;          /* only the overlapping layout */
+        {
+            extern uint32_t xbox_HeapAllocHigh(uint32_t size, uint32_t alignment);
+            uint32_t bytes = cap * 12u;
+            uint32_t nb = xbox_HeapAllocHigh(bytes + 4096u, 4096);
+            if (!nb) continue;
+            memcpy(XBOX_PTR(nb), XBOX_PTR(t), bytes);
+            MEM32(ix) = nb;
+            fprintf(stderr, "[IXMOVE] q=%d index ring 0x%X -> 0x%X (%u entries) "
+                            "off ES ring 0x%X+0x%X\n",
+                    q, t, nb, cap, rs, rb);
+            fflush(stderr);
+            s_done = 1;
+        }
+    }
+}
+
 /* GUARD: is `obj` one of the legit decoder-pool objects (base=[0xC0E518],
  * count=[0xC0E514], stride 0x60D8)? Junk objects reaching the state machine
  * trigger the sfdec error store at junk+0x988 -> corrupts the mwPly slot
@@ -1212,6 +1365,31 @@ static int sfdec_pool_obj_ok(uint32_t obj)
      * strict: the state machine also legitimately runs on substream
      * sub-objects at interior offsets of the sfdec handle. */
     return obj >= 0x1000 && obj < 0x8000000u;
+}
+/* DIAG: sub_0017F710(h, i, k, ...) dispatches through a handler table at
+ * h + i*0x610 + 0x2F4C, entry [k]. sub_0017D1D0 calls it with (7,7) on its
+ * end-of-play path; a nonzero result makes sub_0017D1D0 return nonzero, so
+ * the state-4 handler stores 1 instead of 6 (PLAYEND) and the handle cycles
+ * 1->2->4->1 forever with h44 already 6. */
+void sub_0017F710_gen(void);
+void sub_0017F710(void)
+{
+    uint32_t h = MEM32(esp + 4), i = MEM32(esp + 8), k = MEM32(esp + 0xC);
+    uint32_t tbl = 0, ent = 0;
+    if (h >= 0x1000 && h < 0x8000000u) {
+        tbl = MEM32(h + i * 0x610u + 0x2F4Cu);
+        if (tbl >= 0x1000 && tbl < 0x8000000u) ent = MEM32(tbl + k * 4u);
+    }
+    sub_0017F710_gen();
+    if (i == 7 && k == 7) {
+        static int s_n = 0;
+        if (s_n < 8) {
+            s_n++;
+            fprintf(stderr, "[F710] h=0x%X i=%u k=%u tbl=0x%X ent=0x%X -> eax=0x%X\n",
+                    h, i, k, tbl, ent, eax);
+            fflush(stderr);
+        }
+    }
 }
 void sub_0017D1D0_gen(void);
 void sub_0017D1D0(void)
@@ -2163,6 +2341,7 @@ void sub_0017E9B0(void)
     {
         static int s_dn = 0;
         if (s_dn < 8 || (s_dn % 2048) == 0) {
+            if (doa3_pumptrace())
             fprintf(stderr, "[SRVDSP] #%d obj=0x%X st40=%d state15=%u handler=0x%X%c",
                     s_dn, obj, (int)MEM32(obj + 0x40), st15,
                     h ? h : 0x17E2A0, 10);
@@ -2222,10 +2401,20 @@ void sub_0017E9B0(void)
                 LARGE_INTEGER n;
                 if (!s_mvclk_qpf) { LARGE_INTEGER f; QueryPerformanceFrequency(&f); s_mvclk_qpf = f.QuadPart; }
                 QueryPerformanceCounter(&n);
+                /* The clock's scale is [0xC0E4D0] (59939 units/second), so a
+                 * second of wall time must add exactly that many units. The old
+                 * 22477.5 (= 375 x 59.94) ran the clock at 0.375x the stream's
+                 * rate: the library's display records carry PTS 0, 1000, 2000
+                 * ... on a 30000 scale (1/30 s each), so a frame is
+                 * 59939/29.97 = 2000 clock units, not 750. Every library test
+                 * comparing this clock against a stream timestamp was off by
+                 * 2.67x, including the end-of-display test that marks the video
+                 * stream finished and drives the handle to PLAYEND. */
                 if (s_mvclk_last)
-                    s_mvclk_accum += (double)(n.QuadPart - s_mvclk_last) * 22477.5 / (double)s_mvclk_qpf;
+                    s_mvclk_accum += (double)(n.QuadPart - s_mvclk_last) *
+                                     (double)MEM32(0xC0E4D0) / (double)s_mvclk_qpf;
                 s_mvclk_last = n.QuadPart;
-                if (s_mvclk_accum > 1500.0) s_mvclk_accum = 1500.0;   /* max 2 frames of catch-up */
+                if (s_mvclk_accum > 4000.0) s_mvclk_accum = 4000.0;   /* max 2 frames of catch-up */
             }
             /* allow the clock past the next frame's PTS (delivery compare
              * may be strict-greater) but stay below the frame after it.
@@ -2235,7 +2424,19 @@ void sub_0017E9B0(void)
              * wall time. With a continuous drain the clock tracks wall time
              * exactly whenever the serve side keeps the cap ahead. */
             {
-                uint32_t cap = (g_doa3_movie_frames + 1u) * 750u + 749u;
+                /* The cap only exists to stop the clock racing past a picture
+                 * that is decoded and still waiting for its display time. When
+                 * no slot holds such a picture the cap protects nothing, and
+                 * leaving it in place deadlocks the movie: the cap rises only
+                 * when a frame is blitted, a frame is blitted only once the AV
+                 * clock reaches its display time, and the clock cannot pass the
+                 * cap -- playback used to park on (blits+1)*750+749 with the
+                 * display queue empty. Cap only while a picture is pending. */
+                int pending = 0;
+                for (int k = 0; k < 7; k++)
+                    if (MEM32(0xC12E2Cu + 0x50u * k) == 2) { pending = 1; break; }
+                uint32_t cap = pending ? (g_doa3_movie_frames + 1u) * 2000u + 1999u
+                                       : 0xFFFFFFFFu;
                 if (g_doa3_movie_ticks < cap && s_mvclk_accum >= 1.0) {
                     double room = (double)(cap - g_doa3_movie_ticks);
                     double adv = s_mvclk_accum < room ? s_mvclk_accum : room;
@@ -2515,7 +2716,649 @@ void sub_0017C980(void)
     }
 BOOT_MARK2(sub_000833E0)         /* boot task stage driver (enter/exit) */
 BOOT_MARK2(sub_00084340)         /* boot task body (enter/exit) */
-CALL_COUNT_PROBE(sub_0009E340)   /* movie step-complete cleanup */
+BOOT_MARK2(sub_001770B0)   /* movie teardown chain (enter/exit) */
+BOOT_MARK2(sub_0017D320)   /* movie teardown chain (enter/exit) */
+/* sub_00175AB0 -> sub_00177900 -> sub_00170540(5): dispatches CRI callback
+ * slot 5 through the table at 0xB25598 (fn at +0, arg at +4, stride 8).
+ * The final movie teardown never returns from here. */
+void sub_00175AB0_gen(void);
+void sub_00175AB0(void) {
+    static int n = 0;
+    int log = (n < 6); n++;
+    if (log) {
+        fprintf(stderr, "[CRICB] slot5 fn=0x%08X arg=0x%08X (enter #%d)\n",
+                MEM32(0xB25598 + 5 * 8), MEM32(0xB2559C + 5 * 8), n);
+        fflush(stderr); }
+    sub_00175AB0_gen();
+    if (log) { fprintf(stderr, "[CRICB] slot5 returned #%d\n", n); fflush(stderr); }
+}
+BOOT_MARK2(sub_00173E20)   /* movie teardown chain (enter/exit) */
+BOOT_MARK2(sub_001778E0)   /* movie teardown chain (enter/exit) */
+/* [STAND] the post-movie standoff.
+ *
+ * Screen-mode byte 0x480B70 == 2 dispatches (jump table 0x00084574,
+ * case 2) to sub_00083920, which creates the post-movie screen task
+ * 0x000CEF80 -- but only while MEM8(0x47ADB8) == 0. Task sub_00050C30
+ * sets that latch via sub_00050160 whenever the mode is 2, and clears
+ * it again only when sub_00050250() returns 0. While it stays 1 the
+ * screen task is never created and the title screen is never armed. */
+void sub_00050250_gen(void);
+void sub_00050250(void) {
+    static unsigned n = 0, shown = 0;
+    sub_00050250_gen();
+    /* [SCRSTATE] the post-movie screen state machine, sampled over time.
+     * mode  = 0x480B70 (main jump table 0x00084574: 0 title, 2 post-movie)
+     * latch = 0x47ADB8 (screen busy; blocks sub_00083920)
+     * scr   = 0x48A2FA (screen id; 1 or 7 unlock the change path at
+     *                   0x0008243B, 0 exits early)
+     * req   = 0x48A528 (screen request for sub_000821B0)
+     * chg   = 0x484C32 / 0x47E722 (change registered -> clears the latch)
+     * pads  = 0x5E5CC8 connection mask, agg = pad0 button aggregate */
+    /* Sampled on a wall clock, not a call count: the post-movie loop runs at
+     * only a few hertz, so "every 400th call" yielded a single line for a
+     * whole run and made a moving state look frozen. */
+    n++;
+    {   static DWORD s_next = 0;
+        DWORD now = GetTickCount();
+        if (now < s_next || shown >= 300) return;
+        s_next = now + 2000;
+        shown++;
+        fprintf(stderr, "[SCRSTATE] mode=%u latch=%u scr=%u req=%u chg=%u/%u e653=%02X 49231C=%08X pads=%08X/%08X agg=%08X 4B838A=%u e648=%u e638=%d e650=%u ret=%u\n",
+                MEM8(0x480B70), MEM8(0x47ADB8), MEM8(0x48A2FA),
+                MEM8(0x48A528), MEM8(0x484C32), MEM8(0x47E722),
+                MEM8(0x48E653), MEM32(0x49231C), MEM32(0x5E5CC8),
+                MEM32(0x5E5ED0), MEM32(0x5E5EE0),
+                MEM8(0x4B838A), MEM8(0x48E648), (int)MEM32(0x48E638),
+                MEM8(0x48E650), eax & 0xFFu);
+        fflush(stderr);
+    }
+}
+void sub_00050160_gen(void);
+void sub_00050160(void) {
+    static int n = 0;
+    if (n < 6) { n++;
+        fprintf(stderr, "[STAND] sub_00050160 sets 47ADB8=1 (mode=%u)\n",
+                MEM8(0x480B70)); fflush(stderr); }
+    sub_00050160_gen();
+}
+void sub_00083A90_gen(void);
+void sub_00083A90(void) {
+    static int n = 0;
+    if (n < 4) { n++;
+        fprintf(stderr, "[STAND] sub_00083A90 TITLE-SCREEN handler entered\n");
+        fflush(stderr); }
+    sub_00083A90_gen();
+}
+void sub_00067220_gen(void);
+void sub_00067220(void) {
+    static int n = 0;
+    sub_00067220_gen();
+    if (n < 8) { n++;
+        fprintf(stderr, "[STAND] sub_00067220 -> 0x%X\n", eax);
+        fflush(stderr); }
+}
+/* Set once the movie teardown has returned -- i.e. the game has genuinely
+ * left the intro movie. The frame-capture diagnostic keys off this. */
+uint32_t g_blk50380;   /* last basic block entered in sub_00050380 */
+uint32_t g_blkC5D70;   /* last basic block entered in sub_000C5D70 */
+unsigned g_c5d70cnt[16];  /* decision-block hit counts in sub_000C5D70 */
+volatile int g_doa3_post_movie = 0;
+
+/* [FLOWCNT] which links of the title-screen chain actually execute.
+ * mode 0 (sub_00083A90) -> mode 1 (sub_00083BC0 sets 0x48A39C) ->
+ * sub_000CF500/sub_000C6E30 populate the player slots ->
+ * sub_000C5D70 -> sub_000C4D00 advances the screen state byte ->
+ * state >= 10 -> sub_000CEB20 sets 0x47E74C = 1 -> title screen. */
+unsigned g_fc[16];
+void sub_000D02A0_gen(void);
+void sub_000D02A0(void) { g_fc[8]++; sub_000D02A0_gen(); }
+void sub_000CEAC0_gen(void);
+void sub_000CEAC0(void) { g_fc[9]++; sub_000CEAC0_gen(); }
+void sub_000CDCD0_gen(void);
+void sub_000CDCD0(void) { g_fc[10]++; sub_000CDCD0_gen(); }
+void sub_00083BC0_gen(void);
+void sub_00083BC0(void) { g_fc[0]++; sub_00083BC0_gen(); }
+void sub_00082950_gen(void);
+void sub_00082950(void) { g_fc[1]++; sub_00082950_gen(); }
+void sub_000C5D70_gen(void);
+void sub_000C5D70(void) {
+    /* Does the consumer ever run on a frame where the producer had an edge to
+     * publish? 0x5E5EE0 is the edge word sub_000CDB90 derives the 0x220 flag
+     * from; 0x86132A is the flag the first bail tests. Sampled at entry, i.e.
+     * immediately after sub_000CEAC0 ran earlier in sub_000C6890. */
+    extern unsigned g_c5d70cnt[16];
+    if (MEM32(0x5E5EE0)) g_c5d70cnt[11]++;          /* edge live at entry */
+    if (MEM16(0x86132A) & 0x220) g_c5d70cnt[12]++;  /* flag actually set */
+    if (MEM32(0x5E5ED8)) g_c5d70cnt[13]++;          /* held word live */
+    g_fc[2]++;
+    sub_000C5D70_gen();
+}
+void sub_000C4D00_gen(void);
+void sub_000C4D00(void) { g_fc[3]++; sub_000C4D00_gen(); }
+void sub_00082F10_gen(void);
+void sub_00082F10(void) { g_fc[4]++; sub_00082F10_gen(); }
+void sub_000CE7D0_gen(void);
+void sub_000CE7D0(void) { g_fc[5]++; sub_000CE7D0_gen(); }
+void sub_000CF500_gen(void);
+void sub_000CF500(void) { g_fc[6]++; sub_000CF500_gen(); }
+void sub_000C6E30_gen(void);
+void sub_000C6E30(void) { g_fc[7]++; sub_000C6E30_gen(); }
+void doa3_flowcount_dump(void)
+{
+    fprintf(stderr, "[FLOWCNT] 00083BC0=%u 00082950=%u 000C5D70=%u 000C4D00=%u 00082F10=%u 000CE7D0=%u 000CF500=%u 000C6E30=%u D02A0=%u CEAC0=%u CDCD0=%u\n",
+            g_fc[0], g_fc[1], g_fc[2], g_fc[3], g_fc[4], g_fc[5], g_fc[6], g_fc[7],
+            g_fc[8], g_fc[9], g_fc[10]);
+    fflush(stderr);
+}
+
+
+/* D3DDevice_SetTransform (0x001B0EC0) and D3DDevice_SetViewport (0x001B18A0)
+ * and D3D_UpdateProjectionViewportTransform (0x001B5FD0), from the cxbx symbol
+ * cache. DIAGNOSTIC WRAPPERS (logging only).
+ *
+ * The composite matrix the GPU receives is all zeros because the driver builds
+ * it as projection-viewport (device+0x5A0) x view (device+0x880), and both of
+ * those are garbage: +0x5A0 is never written at all (only
+ * D3D_UpdateProjectionViewportTransform writes it) and +0x880 comes back as
+ * mostly zeros from SetTransform. Log what the game actually hands the driver
+ * so it is clear whether the game computes a bad matrix or the driver loses
+ * a good one. */
+void doa3_dump_mat4(const char *tag, uint32_t p)
+{
+    int i;
+    fprintf(stderr, "%s=[", tag);
+    for (i = 0; i < 16; i++) {
+        float f; uint32_t u = MEM32(p + i * 4);
+        memcpy(&f, &u, 4);
+        fprintf(stderr, "%s%g", i ? " " : "", f);
+    }
+    fprintf(stderr, "]");
+}
+/* sub_001BA7D8 -- called by D3DDevice_CreateDevice (sub_001B9537) right before
+ * it hands the implicit back buffer to SetRenderTarget:
+ *
+ *     0x1B9949  mov eax, [esp+4]        ; the device, from a frame local
+ *     0x1B9962  add eax, 0x2150         ; -> the implicit colour surface
+ *     0x1B9968  call SetRenderTarget
+ *
+ * SetRenderTarget received 0xEFFF222E instead of device+0x2150, i.e. that
+ * frame-local read came back garbage, so the device has held a wild render
+ * target pointer ever since. SetViewport clamps every viewport against that
+ * pointer, which is why 720x480 in gives width 0 out, why the
+ * projection-viewport matrix stays all zeros, and why every post-movie vertex
+ * collapses onto one point.
+ *
+ * This function takes seven stack arguments and returns with `ret 0x1C`.
+ * Enforce that contract (and the callee-saved registers) so the caller frame
+ * it returns to is the one it left.  Delta is logged for the first few calls. */
+void sub_001BA7D8_gen(void);
+void sub_001BA7D8(void)
+{
+    uint32_t ei = esp;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_001BA7D8_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+    {   static int s_n = 0;
+        if (s_n < 4) { s_n++;
+            fprintf(stderr, "[ESP] sub_001BA7D8 in=0x%08X out=0x%08X d=%+d (want +32)\n",
+                    ei, esp, (int)(esp - ei));
+            fflush(stderr); } }
+    esp = ei + 4 + 0x1C;          /* dummy return slot + ret 0x1C */
+}
+
+
+/* D3DDevice_SetRenderTarget (0x001B1350). DIAGNOSTIC WRAPPER.
+ *
+ * The device keeps the current colour surface at +0x40C, and SetViewport
+ * clamps the incoming viewport against that surface size. It reads back as
+ * 0xEFFF222E -- a guest stack address, not a surface -- so every viewport the
+ * game sets is clamped to nothing (720x480 in, b08=0 b0c=0 out), which zeroes
+ * the projection-viewport matrix and with it every transformed vertex. The
+ * only writer is this function (0x001B143A stores EBP), and EBP is held
+ * across two calls, so log the argument and the result to tell a bad argument
+ * from a clobbered register. */
+void sub_001B1350_gen(void);
+void sub_001B1350(void)
+{
+    uint32_t arg = MEM32(esp + 4);
+    sub_001B1350_gen();
+    {   static int s_n = 0;
+        if (s_n < 20) { s_n++;
+            uint32_t d = MEM32(0x001C3390);
+            void *bt[8]; int nb = (int)CaptureStackBackTrace(1, 8, bt, NULL), bi;
+            fprintf(stderr, "[SETRT] arg=%08X -> dev+40C=%08X (+410=%08X) bt:",
+                    arg, MEM32(d + 0x40C), MEM32(d + 0x410));
+            for (bi = 0; bi < nb; bi++) fprintf(stderr, " %p", bt[bi]);
+            fprintf(stderr, "\n");
+            fflush(stderr); } }
+}
+
+
+void sub_001B18A0_gen(void);
+void sub_001B18A0(void)
+{
+    uint32_t vp = MEM32(esp + 4);
+    uint32_t x = MEM32(vp), y = MEM32(vp + 4);
+    uint32_t w = MEM32(vp + 8), h = MEM32(vp + 0xC);
+    float zn, zf; uint32_t u;
+    u = MEM32(vp + 0x10); memcpy(&zn, &u, 4);
+    u = MEM32(vp + 0x14); memcpy(&zf, &u, 4);
+    sub_001B18A0_gen();
+    {   static int s_n = 0;
+        if (s_n < 40) { s_n++;
+            uint32_t d = MEM32(0x001C3390);
+            fprintf(stderr, "[SETVP] dev=%08X ", d);
+            fprintf(stderr, "in x=%u y=%u w=%u h=%u zn=%g zf=%g -> "
+                            "dev b00=%d b04=%d b08=%d b0c=%d rt40C=%08X\n",
+                    x, y, w, h, zn, zf,
+                    (int)MEM32(d + 0xB00), (int)MEM32(d + 0xB04),
+                    (int)MEM32(d + 0xB08), (int)MEM32(d + 0xB0C),
+                    MEM32(d + 0x40C));
+            fprintf(stderr, "        implicit surf %08X: +0C=%08X +10=%08X +14=%08X | "
+                            "alt %08X: +0C=%08X +10=%08X +14=%08X\n",
+                    d + 0x2150, MEM32(d + 0x2150 + 0x0C), MEM32(d + 0x2150 + 0x10),
+                    MEM32(d + 0x2150 + 0x14),
+                    d + 0x2168, MEM32(d + 0x2168 + 0x0C), MEM32(d + 0x2168 + 0x10),
+                    MEM32(d + 0x2168 + 0x14));
+            fflush(stderr); } }
+}
+void sub_001B5FD0_gen(void);
+void sub_001B5FD0(void)
+{
+    sub_001B5FD0_gen();
+    {   static int s_n = 0;
+        if (s_n < 12) { s_n++;
+            uint32_t d = MEM32(0x001C3390);
+            float f4ec, f4f0, f4f4, f4f8, f500, f504;
+            uint32_t u;
+            u = MEM32(d + 0x4EC); memcpy(&f4ec, &u, 4);
+            u = MEM32(d + 0x4F0); memcpy(&f4f0, &u, 4);
+            u = MEM32(d + 0x4F4); memcpy(&f4f4, &u, 4);
+            u = MEM32(d + 0x4F8); memcpy(&f4f8, &u, 4);
+            u = MEM32(d + 0x500); memcpy(&f500, &u, 4);
+            u = MEM32(d + 0x504); memcpy(&f504, &u, 4);
+            fprintf(stderr, "[UPVP] vpint b08=%d b0c=%d b10=%d b14=%d "
+                            "scale 500=%g 504=%g 4f8=%g | zn=%g zf=%g rz=%g mode=%d ",
+                    (int)MEM32(d + 0xB08), (int)MEM32(d + 0xB0C),
+                    (int)MEM32(d + 0xB10), (int)MEM32(d + 0xB14),
+                    f500, f504, f4f8, f4ec, f4f0, f4f4,
+                    (int)MEM32(0x001C056C));
+            doa3_dump_mat4("proj+0x8C0", d + 0x8C0);
+            fprintf(stderr, " ");
+            doa3_dump_mat4("pv+0x5A0", d + 0x5A0);
+            fprintf(stderr, "\n"); fflush(stderr); } }
+}
+
+
+/* sub_001B7E50 -- the D3D8 driver 4x4 matrix multiply (pure SSE) that builds
+ * the model-view and composite matrices it streams to the GPU.
+ *
+ * DIAGNOSTIC WRAPPER (logging only; the generated body still does the work).
+ * The pgraph translator sees SET_COMPOSITE_MATRIX arrive as 16 zero dwords
+ * and SET_MODEL_VIEW_MATRIX as a matrix with two zero rows, which collapses
+ * every post-movie draw onto the viewport centre. Print the operands and the
+ * result so it is clear whether the multiply is wrong or its inputs are.
+ * Args (cdecl): [esp+4]=dst, [esp+8]=A, [esp+0xC]=B; ret 12. */
+void sub_001B7E50_gen(void);
+void sub_001B7E50(void)
+{
+    uint32_t dst = MEM32(esp + 4), a = MEM32(esp + 8), b = MEM32(esp + 0xC);
+    sub_001B7E50_gen();
+    {   extern volatile int g_doa3_post_movie;
+        static int s_n = 0;
+        if (g_doa3_post_movie && s_n < 6) { s_n++;
+            int i;
+            fprintf(stderr, "[MATMUL] dst=%08X A=%08X B=%08X A=[", dst, a, b);
+            for (i = 0; i < 16; i++) { float f; uint32_t u = MEM32(a + i * 4);
+                memcpy(&f, &u, 4); fprintf(stderr, "%s%g", i ? " " : "", f); }
+            fprintf(stderr, "] B=[");
+            for (i = 0; i < 16; i++) { float f; uint32_t u = MEM32(b + i * 4);
+                memcpy(&f, &u, 4); fprintf(stderr, "%s%g", i ? " " : "", f); }
+            fprintf(stderr, "] R=[");
+            for (i = 0; i < 16; i++) { float f; uint32_t u = MEM32(dst + i * 4);
+                memcpy(&f, &u, 4); fprintf(stderr, "%s%g", i ? " " : "", f); }
+            fprintf(stderr, "]\n");
+            fflush(stderr); }
+    }
+}
+
+
+/* CRI callback dispatch: enforce the callee-saved ABI.
+ *
+ * sub_001705E0 walks a table of registered callbacks and invokes each
+ * through an indirect call, having pushed ebx/ebp/esi/edi on entry and
+ * popping them on exit -- so on hardware a caller's edi survives it.
+ * Here it does not: a callback corrupts the guest stack slots holding
+ * those saved registers, and the pops read live data back instead
+ * (observed: edi 0x00000001 -> 0x00000000, then 0x00C0F7C0, 0x001C0800).
+ *
+ * That single lost register is what deadlocked the movie teardown. The
+ * CRI server loop at 0x0016A650 holds its sentinel in edi (edi = 1) and
+ * clears the shutdown-ack flag only when [0xB24D3C] == edi. With edi
+ * corrupted the compare never matched, so the ack was never given and
+ * the teardown wait (sub_0016A4C0) spun its full 200,000,000 iterations
+ * -- the game hung between the intro movie and the post-movie screen.
+ * The server was running the whole time (its heartbeat 0xB24D48 climbed
+ * past 700k during the stall); it simply never took the clear branch.
+ *
+ * Snapshot and restore in C, which is what the guest stack was meant to
+ * do and cannot be trusted to here. Same remedy as ESP_PROBE above. */
+void sub_001705E0_gen(void);
+void sub_001705E0(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_001705E0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* sub_000E00D0 -- same callee-saved leak, at the post-movie load dispatch.
+ *
+ * sub_000E8BB0 drives 175 objects at 0x370C48 (stride 0x3C) through a
+ * vtable call, holding the base in EDI and the counter in EBX across it:
+ *
+ *     mov edi, 0x370c48 / mov ebx, 0xaf
+ *   loop: mov edx,[edi] / push 0x3736c0 / mov ecx,edi / call [edx+4]
+ *         add edi, 0x3c / dec ebx / jne loop
+ *
+ * The vtable target is sub_000E00D0, whose own callees (sub_000DF360 and
+ * friends) were split by the disassembler so their push/pop pairs straddle
+ * fragment boundaries -- sub_000DF360 holds the pushes and its epilogue
+ * fragment sub_000DF443 holds the pops. EBX therefore came back holding
+ * the pushed "this" (0x3736C0) instead of the loop counter, so the loop
+ * ran ~3.6M times and walked EDI off the end of the array. That produced
+ * the wild reads and the ~200 null vtable calls seen at sub_000E8BB0,
+ * and ultimately an out-of-range APU voice index.
+ *
+ * A blanket save/restore inside RECOMP_ICALL is NOT the fix: too many
+ * mis-split fragments are registered as icall targets, and forcing the
+ * guarantee on all 1592 sites hangs the CRI server (sub_0017CC30 spins
+ * forever). Restore the ABI at this one real call boundary instead. */
+void sub_000E00D0_gen(void);
+void sub_000E00D0(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_000E00D0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* sub_0006D140 -- third instance of the same callee-saved leak.
+ *
+ * sub_00051800 walks a 2-entry table with the base in ESI and the count
+ * in EDI held across the call:
+ *
+ *     mov esi, 0x3057f4 / mov edi, 2
+ *   loop: push 0 / push esi / call sub_0006D140 / add esp, 8
+ *         add esi, 8 / dec edi / jne loop
+ *
+ * sub_0006D140 itself never touches ESI/EDI, but sub_0006CDB0 below it
+ * pushes them lazily at 0x6CDCA/0x6CDCD and the disassembler split that
+ * body at 0x6CDC1, so the pushes and pops now live in different C
+ * functions (sub_0006CDC1 shows push1/pop2 for both). The loop therefore
+ * lost its base and its counter: ESI wandered into the output element
+ * array at 0x49A998 and the two-iteration loop ran 106 million times,
+ * feeding float data (0x3F800000, 0xC5000000) to sub_0006D140 as the
+ * record whose first dword becomes the table index at 0x49A8E4. That is
+ * what sub_00069710 then read as [edi] and used to index 0x2FD668 /
+ * 0x48F288, producing its wild reads. */
+void sub_0006D140_gen(void);
+void sub_0006D140(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_0006D140_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* The three sibling sprite helpers have the same exposure and the same
+ * callers. sub_00051800 drives sub_0006D410 from a second loop with the
+ * identical shape (esi = 0x305804, edi = 2, stride 0xC), and all three
+ * bottom out in the split bodies of sub_0006CDB0 / sub_0006CE40 /
+ * sub_0006CED0 whose lazy push esi/edi is separated from its pop. */
+
+void sub_0006D1B0_gen(void);
+void sub_0006D1B0(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_0006D1B0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+void sub_0006D230_gen(void);
+void sub_0006D230(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_0006D230_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+void sub_0006D410_gen(void);
+void sub_0006D410(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_0006D410_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* sub_001B3940 -- the same callee-saved leak on the D3D8 inline-vertex path,
+ * and by far the most expensive instance of it.
+ *
+ * sub_00157700 walks a list of vertex blocks, accumulating a vertex count in
+ * EDI and holding the block pointer in EBX across the submit:
+ *
+ *     0x1578A6: xor edi, edi                    ; per-block count
+ *     0x1578B0: ... accumulate edi from [ebx] ... add ebx, 0x10
+ *     0x1578FD: add eax, 2 / push eax           ; count = edi
+ *     0x157903: call sub_001B3940
+ *     0x157908: mov esi, [ebx]                  ; next block -- EBX must survive
+ *
+ * sub_001B3940 bottoms out in mis-split XDK bodies whose push/pop pairs
+ * straddle fragment boundaries (sub_001B7700 shows push1/pop2 for EBX, ESI
+ * and EDI). EBX came back wrong, so [ebx] gave a garbage block count and the
+ * next iteration built a garbage vertex count -- 0x0EB1927B, 0x96B8CB08. The
+ * MMX copy loop then ran for hundreds of millions of vertices and walked its
+ * source pointer into the NV2A MMIO aperture at 0xFDxxxxxx. Every one of
+ * those reads trapped through the VEH: the fault counter passed 54,000,000 in
+ * a single run, and the sampling profiler put ~72% of all CPU inside this
+ * function with another ~15% in ntdll dispatching the exceptions -- which is
+ * why the game ran far too slowly to reach the title screen.
+ *
+ * (sub_001B2520, the other callee whose result feeds this call site, is
+ * already ABI-enforced through ESP_PROBE above.) */
+void sub_001B3940_gen(void);
+void sub_001B3940(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    static unsigned draw_probe_count = 0;
+    if (draw_probe_count < 8 || (MEM32(esp + 8) > 0x100000 && draw_probe_count < 16)) {
+        fprintf(stderr, "[INDEX-ENTRY] esp=%08X mode=%X count=%X src=%08X ebx=%08X record=%X,%X,%X,%X,%X\n",
+                esp, MEM32(esp + 4), MEM32(esp + 8), MEM32(esp + 12), ebx,
+                MEM32(ebx), MEM32(ebx + 4), MEM32(ebx + 8), MEM32(ebx + 12), MEM32(ebx + 16));
+        fflush(stderr);
+        draw_probe_count++;
+    }
+    sub_001B3940_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* sub_001B0EC0 -- the leak that produced the garbage vertex counts.
+ *
+ * sub_00157700 keeps its "this" in ESI and derives the vertex-block list
+ * from it only AFTER calling this function:
+ *
+ *     0x157713: mov esi, ecx           ; this
+ *     0x157788: call sub_001B0EC0      ; ESI must survive
+ *     0x15778D: lea ebx, [esi + 0x50]  ; block list base
+ *     0x15779F: mov eax, [ebx + 0x10]
+ *
+ * The chain under sub_001B0EC0 straddles fragment boundaries the same way
+ * the others do (sub_001B44F0 push2/pop1 on ESI, sub_001B5FD0 writes ESI
+ * with no pop), so ESI came back wrong and EBX pointed at nothing. Every
+ * per-block count the loop then read out of [ebx+8] was garbage -- the same
+ * values every run, because the leaked pointer is deterministic -- and the
+ * accumulated total handed to sub_001B3940 reached 0x0EB1927B / 0x96B8CB08.
+ * That is what drove the MMX copy loop off the end of its source buffer and
+ * into the NV2A MMIO aperture, costing tens of millions of VEH faults. */
+void sub_001B0EC0_gen(void);
+void sub_001B0EC0(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    {   /* DIAG: what matrix does the game actually set? */
+        static int s_n = 0;
+        if (s_n < 24) { s_n++;
+            extern void doa3_dump_mat4(const char *tag, uint32_t p);
+            fprintf(stderr, "[SETXF] state=%u mat=%08X ",
+                    MEM32(esp + 4), MEM32(esp + 8));
+            doa3_dump_mat4("M", MEM32(esp + 8));
+            fprintf(stderr, "\n"); fflush(stderr); } }
+    sub_001B0EC0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* sub_001568B0 -- the leak behind the garbage vertex counts.
+ *
+ * sub_00157700 reads the entry count of a vertex-block group into ESI and
+ * only then makes a call, using both ESI and EBX afterwards:
+ *
+ *     0x157894: mov  esi, [ebx]      ; number of 0x10-byte entries
+ *     0x157896: call sub_001568B0    ; ESI and EBX must survive
+ *     0x15789B: add  ebx, 8
+ *     0x15789E: test esi, esi        ; loop bound
+ *     0x1578A6: ...accumulate [ebx+8] over ESI entries...
+ *
+ * The chain below it writes all three registers without restoring them
+ * (sub_001B1EA0, sub_001B4230 and sub_001B45F0 each show w,no-pop), so the
+ * entry count came back too large and the accumulation loop ran off the end
+ * of the entry array into the float vertex data that follows it -- the block
+ * dump shows [ebx+8] holding values like 0xC3A9CE00 (-339.6f). Those floats
+ * were summed as vertex counts, producing the 0x0EB1927B / 0x96B8CB08 totals
+ * handed to sub_001B3940, which then copied for hundreds of millions of
+ * vertices and walked its source into the NV2A MMIO aperture. Same values
+ * every run, because the leaked register is deterministic. */
+void sub_001568B0_gen(void);
+void sub_001568B0(void) {
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_001568B0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* sub_00156300 -- same leak, in sub_00157700's inner per-block loop.
+ *
+ *     0x157820: push esi / mov edx, ebx / mov ecx, edi
+ *     0x157825: call sub_00156300      ; EBX, ESI and EDI must survive
+ *     0x15782A: mov  eax, [esp+0x90]   ; loop bound
+ *     0x157831: inc  esi / add ebx, 0x10 / cmp esi, eax / jb
+ *
+ * The callee is a 1139-byte body the disassembler carved into 13 fragments,
+ * so its own push/pop pairs no longer balance (ebx push1/pop4, esi push6/pop4,
+ * edi push1/pop4) and the loop lost both its block pointer and its counter.
+ * sub_00156300 then re-entered with edx = ebx = a wild value and faulted on
+ * its first "mov eax, [edi]" -- addresses like 0xEE2D7B8F, which sit between
+ * guest RAM and the GPU aperture so the VEH could only skip them. That spin
+ * was what drove the fault counter to the 2,000,000 skip cap and aborted the
+ * process. */
+void sub_00156300_gen(void);
+void sub_00156300(void) {
+    uint32_t ei = esp;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_00156300_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+    /* Enforce the stack contract as well as the registers.
+     *
+     * sub_00157700 re-reads its loop bound from [esp+0x90] after every
+     * one of these calls, so any esp drift makes it read a neighbouring
+     * slot as the texture-stage count. That is how the loop came to run
+     * to stage 0xC/0xE (the Xbox has four) and hand float data to
+     * D3DDevice_SetTexture, which passed it on to the refcount walker
+     * sub_001B4960 as a resource pointer -- the crash.
+     *
+     * The body is 1139 bytes split into 13 fragments, so its own
+     * push/pop pairs no longer balance. It is "ret 4": one stack arg,
+     * so esp_out = esp_in + 4 (our fake return slot) + 4. */
+    esp = ei + 8;
+}
+
+/* [REFW] diagnostic: sub_001B4960 walks a D3D resource chain, bumping a
+ * refcount in [obj] and recursing into the child at [obj+0x14]. It is the
+ * last thing every run does before dying, with the guest esp walking down,
+ * so log the argument and the recursion depth. */
+void sub_001B4960_gen(void);
+void sub_001B4960(void) {
+    static int s_depth = 0, s_max = 0, s_logged = 0;
+    uint32_t obj = MEM32(esp + 4);
+    s_depth++;
+    if (s_depth > s_max) {
+        s_max = s_depth;
+        if (s_max == 8 || s_max == 64 || s_max == 512 || s_max == 4096)
+            fprintf(stderr, "[REFW] depth reached %d (obj=%08X type=%08X child=%08X)\n",
+                    s_max, obj,
+                    (obj >= 0x1000 && obj < 0x08000000u) ? MEM32(obj) : 0,
+                    (obj >= 0x1000 && obj < 0x08000000u) ? MEM32(obj + 0x14) : 0);
+    }
+    if ((obj < 0x1000u || obj >= 0x08000000u) && s_logged < 10) {
+        s_logged++;
+        fprintf(stderr, "[REFW] BAD obj=%08X depth=%d esp=%08X slot0=%08X slot8=%08X host_ret=%p\n",
+                obj, s_depth, esp, MEM32(esp), MEM32(esp + 8), _ReturnAddress());
+        fflush(stderr);
+    }
+    /* Containment: a D3D resource pointer is always a guest heap address.
+     * We are reaching here with floats and small integers (0x3F800000,
+     * 3, 4, 0x60) because SetTexture upstream is handed non-pointers out
+     * of a malformed state block. Dereferencing one walks a bogus chain
+     * and bumps a refcount through it, which is what killed every run.
+     * Drop the call rather than the process; the producer is still wrong
+     * and is the real fix. */
+    /* Cycle guard. This walks a D3D resource chain via [obj+0x14] and the
+     * guest marks a node visited (add [esi],0x80000) only AFTER recursing,
+     * so a chain that points at itself is unbounded on hardware too --
+     * it never happens there because the data is well formed. Here we hit
+     * obj=0x002DD3D8 whose child IS itself, and the recursion ran the host
+     * stack out right as the intro advanced past the movie. Real chains are
+     * a couple of links deep, so cap the walk rather than die. */
+    if (s_depth > 32) {
+        static int s_warned = 0;
+        if (!s_warned) { s_warned = 1;
+            fprintf(stderr, "[REFW] cycle: obj=%08X child=%08X - walk capped\n",
+                    obj, (obj >= 0x1000u && obj < 0x08000000u) ? MEM32(obj + 0x14) : 0);
+            fflush(stderr); }
+        s_depth--;
+        esp += 8;   /* ret 4 */
+        return;
+    }
+    if (obj < 0x1000u || obj >= 0x08000000u) {
+        s_depth--;
+        esp += 8;   /* ret 4: our fake return slot + one arg */
+        return;
+    }
+    sub_001B4960_gen();
+    s_depth--;
+}
+
+/* [INCHAIN] end-to-end input plumbing.
+ *
+ * XInputGetState fills the pad state; sub_0009EB90 folds the four pads
+ * into the per-frame aggregates at 0x5E5ED8 (+0x2C per pad), whose
+ * button word at +8 is what the post-movie screen tests for START
+ * (sub_000821B0, 0x000822BB: test byte [0x5E5EE0], 0x10).
+ *
+ * Counters, so the chain can be checked headless: if the builder never
+ * runs post-movie, no keypress could ever reach the game. */
+unsigned g_in_getstate, g_in_build;
+void sub_0009EB90_gen(void);
+void sub_0009EB90(void) {
+    g_in_build++;
+    sub_0009EB90_gen();
+    {   /* Did a press actually reach the aggregate the post-movie screen
+         * tests (sub_00081E90 reads bits 4-15 of 0x5E5EE0)? */
+        static int n = 0;
+        if ((MEM32(0x5E5EE0) || MEM32(0x5E5ED8)) && n < 12) { n++;
+            fprintf(stderr, "[AGG] w0(5E5ED8)=%08X w8(5E5EE0)=%08X raw=%04X A=%02X scr=%u mode=%u latch=%u\n",
+                    MEM32(0x5E5ED8), MEM32(0x5E5EE0), MEM16(0x5E5CED),
+                    MEM8(0x5E5CEF), MEM8(0x48A2FA),
+                    MEM8(0x480B70), MEM8(0x47ADB8));
+            fflush(stderr); }
+    }
+}
+void sub_0009E340_gen(void);
+void sub_0009E340(void) {
+    static int n = 0;
+    int log = (n < 4); n++;
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0009E340 enter\n"); fflush(stderr); }
+    sub_0009E340_gen();
+    g_doa3_post_movie = 1;
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0009E340 exit (eax=0x%X)\n", eax);
+               fflush(stderr); }
+}
 CALL_COUNT_PROBE(sub_0016B400)   /* ADX stream handle create (movie work buf) */
 CALL_COUNT_PROBE(sub_0009C840)   /* sound/cache init: registers wxCi groups */
 CALL_COUNT_PROBE(sub_0009F730)   /* caller of sub_0009C840 */
@@ -2698,6 +3541,7 @@ void sub_00173D10(void)
     uint32_t obj = MEM32(esp + 4);
     s_n++;
     if (s_n <= 4 || (s_n % 3000) == 0) {
+        if (doa3_pumptrace())
         fprintf(stderr, "[WXPUMP] #%u obj=0x%08X st=%u slot20=%u slotSt=%u\n",
                 s_n, obj, obj ? MEM8(obj + 1) : 0,
                 obj ? MEM32(obj + 0x20) : 0,
@@ -2720,6 +3564,12 @@ void sub_0006E0B0(void)
     sub_0006E0B0_gen();
     s_n++;
     if (s_n <= 12) {
+        /* sub_0006E0B0 rejects the blob unless it starts with 'XPR0' (Xbox
+         * Packed Resource); dump the first bytes so an empty buffer (never
+         * loaded) is distinguishable from wrong/misaligned data. */
+        fprintf(stderr, "[TEXHDR] #%d a1=0x%08X magic=%08X bytes:", s_n, a1, MEM32(a1));
+        for (int k = 0; k < 16; k++) fprintf(stderr, " %02X", MEM8(a1 + k));
+        fprintf(stderr, "%c", 10);
         fprintf(stderr, "[TEXSLOT] #%d this=0x%08X a1=0x%08X slot=0x%08X a3=0x%08X -> eax=0x%08X slotval=0x%08X\n",
                 s_n, this_, a1, a2, a3, eax,
                 (a2 >= 0x1000 && a2 < 0x4000000) ? MEM32(a2) : 0);
@@ -2874,6 +3724,31 @@ void sub_001BEEFE(void)
             fprintf(stderr, "[ESP] " #fn " in=0x%08X out=0x%08X d=%+d\n", ei, esp, (int)(esp - ei)); \
             fflush(stderr); } \
     }
+/* CreateDevice tail: two callees leak the guest stack, and that is what left
+ * the device without a render target.
+ *
+ * D3DDevice_CreateDevice ends in the fragment at 0x001B9537, which reads the
+ * device out of its own frame at [esp+4] and hands the implicit back buffer
+ * (device + 0x2150) to SetRenderTarget. Measured across that tail, esp came
+ * back 0xC0 bytes low -- sub_001B8EE0 returned -8 where it should return +4,
+ * and sub_001B9130 returned -172 where it should return +8, which is exactly
+ * the 192 lost. Both are split functions whose pushes are popped in a
+ * successor fragment, so the pops never run on the path taken here.
+ *
+ * With the frame shifted, [esp+4] read 0xEFFF00DE instead of the device, so
+ * SetRenderTarget stored 0xEFFF222E as the current colour surface. SetViewport
+ * clamps every viewport against that surface: the game asks for 720x480 and
+ * the device records width 0, D3D_UpdateProjectionViewportTransform then
+ * builds an all-zero projection-viewport matrix, the composite matrix streamed
+ * to the GPU is 16 zero dwords, and every transformed vertex lands on the
+ * viewport centre. That is the black post-movie screen.
+ *
+ * Enforce the documented contract at both boundaries: pop the dummy return
+ * slot plus the callee-popped argument bytes, and restore the callee-saved
+ * registers the split epilogues never restored. */
+ESP_PROBE(sub_001B8690)   /* GPU wait spin (ret 0)            expect d=+4  */
+/* (the ESP_FIX uses live next to the macro definition further down) */
+
 ESP_PROBE(sub_00176230)   /* movie ring finalize */
 ESP_PROBE(sub_001B2440)
 ESP_PROBE(sub_001B23C0)
@@ -2908,9 +3783,93 @@ void sub_001B45F0(void)
         fflush(stderr);
     }
 }
-ESP_PROBE(sub_001B2390)
+/* Push-buffer append (0x1B2390) -- __fastcall(ecx, edx), plain ret.
+ *
+ * Reserves 8 bytes at the device write cursor and stores ecx/edx there:
+ *
+ *     mov eax, [0x1c0800] / add eax, 8 / cmp eax, [0x1c0804]
+ *     jae  full
+ *     mov [0x1c0800], eax / mov [eax-8], ecx / mov [eax-4], edx / ret
+ *   full:
+ *     call sub_001B8B00        ; make space
+ *     jmp  0x1b2390            ; retry
+ *
+ * 0x1C0800 is not a private global: [0x1C3390] (the device pointer) is set
+ * to 0x1C0800, so these are dev+0 and dev+4 -- the very cursor/limit pair
+ * the sub_001B8DA0 and sub_001B8DC0 overrides already clamp. This path does
+ * not go through either of them; it tests the limit itself and relies on
+ * sub_001B8B00 to wrap, which never happens here. So once the buffer filled,
+ * the retry never succeeded -- and because the guest "jmp" back to the top is
+ * emitted as a call, that hardware retry loop became real recursion and ran
+ * the host stack out (0xC00000FD, frames all sub_001B2390+0x31).
+ *
+ * Apply the same wrap the other two use and do the append directly, so there
+ * is no retry to recurse on. */
+void sub_001B2390(void)
+{
+    extern uint32_t g_doa3_pb_base, g_doa3_pb_end;
+    uint32_t dev = 0x001C0800u;
+    uint32_t cursor = MEM32(dev);
+    if (cursor + 8 >= MEM32(dev + 0x04)) {
+        /* Buffer full: run the guest flush exactly as the original does
+         * (it preserves ecx/edx across it), then enforce the wrap it
+         * fails to perform. Skipping the flush entirely starved whatever
+         * it advances and sent the matrix path into a 262M-call spin. */
+        extern void sub_001B8B00(void);
+        uint32_t s_ecx = ecx, s_edx = edx;
+        ecx = MEM32(0x001C3390u);
+        PUSH32(esp, 0);
+        sub_001B8B00();
+        ecx = s_ecx; edx = s_edx;
+        cursor = MEM32(dev);
+    }
+    if (g_doa3_pb_base &&
+        (cursor < g_doa3_pb_base || cursor + 0x1000 >= g_doa3_pb_end)) {
+        cursor = g_doa3_pb_base;
+        MEM32(dev + 0x04) = g_doa3_pb_end;
+    }
+    MEM32(cursor)     = ecx;
+    MEM32(cursor + 4) = edx;
+    MEM32(dev)        = cursor + 8;
+    esp += 4;   /* plain ret: only our fake return slot */
+}
 ESP_PROBE(sub_001B2930)
-ESP_PROBE(sub_001B1CC0)
+/* [SETTEX] sub_001B1CC0(stage, resource) -- ret 8, so arg0 = [esp+4] and
+ * arg1 = [esp+8]. arg1 becomes EBP and is handed to the refcount walker
+ * sub_001B4960, which faults on it. Log both plus the caller. */
+void sub_001B1CC0_gen(void);
+void sub_001B1CC0(void) {
+    uint32_t ei = esp;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    uint32_t a0 = MEM32(esp + 4), a1 = MEM32(esp + 8);
+    { static unsigned n = 0, bad = 0;
+      n++;
+      if (a1 && (a1 < 0x1000u || a1 >= 0x08000000u)) {
+        bad++;
+        if (bad <= 10)
+          fprintf(stderr, "[SETTEX] BAD stage=%08X res=%08X esp=%08X host_ret=%p n=%u bad=%u\n",
+                  a0, a1, esp, _ReturnAddress(), n, bad);
+      } else if (n <= 4) {
+        fprintf(stderr, "[SETTEX] ok  stage=%08X res=%08X host_ret=%p\n",
+                a0, a1, _ReturnAddress());
+      } }
+    /* Same containment one level up. A non-pointer resource here also
+     * gets stored into the device stage table at [edi + stage*4 + 0xba0];
+     * with a wild stage that store lands in the object-pointer array at
+     * 0x480D68 and corrupts it, which then feeds worse values back into
+     * this same path. Rejecting the call breaks that feedback loop. */
+    /* Reject only a non-pointer resource. The index is NOT bounded here:
+     * [edi + idx*4 + 0xba0] covers more than the four texture stages, and
+     * clamping it to 3 dropped legitimate calls (draws went to zero). */
+    if (a1 && (a1 < 0x1000u || a1 >= 0x08000000u)) {
+        edi = s_edi; esi = s_esi; ebx = s_ebx;
+        esp = ei + 12;   /* ret 8 */
+        return;
+    }
+    sub_001B1CC0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+    (void)ei;
+}
 ESP_PROBE(sub_001B4230)
 ESP_PROBE(sub_001B10B0)
 ESP_PROBE(sub_001B0DE0)
@@ -2924,10 +3883,12 @@ void sub_001B7690(void)
 {
     static int s_n = 0;
     uint32_t ei = esp;
+    uint32_t entry_esi = esi, entry_ebx = ebx;
     sub_001B7690_gen();
-    if (s_n < 6) {
+    if (s_n < 16 && (esp != ei + 4 || esi != entry_esi || ebx != entry_ebx)) {
         s_n++;
-        fprintf(stderr, "[FLUSH7690] d=%+d\n", (int)(esp - ei));
+        fprintf(stderr, "[FLUSH7690] d=%+d esi=%08X->%08X ebx=%08X->%08X\n",
+                (int)(esp - ei), entry_esi, esi, entry_ebx, ebx);
         fflush(stderr);
     }
 }
@@ -2939,7 +3900,7 @@ void sub_001B7690(void)
         static int s_n = 0; \
         uint32_t ei = esp; \
         fn##_gen(); \
-        if (s_n < 3 && (int)(esp - ei) != 4) { \
+        if (s_n < 8 && (int)(esp - ei) != 8) { \
             s_n++; \
             fprintf(stderr, "[DRIFT] " #fn " d=%+d\n", (int)(esp - ei)); \
             fflush(stderr); } \
@@ -3065,10 +4026,131 @@ void sub_001B3760(void)
     edi = s_edi; esi = s_esi; ebx = s_ebx;
     (void)ei;
 }
+/* [TASKNEW] temporary: which task entry points actually get registered.
+ * sub_0009E422(priority, entry) is the task-create the post-movie screen
+ * (0x000CEF80) is launched through from sub_00083920. */
+void sub_0009E422_gen(void);
+void sub_0009E422(void) {
+    uint32_t pri = MEM32(esp + 4), ent = MEM32(esp + 8);
+    static int n = 0;
+    if (n < 40) { n++;
+        fprintf(stderr, "[TASKNEW] pri=%u entry=0x%08X\n", pri, ent);
+        fflush(stderr); }
+    sub_0009E422_gen();
+}
+/* [FLOW] temporary: is the post-movie screen task ever created?
+ * sub_00083920 is mode-jump-table case 2 (table at 0x00084574) and is what
+ * calls sub_0009E422(2, 0x000CEF80). It returns early when sub_00083320
+ * reports a held reset combo, or when MEM8(0x47ADB8) == 1. */
+void sub_00083920_gen(void);
+void sub_00083920(void) {
+    static int n = 0;
+    if (n < 6) { n++;
+        fprintf(stderr, "[FLOW] sub_00083920 enter mode480B70=%u f47ADB8=%u\n",
+                MEM8(0x480B70), MEM8(0x47ADB8));
+        fflush(stderr); }
+    sub_00083920_gen();
+}
+void sub_00083320_gen(void);
+void sub_00083320(void) {
+    static int n = 0;
+    sub_00083320_gen();
+    if (n < 6) { n++;
+        fprintf(stderr, "[FLOW] sub_00083320 -> %u\n", eax); fflush(stderr); }
+}
+/* [MWEND] temporary: the mwPly PLAYEND transition. sub_00176CE0 steps the
+ * player; when obj[8]==2 it calls sub_00176C80, which sets obj[8]=3 once
+ * sub_0017D4E0(obj[0x30]) reports SFD state 6. The intro sequencer waits on
+ * obj[8]==3 (status 3 = PLAYEND) before leaving its post-movie wait. */
+void sub_00176CE0_gen(void);
+void sub_00176CE0(void) {
+    uint32_t obj = MEM32(esp + 4);
+    static int n = 0; static unsigned calls = 0;
+    calls++;
+    if (obj && n < 12 && (calls % 512) == 0) { n++;
+        fprintf(stderr, "[MWEND] step obj=%08X st8=%d h30=%08X h30st40=%d\n",
+                obj, (int)MEM32(obj + 8), MEM32(obj + 0x30),
+                MEM32(obj + 0x30) ? (int)MEM32(MEM32(obj + 0x30) + 0x40) : -1);
+        fflush(stderr); }
+    sub_00176CE0_gen();
+}
+unsigned g_mw_calls, g_mw_st6, g_mw_set3, g_mw_laststate;
+unsigned g_e1f0_calls, g_e1f0_nz;
+/* [MVST] temporary: what the movie status vtable slot actually reports. */
+unsigned g_st_calls; int g_st_lastret, g_st_lastst8; uint32_t g_st_lastobj;
+void sub_00177170_gen(void);
+void sub_00177170(void) {
+    uint32_t obj = MEM32(esp + 4);
+    g_st_calls++;
+    g_st_lastobj = obj;
+    g_st_lastst8 = obj ? (int)MEM32(obj + 8) : -1;
+    sub_00177170_gen();
+    g_st_lastret = (int)eax;
+    /* [MVST2] The intro sequencer leaves state 1 only when this returns 3,
+     * and 3 can only come from obj+8 being 3 verbatim (the obj+8==2 branch
+     * can only yield 1, 2 or 4). Log every change so we can see whether
+     * obj+8 ever reaches 3 at the moment this is polled. */
+    { static int last_st8 = -99, last_ret = -99; static unsigned n = 0;
+      int st8 = obj ? (int)MEM32(obj + 8) : -1;
+      if ((st8 != last_st8 || (int)eax != last_ret) && n < 30) { n++;
+        last_st8 = st8; last_ret = (int)eax;
+        fprintf(stderr, "[MVST2] call=%u obj=%08X st8_in=%d st8_out=%d ret=%d h30=%08X h30st40=%d\n",
+                g_st_calls, obj, g_st_lastst8, st8, (int)eax,
+                obj ? MEM32(obj + 0x30) : 0,
+                (obj && MEM32(obj + 0x30)) ? (int)MEM32(MEM32(obj + 0x30) + 0x40) : -1);
+        fflush(stderr); } }
+}
+void sub_0009E1F0_gen(void);
+void sub_0009E1F0(void) {
+    g_e1f0_calls++;
+    sub_0009E1F0_gen();
+    if (eax) g_e1f0_nz++;
+    {   /* [MVPOLL] the intro sequencer polls this every frame while it waits
+         * for the movie to report PLAYEND; report what it sees. */
+        static unsigned n = 0;
+        static int last8 = -99, lastret = -99, lastIntro = -99;
+        uint32_t o0 = MEM32(0x5E5900);
+        int cur8 = o0 ? (int)MEM32(o0 + 8) : -1;
+        if ((cur8 != last8 || (int)eax != lastret ||
+             (int)MEM8(0x4B83B0) != lastIntro) && n < 30) { n++;
+            last8 = cur8; lastret = (int)eax; lastIntro = (int)MEM8(0x4B83B0);
+            uint32_t o = MEM32(0x5E5900);
+            fprintf(stderr, "[MVPOLL] calls=%u ret=%d cached5E5970=%d obj=%08X objSt8=%d introSt=%u\n",
+                    g_e1f0_calls, (int)eax, (int)MEM32(0x5E5970), o,
+                    o ? (int)MEM32(o + 8) : -1, MEM8(0x4B83B0));
+            fflush(stderr); }
+    }
+}
+void sub_00176C80_gen(void);
+void sub_00176C80(void) {
+    uint32_t obj = MEM32(esp + 4);
+    uint32_t h = obj ? MEM32(obj + 0x30) : 0;
+    g_mw_calls++;
+    if (h) { g_mw_laststate = MEM32(h + 0x40);
+             if (g_mw_laststate == 6) g_mw_st6++; }
+    sub_00176C80_gen();
+    if (obj && MEM32(obj + 8) == 3) g_mw_set3++;
+}
 ESP_PROBE(sub_001B37F0)
 ESP_PROBE(sub_001C4069)   /* D3DX context Release (vtbl slot 2) */
 ESP_PROBE(sub_00069C70)   /* boot-screen D3DX teardown (RestoreState+Release) */
-ESP_PROBE(sub_000566D0)   /* boot-screen glyph frame fn (tail-chains 69C70) */
+/* [S66D0] temporary: log the incoming selector. arg 0 = reset (zeroes the
+ * frame counter and re-arms the screen), non-zero = advance one frame. */
+void sub_000566D0_gen(void);
+void sub_000566D0(void) {
+    uint32_t ei = esp;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    uint32_t arg = MEM32(esp + 4);
+    static int s_n = 0; static unsigned s_zero = 0, s_nz = 0;
+    if (arg) s_nz++; else s_zero++;
+    if (s_n < 40) { s_n++;
+        fprintf(stderr, "[S66D0] arg=%u ctr=%u active=%u zero=%u nz=%u\n",
+                arg, MEM32(0x491AFC), MEM8(0x305B70), s_zero, s_nz);
+        fflush(stderr); }
+    sub_000566D0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+    (void)ei;
+}
 ESP_PROBE(sub_00069B60)   /* boot-screen D3DX ensure-created */
 ESP_PROBE(sub_00069BD0)   /* boot-screen draw dispatcher */
 
@@ -3127,6 +4209,50 @@ void sub_001B4B30(void)
     eax = 0;
     esp += 24;   /* fake-ret slot + ret 20 */
 }
+/* NOT ENABLED YET -- enabling these two alone hangs the boot.
+ *
+ * They do remove the 0xC0 drift they were measured against (esp at 0x001B98F6
+ * goes from 0x00EFFC6C to the expected 0x00EFFD2C), but the frame local is
+ * still not the device there: at 0x001B981D the hardware reads it from
+ * [esp+8], which puts the correct esp at 0x00EFFDC4, and we sit at 0x00EFFD28
+ * -- 0x9C low from somewhere EARLIER in the same function. With the tail
+ * corrected and the head still drifted, the fence spin at 0x001B98B8 reads a
+ * notifier out of a wrong pointer and never exits, so boot stops before the
+ * movie. The earlier drift has to be found first; then enable both.
+ *
+ * ESP_FIX(sub_001B8EE0, 0)   no stack args; ret 0    (measured -8,   want +4)
+ * ESP_FIX(sub_001B9130, 4)   one stack arg; ret 4    (measured -172, want +8) */
+/* D3DDevice_CreateDevice tail: five split callees leak the guest stack, and
+ * that is what left the device without a render target.
+ *
+ * CreateDevice ends in the fragment at 0x001B9537, which reads the device out
+ * of its own frame and hands the implicit back buffer (device + 0x2150) to
+ * SetRenderTarget. Measured across that tail, esp ran 0x15C bytes low, so the
+ * frame local read 0xEFFF00DE instead of the device and SetRenderTarget stored
+ * 0xEFFF222E as the current colour surface. SetViewport clamps every viewport
+ * against that surface, so the game asking for 720x480 left the device
+ * recording width 0; D3D_UpdateProjectionViewportTransform then built an
+ * all-zero projection-viewport matrix, the composite matrix streamed to the
+ * GPU arrived as 16 zero dwords, and every transformed vertex collapsed onto
+ * the viewport centre. That is the black post-movie screen.
+ *
+ * Each of these is a function the detector split, so its pushes are popped in
+ * a successor fragment that the taken path never reaches. Measured deltas
+ * (want = 4 for the dummy return slot + the callee-popped argument bytes):
+ *
+ *   sub_001BB770   want +4    measured -56
+ *   sub_001BB256   want +8    (ret 4,   in the -0x60 run before 0x001B981D)
+ *   sub_001BB66A   want +16   (ret 0xC, same run; its ret is past its end)
+ *   sub_001B8EE0   want +4    measured -8
+ *   sub_001B9130   want +8    measured -172
+ *
+ * The ret sizes are fixed properties of each function, so enforcing them is
+ * correct at every call site, not just this one. */
+/* DISABLED: ESP_FIX(sub_001BB770, 0) -- see note above */
+/* DISABLED: ESP_FIX(sub_001BB256, 4) -- see note above */
+/* DISABLED: ESP_FIX(sub_001BB66A, 0xC) -- see note above */
+/* DISABLED: ESP_FIX(sub_001B8EE0, 0) -- see note above */
+/* DISABLED: ESP_FIX(sub_001B9130, 4) -- see note above */
 ESP_FIX(sub_001BEA38, 4)   /* D3DDevice_ApplyStateBlock(handle), ret 4 */
 ESP_FIX(sub_001BEBC0, 4)   /* D3DDevice_CaptureStateBlock(handle), ret 4 */
 ESP_FIX(sub_001C35C0, 8)   /* D3DX context factory (dev, out), ret 8 */
@@ -3389,11 +4515,19 @@ void sub_001B88C0(void)
                 g_pb_parsed = cursor;
             }
         }
-        /* notifier may live in the cached RAM mirror (0x80000000) — that's a valid
-         * RAM alias (mapped on demand by the VEH), so allow the whole RAM range. */
+        /* Publish the write cursor as both PUT and GET.
+         *
+         * The notifier is normally in RAM or its cached mirror, but on the
+         * retail path device+0x2304 points at the FIFO channel window in the
+         * GPU aperture (0xFD800000): +0x40 is DMA_PUT and +0x44 is DMA_GET, and
+         * D3DDevice_CreateDevice spins at 0x001B98B8 until GET matches the
+         * cursor. The old guard stopped at 0xF0000000, so on that path neither
+         * register was ever written and the spin could not exit -- the whole
+         * device setup, including the initial SetRenderTarget, sat behind it.
+         * Writes into the aperture go through the VEH to the NV2A USER block. */
         if (notifier && notifier < 0xF0000000u) {
-            MEM32(notifier + 0x40) = cursor;         /* PUT (as the gen does) */
-            MEM32(notifier + 0x44) = cursor;         /* GPU ack == PUT -> fence satisfied */
+            MEM32(notifier + 0x40) = cursor;         /* DMA_PUT (as the gen does) */
+            MEM32(notifier + 0x44) = cursor;         /* DMA_GET == PUT -> drained */
         }
         /* GPU-side fence counter: [dev+0x3F0] points at the value the fence
          * spin (sub_001B8A10) polls; snap it to the CPU counter [dev+0x1C]. */
@@ -3858,6 +4992,7 @@ void doa3_pump_cri_servers(void)
     extern void sub_00170660(void);
     static int s_inpump = 0;
     if (s_inpump) return;                     /* no recursive pumping */
+
     if (MEM32(0xB24D38) != 0 || MEM32(0xC0E384) != 0) return;  /* lock held / in server */
     {   /* EOS detector (task #2 end-half): when the movie is PLAYING but no
          * new frame has blitted for ~6s (stream exhausted; the port's
@@ -3901,10 +5036,104 @@ void doa3_pump_cri_servers(void)
             fflush(stderr);
         }
     }
+    {   /* [LDT] the post-movie load: sub_0007FFDD polls op+1 for status 3.
+     * The periodic dump only samples every 600 frames, so log every
+     * change of the phase and of the op status instead. */
+    static uint32_t s_ph = 0xFFFFFFFFu, s_op = 0xFFFFFFFFu; static int s_st = -99, s_n = 0;
+    uint32_t ph = MEM32(0x4A1004);
+    uint32_t op = (ph < 8) ? MEM32(ph * 4 + 0x4A10A8) : 0;
+    int st = op ? (int)(int8_t)MEM8(op + 1) : -1;
+    if ((ph != s_ph || op != s_op || st != s_st) && s_n < 60) {
+        s_n++; s_ph = ph; s_op = op; s_st = st;
+        fprintf(stderr, "[LDT] phase=%u op=0x%08X st=%d", ph, op, st);
+        if (op >= 0x1000u && op < 0x08000000u) {
+            int _k; char nm[40] = {0};
+            for (_k = 0; _k < 10; _k++)
+                fprintf(stderr, " %08X", MEM32(op + _k * 4));
+            /* any dword that looks like a guest pointer may be the name */
+            for (_k = 0; _k < 10; _k++) {
+                uint32_t v = MEM32(op + _k * 4);
+                if (v >= 0x10000u && v < 0x08000000u) {
+                    int c; int ok = 1;
+                    for (c = 0; c < 12; c++) {
+                        uint8_t ch = MEM8(v + c);
+                        if (ch == 0) break;
+                        if (ch < 0x20 || ch > 0x7E) { ok = 0; break; }
+                    }
+                    if (ok && c >= 3) {
+                        for (c = 0; c < 39; c++) { nm[c] = (char)MEM8(v + c); if (!nm[c]) break; }
+                        fprintf(stderr, "  [%d]->'%s'", _k, nm);
+                    }
+                }
+            }
+        }
+        fprintf(stderr, "\n");
+        fflush(stderr);
+    }
+}
     {   /* item 103b: apply releases that were deferred because their slot
          * was still decoding (see the slot-lifecycle guards). */
         extern void doa3_drain_deferred_releases(void);
         doa3_drain_deferred_releases();
+    }
+    {   /* log every sfd-handle / movie-object state transition: the handle
+         * must reach 6 (PLAYEND) for the movie object to report 3 and
+         * release the intro sequencer. */
+        static uint32_t s_p40 = 0xFFFFFFFFu, s_p44 = 0xFFFFFFFFu, s_pst8 = 0xFFFFFFFFu;
+        uint32_t h40 = MEM32(0xC0F7C0u + 0x40), h44 = MEM32(0xC0F7C0u + 0x44);
+        uint32_t mo = MEM32(0x5E5900u);
+        uint32_t st8 = (mo >= 0x1000 && mo < 0x8000000u) ? MEM32(mo + 8) : 0xFFFFFFFFu;
+        if (h40 != s_p40 || h44 != s_p44 || st8 != s_pst8) {
+            static int s_t = 0;
+            if (s_t < 200) {
+                s_t++;
+                fprintf(stderr, "[SFDST] h40 %d->%d h44 %d->%d objst8 %d->%d intro=%u\n",
+                        (int)s_p40, (int)h40, (int)s_p44, (int)h44,
+                        (int)s_pst8, (int)st8, MEM8(0x4B83B0));
+                fflush(stderr);
+            }
+            s_p40 = h40; s_p44 = h44; s_pst8 = st8;
+        }
+    }
+    {   /* once the intro sequencer has finished (state 3), let the next
+         * screen settle and dump the presented frame for inspection */
+        /* Capture is driven from the pgraph draw counter now (see
+         * nv2a_pgraph_d3d11.c): this hook lives in the movie repaint pump,
+         * which stops once playback ends, and it fired the instant
+         * doa3_movie_present_finish() had blanked every swap-chain buffer --
+         * so it could only ever record a black frame. */
+    }
+    {   static unsigned s_vs = 0;
+        if ((++s_vs % 60) == 0 && MEM32(0xC0F7C0u + 0x40) == 4) {
+        {   /* video ES joint + picture index + frame slots: says whether
+             * the decoder is starved of ES or blocked holding slots */
+            uint32_t vsj = 0xC09770u, ix = 0xC108BCu, h = 0xC0F7C0u;
+            fprintf(stderr, "[VSTALL] es{c=%X w=%X} ix{t=%X cnt=%d wr=%d rd=%d} "
+                "slots=%d[%d%d%d%d%d%d%d] st40=%d clk=%d\n",
+                MEM32(vsj + 0xC), MEM32(vsj + 0x10),
+                MEM32(ix), (int)MEM32(ix + 8), (int)MEM32(ix + 0xC), (int)MEM32(ix + 0x10),
+                (int)MEM32(h + 0x3668),
+                (int)MEM32(h + 0x366C), (int)MEM32(h + 0x366C + 0x50),
+                (int)MEM32(h + 0x366C + 0xA0), (int)MEM32(h + 0x366C + 0xF0),
+                (int)MEM32(h + 0x366C + 0x140), (int)MEM32(h + 0x366C + 0x190),
+                (int)MEM32(h + 0x366C + 0x1E0),
+                (int)MEM32(h + 0x40), (int)MEM32(h + 0xCCC));
+            /* end-of-stream inputs: sub_00179070 marks the video stream
+             * ended when inEnd==1 and (p0F==0 || sub_0017E880 != 0), and
+             * sub_0017E880 compares servedPTS/scale against clock/scale. */
+            fprintf(stderr, "[VEOS2] ended6=%X inEnd=%X p0F=%X spts=%d sscale=%d clk=%d cscale=%d f940=%X 9A8=%X 9AC=%X | tcH=%X tcM=%X tcS=%X picPTS=%X picScale=%X\n",
+                MEM32(h + 6u * 0x610u + 0x2978u),
+                MEM32(h + 1u * 0x388u + 0xD70u),
+                MEM32(h + 0x994u + 0x0Fu * 4u),
+                (int)MEM32(h + 0xCC4), (int)MEM32(h + 0xCC8),
+                (int)MEM32(h + 0xCCC), (int)MEM32(h + 0xCD0),
+                MEM32(h + 0x940), MEM32(h + 0x9A8), MEM32(h + 0x9AC),
+                /* running timecode accumulator at h+0xAD8 and the last
+                 * picture timestamp sub_0017A400 produced at h+0xB44 */
+                MEM32(h + 0xAE0), MEM32(h + 0xAE4), MEM32(h + 0xAE8),
+                MEM32(h + 0xB44), MEM32(h + 0xB48));
+        }
+        }
     }
     {   /* item 102: movie-ingest stall forensics. In stalled user runs the
          * ninja.sfd stream joint (0xC09890) sticks at w=0x12000 with the
@@ -3984,9 +5213,57 @@ void doa3_pump_cri_servers(void)
         /* keep the last movie frame on screen (~30Hz repaint; see
          * movie_present.c — nothing else presents during/after a movie) */
         {
+            /* Only while the movie is actually playing: once the handle leaves
+             * state 4 the game owns the screen again, and repainting the last
+             * movie frame would paint straight over it. */
             static unsigned s_rpn = 0;
+            static int s_was_playing = 0;
             extern void doa3_movie_repaint(void);
-            if ((++s_rpn & 1) == 0) doa3_movie_repaint();
+            extern void doa3_movie_present_finish(void);
+            extern unsigned g_mw_calls, g_mw_st6, g_mw_set3, g_mw_laststate;
+    extern unsigned g_e1f0_calls, g_e1f0_nz;
+    extern unsigned g_st_calls; extern int g_st_lastret, g_st_lastst8;
+    extern uint32_t g_st_lastobj;
+    {   /* Title-screen arming chain, sampled only AFTER the movie ends
+         * (SFD object state 6). The post-FMV title screen is armed when
+         * sub_000CE7D0 takes case 10 of its jump table, which needs the screen
+         * state byte 0x8612AD non-zero; that byte is written only by
+         * sub_000C4D00, reached by sub_000C5D70 only when a player slot flag
+         * is set. Case 10 is what sets 0x47E74C = 2, which sub_00083A90
+         * waits on before showing the title screen. */
+        static unsigned s_tn = 0, s_tick = 0; static int s_post = 0;
+        /* Latch once the movie handle reports end-of-stream: it only
+         * passes through state 6 briefly before the handle is released,
+         * so gating each sample on it would report a single line. */
+        if (MEM32(0xC0F7C0u + 0x40) == 6) s_post = 1;
+        if (s_post && ((s_tick++ & 0xFFFu) == 0) && s_tn < 24) {
+            s_tn++;
+            fprintf(stderr, "[TITLE] slots=%u/%u/%u/%u state8612AD=%u arm47E74C=%u btn=%08X obj8610E0=%08X scr47E74C=%u mode480B70=%u f47ADB8=%u agg5E5ED8=%08X introSt=%u mvStatus=%d mvObj=%08X vtbl=%08X statusFn=%08X mwcalls=%u mwst6=%u mwset3=%u mwlast=%u objSt8=%d e1f0=%u/%u st(calls=%u obj=%08X st8=%d ret=%d)\n",
+                    MEM8(0x8610E0 + 0x23 + 0 * 0x38),
+                    MEM8(0x8610E0 + 0x23 + 1 * 0x38),
+                    MEM8(0x8610E0 + 0x23 + 2 * 0x38),
+                    MEM8(0x8610E0 + 0x23 + 3 * 0x38),
+                    MEM8(0x8612AD), MEM32(0x47E74C),
+                    MEM32(0x86132A), MEM32(0x8610E0), MEM8(0x47E74C),
+                    MEM8(0x480B70), MEM8(0x47ADB8), MEM32(0x5E5ED8),
+                    MEM8(0x4B83B0), (int)MEM32(0x5E5970), MEM32(0x5E5900),
+                    MEM32(MEM32(0x5E5900)),
+                    MEM32(MEM32(MEM32(0x5E5900)) + 0x20),
+                    g_mw_calls, g_mw_st6, g_mw_set3, g_mw_laststate,
+                    (int)MEM32(MEM32(0x5E5900) + 8), g_e1f0_calls, g_e1f0_nz,
+                    g_st_calls, g_st_lastobj, g_st_lastst8, g_st_lastret);
+            fflush(stderr);
+        }
+    }
+    if (MEM32(0xC0F7C0u + 0x40) == 4) {
+                s_was_playing = 1;
+                if ((++s_rpn & 1) == 0) doa3_movie_repaint();
+            } else if (s_was_playing) {
+                /* movie just ended: blank the chain so its last frames stop
+                 * flipping on screen, and hand the display to the game */
+                s_was_playing = 0;
+                doa3_movie_present_finish();
+            }
         }
     }
     s_inpump = 0;
@@ -4282,6 +5559,34 @@ void sub_001B8970(void)
                     }
                 }
                 fprintf(stderr, "[WXREG]%s%s\n", n ? "" : " empty", line);
+                /* Walk the z: slot list in full: the count at +0x24 says 1
+                 * but three files are scanned, so either only one node is
+                 * linked or the count is not being incremented. Dump the head
+                 * node raw so the link field can be identified. */
+                {   uint32_t b = 0xC057C0 + 0x30u * 2;   /* z:\ slot */
+                    uint32_t node = MEM32(b + 0x28);
+                    int hop;
+                    fprintf(stderr, "[WXZ] cnt=%d head=%08X",
+                            (int)MEM32(b + 0x24), node);
+                    if (node >= 0x10000 && node < 0x8000000u) {
+                        int k;
+                        fprintf(stderr, "  node[0..7]=");
+                        for (k = 0; k < 8; k++)
+                            fprintf(stderr, " %08X", MEM32(node + k * 4));
+                    }
+                    for (hop = 0; hop < 8 && node >= 0x10000 && node < 0x8000000u; hop++) {
+                        char fn[24] = {0};
+                        uint32_t np = MEM32(node + 0xC);
+                        if (np >= 0x10000 && np < 0x8000000u)
+                            for (int k = 0; k < 23; k++) { fn[k] = (char)MEM8(np + k); if (!fn[k]) break; }
+                        fprintf(stderr, "  [%d] node=%08X name='%s'", hop, node, fn);
+                        /* node: +0x04 file size, +0x08 next, +0x0C -> inline
+                         * name at +0x10. (+0x04 held 0x0D835000 = 226709504,
+                         * bgm.afs to the byte, which identified the layout.) */
+                        node = MEM32(node + 8);
+                    }
+                    fprintf(stderr, "\n");
+                }
             }
             /* DIAG: ADXM user-callback group 4 (the mwPly/Sofdec server tick;
              * dispatcher sub_001705E0 from sub_001778F0). Empty slots = the
@@ -4350,6 +5655,39 @@ void sub_001B8970(void)
             fflush(stderr);
         }
     }
+}
+
+/* PB space check (0x1B8DC0) — cdecl(device, dwords), ret 8, eax = cursor.
+ *
+ * The guest body only *validates*: it returns the cursor unless
+ * cursor + dwords*4 >= [dev+4] + 0x200, in which case it delegates the wrap
+ * to sub_001B8B00. The caller advances [dev] itself. In this port that
+ * delegation never wraps, so the cursor walked straight off the end of the
+ * push buffer: it climbed 0x800 per chunk to 0x03FFFF20 and then carried on
+ * into 0x04000720, 0x04001720, ... Once past the end the MMX vertex copier
+ * sub_001B3940 was writing through pointers that resolved into .data, and it
+ * overwrote the vtable pointers of the 175-object array at 0x370C48 that
+ * sub_000E8BB0 dispatches through -- objects whose vtables were verified
+ * intact at the first dispatch were later found holding vertex data
+ * (0xFF080C22 and friends: ARGB colours), and calling [vtbl+4] then faulted.
+ *
+ * Apply the same clamp sub_001B8DA0 already uses, which is what keeps the
+ * write cursor inside our RAM push buffer; the translator resyncs on wrap
+ * via g_pb_parsed. */
+void sub_001B8DC0(void)
+{
+    uint32_t dev    = MEM32(esp + 4);
+    uint32_t dwords = MEM32(esp + 8);
+    uint32_t cursor = MEM32(dev);
+    if (g_doa3_pb_base &&
+        (cursor < g_doa3_pb_base ||
+         cursor + dwords * 4 + 0x1000 >= g_doa3_pb_end)) {
+        cursor = g_doa3_pb_base;                     /* wrap before the end */
+        MEM32(dev + 0x00) = cursor;
+        MEM32(dev + 0x04) = g_doa3_pb_end;
+    }
+    eax = cursor;
+    esp += 12;  /* ret 8 */
 }
 
 /* XMETAL_StartPush (0x1B8DA0) — burnout PB begin/alloc analogue. cdecl, 1 stack
@@ -4503,9 +5841,48 @@ void sub_001664D6(void)
  * Called by the RECOMP_ICALL macros when an indirect-call target resolves to
  * neither a generated function, a manual override, nor a kernel thunk. */
 static uint64_t g_icall_fail_logged = 0;
+
+/* Census of DISTINCT unresolved indirect-call targets.
+ *
+ * The line-by-line report below is capped at 200 lines, which the boot
+ * phase exhausts long before the game reaches its screens -- so a target
+ * that only ever fails later (the way sub_000318D0 did, right before a
+ * null-pointer crash) never showed up. Track every distinct target with
+ * a hit count instead, and dump the table on demand. */
+#define ICALL_CENSUS_MAX 256
+static struct { uint32_t va; uint32_t hits; } g_icall_census[ICALL_CENSUS_MAX];
+static int g_icall_census_n;
+static int g_icall_census_overflow;
+
+void recomp_icall_census_dump(void)
+{
+    int i;
+    fprintf(stderr, "[ICALL-CENSUS] %d distinct unresolved targets%s:\n",
+            g_icall_census_n, g_icall_census_overflow ? " (TABLE FULL)" : "");
+    for (i = 0; i < g_icall_census_n; i++)
+        fprintf(stderr, "    0x%08X  x%u\n",
+                g_icall_census[i].va, g_icall_census[i].hits);
+    fflush(stderr);
+}
+
 void recomp_icall_fail_log(uint32_t va)
 {
-    if (g_icall_fail_logged < 200) {
+    int new_target = 0;
+    {   int i;
+        for (i = 0; i < g_icall_census_n; i++)
+            if (g_icall_census[i].va == va) { g_icall_census[i].hits++; break; }
+        if (i == g_icall_census_n) {
+            if (g_icall_census_n < ICALL_CENSUS_MAX) {
+                new_target = 1;
+                g_icall_census[g_icall_census_n].va = va;
+                g_icall_census[g_icall_census_n].hits = 1;
+                g_icall_census_n++;
+            } else {
+                g_icall_census_overflow = 1;
+            }
+        }
+    }
+    if (g_icall_fail_logged < 200 || new_target) {
         fprintf(stderr, "[ICALL] unresolved target 0x%08X trace:", va);
         for (int k = 1; k <= 8; k++)
             fprintf(stderr, " %X",

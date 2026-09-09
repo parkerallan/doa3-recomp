@@ -18,6 +18,7 @@
 #include "d3d8_internal.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* ================================================================
  * Internal device state
@@ -89,6 +90,29 @@ static void up_ring_shutdown(void);
 /* ================================================================
  * Public frame pump (called from recompiled game code)
  * ================================================================ */
+/* DOA3 DIAG: report the render target and viewport a draw would land in.
+ * The intro movie is presented by movie_present.c, which binds its own
+ * RTV/viewport and never restores this layer's, so post-movie geometry
+ * can be valid yet rasterise nowhere. */
+void d3d8_DebugDumpTargetState(void)
+{
+    ID3D11RenderTargetView *rtv = NULL, *own = g_device_state.default_rtv;
+    ID3D11DepthStencilView *dsv = NULL;
+    D3D11_VIEWPORT vp[8];
+    UINT nvp = 8;
+    if (!g_device_state.d3d11_context) {
+        fprintf(stderr, "[RTSTATE] no context\n"); fflush(stderr); return;
+    }
+    ID3D11DeviceContext_OMGetRenderTargets(g_device_state.d3d11_context, 1, &rtv, &dsv);
+    ID3D11DeviceContext_RSGetViewports(g_device_state.d3d11_context, &nvp, vp);
+    fprintf(stderr, "[RTSTATE] bound_rtv=%p layer_rtv=%p dsv=%p nvp=%u vp0=(%.0f,%.0f %.0fx%.0f)\n",
+            (void *)rtv, (void *)own, (void *)dsv, nvp,
+            nvp ? vp[0].TopLeftX : -1.0f, nvp ? vp[0].TopLeftY : -1.0f,
+            nvp ? vp[0].Width : -1.0f, nvp ? vp[0].Height : -1.0f);
+    fflush(stderr);
+    if (rtv) ID3D11RenderTargetView_Release(rtv);
+    if (dsv) ID3D11DepthStencilView_Release(dsv);
+}
 void d3d8_PresentFrame(void)
 {
     /* Pump Windows messages */
@@ -149,8 +173,28 @@ void d3d8_DumpBackbufferBMP(const char *path)
             *(uint16_t *)(hdr+28) = 32;
             *(uint32_t *)(hdr+34) = img;
             fwrite(hdr, 1, 54, f);
-            for (uint32_t y = 0; y < h; y++)
-                fwrite((const uint8_t *)map.pData + y * map.RowPitch, 1, w * 4, f);
+            /* The swap chain is DXGI_FORMAT_R8G8B8A8_UNORM (memory order
+             * R,G,B,A) but a 32-bit BMP stores B,G,R,A. Writing the rows
+             * verbatim swapped red and blue, so every captured frame read
+             * back in the wrong colour -- the FMV end card looked blue in
+             * the dumps while the window itself showed it red. Swap the
+             * two channels on the way out. */
+            {
+                uint8_t *row = (uint8_t *)malloc((size_t)w * 4);
+                if (row) {
+                    for (uint32_t y = 0; y < h; y++) {
+                        const uint8_t *src = (const uint8_t *)map.pData + y * map.RowPitch;
+                        for (uint32_t x = 0; x < w; x++) {
+                            row[x * 4 + 0] = src[x * 4 + 2];   /* B <- R */
+                            row[x * 4 + 1] = src[x * 4 + 1];   /* G */
+                            row[x * 4 + 2] = src[x * 4 + 0];   /* R <- B */
+                            row[x * 4 + 3] = src[x * 4 + 3];
+                        }
+                        fwrite(row, 1, (size_t)w * 4, f);
+                    }
+                    free(row);
+                }
+            }
             fclose(f);
             fprintf(stderr, "[SNAP] wrote %s (%ux%u)\n", path, w, h);
             fflush(stderr);
@@ -448,6 +492,39 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
         g_d3d_settransform_count = g_d3d_setrs_count = 0;
         g_d3d_settexture_count = 0;
         last_tick = now;
+    }
+
+    /* DOA3 DIAG: dump what is actually presented once the intro movie hands
+     * the screen back, on a wall clock -- the draw-count triggers in the
+     * pgraph translator fire during the movie and never again, so the
+     * post-FMV screen was never captured. Buffer 0 is read before Present,
+     * so this is the frame the user sees. Opt in with DOA3_PMSHOTS=1. */
+    {
+        extern volatile int g_doa3_post_movie;
+        void d3d8_DumpBackbufferBMP(const char *path);
+        static int s_on = -1, s_n = 0;
+        static DWORD s_next = 0;
+        if (s_on < 0) s_on = getenv("DOA3_PMSHOTS") ? 1 : 0;
+        if (s_on && g_doa3_post_movie && s_n < 40) {
+            DWORD now = GetTickCount();
+            if (!s_next) s_next = now;
+            if (now >= s_next) {
+                char p[64];
+                sprintf(p, "pm%02d.bmp", s_n++);
+                s_next = now + 5000;
+                d3d8_DebugDumpTargetState();   /* is the backbuffer even bound? */
+                {   /* method profile of the post-FMV screen: the [FRAME] dump
+                     * that used to carry this only fires every 600 frames and
+                     * the post-movie loop runs at under one. */
+                    void pgraph_diag_dump_ignored(void);
+                    pgraph_diag_dump_ignored();
+                }
+                d3d8_DumpBackbufferBMP(p);
+                fprintf(stderr, "[PMSHOT] wrote %s (draws since last shot: %u)\n",
+                        p, g_d3d_draw_count);
+                fflush(stderr);
+            }
+        }
     }
 
     /* Pump Windows messages: the game's internal main loop drives rendering,

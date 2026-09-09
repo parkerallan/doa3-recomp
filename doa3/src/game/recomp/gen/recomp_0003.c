@@ -4610,7 +4610,7 @@ loc_0008D107: ;
 
 loc_0008D10C: ;
     SET_LO8(eax, MEM8(edi + 0x4BA7B0));
-    if (CMP_LE(LO8(eax) & LO8(eax), 0)) { g_seh_ebp = ebp; sub_0008D15F(); return; } /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO8(eax), LO8(eax)) || TEST_Z(LO8(eax), LO8(eax)))) { g_seh_ebp = ebp; sub_0008D15F(); return; } /* jle: less or equal (signed <=) */
 
 loc_0008D116: ;
     if (CMP_NE(MEM16(edi * 2 + 0x4BB848), 0)) goto loc_0008D12B; /* jne: not equal / not zero */
@@ -5483,7 +5483,7 @@ loc_0008D89F: ;
 
 loc_0008D8AC: ;
     SET_LO8(eax, MEM8(edi + 0x4BA7B0));
-    if (CMP_G(LO8(eax) & LO8(eax), 0)) goto loc_0008DA55; /* jg: greater (signed >) */
+    if ((!TEST_S(LO8(eax), LO8(eax)) && !TEST_Z(LO8(eax), LO8(eax)))) goto loc_0008DA55; /* jg: greater (signed >) */
 
 loc_0008D8BA: ;
     PUSH32(esp, ebp);
@@ -15708,7 +15708,7 @@ loc_00092A00: ;
     PUSH32(esp, edi);
     edi = MEM32(esp + 0x14);
     esi = esi + 0x484C48;
-    if (CMP_LE(LO16(edi) & LO16(edi), 0)) { g_seh_ebp = ebp; sub_00092A24(); return; } /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO16(edi), LO16(edi)) || TEST_Z(LO16(edi), LO16(edi)))) { g_seh_ebp = ebp; sub_00092A24(); return; } /* jle: less or equal (signed <=) */
 
 loc_00092A1B: ;
     if (CMP_G(LO16(edi), 5)) { g_seh_ebp = ebp; sub_00092A24(); return; } /* jg: greater (signed >) */
@@ -15830,7 +15830,7 @@ loc_00092AA0: ;
     PUSH32(esp, edi);
     edi = MEM32(esp + 0x14);
     esi = esi + 0x484C48;
-    if (CMP_LE(LO16(edi) & LO16(edi), 0)) { g_seh_ebp = ebp; sub_00092AC4(); return; } /* jle: less or equal (signed <=) */
+    if ((TEST_S(LO16(edi), LO16(edi)) || TEST_Z(LO16(edi), LO16(edi)))) { g_seh_ebp = ebp; sub_00092AC4(); return; } /* jle: less or equal (signed <=) */
 
 loc_00092ABB: ;
     if (CMP_G(LO16(edi), 5)) { g_seh_ebp = ebp; sub_00092AC4(); return; } /* jg: greater (signed >) */
@@ -40819,7 +40819,7 @@ loc_0009E41E: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0009E422(void)
+void sub_0009E422_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -42178,7 +42178,7 @@ loc_0009EB7A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0009EB90(void)
+void sub_0009EB90_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
