@@ -617,32 +617,55 @@ static void nv_transform_clip(const float in[4], OutputVertex *v,
     int i;
 
     if (apply_composite) {
-        /* row-vector convention: c = in * M */
+        /* NV2A convention: SET_COMPOSITE_MATRIX row i holds the coefficients
+         * of output component i (the D3D runtime uploads the row-vector
+         * matrix transposed), so c[i] = dot(in, row i). DOA3's row 3 is the
+         * camera forward axis plus distance -- w = view-space z -- which
+         * only reads correctly this way round; dotting the columns instead
+         * put the 2^24 z-scale into w and collapsed every draw to a point. */
         for (i = 0; i < 4; i++)
-            c[i] = in[0] * g_pg.composite[0 * 4 + i] +
-                   in[1] * g_pg.composite[1 * 4 + i] +
-                   in[2] * g_pg.composite[2 * 4 + i] +
-                   in[3] * g_pg.composite[3 * 4 + i];
+            c[i] = in[0] * g_pg.composite[i * 4 + 0] +
+                   in[1] * g_pg.composite[i * 4 + 1] +
+                   in[2] * g_pg.composite[i * 4 + 2] +
+                   in[3] * g_pg.composite[i * 4 + 3];
     } else {
         c[0] = in[0]; c[1] = in[1]; c[2] = in[2]; c[3] = in[3];
     }
 
+    {   /* DOA3 DIAG: DOA3_FLIPW=1 negates the homogeneous position (same
+         * screen point, opposite w) to test which side the composite's w
+         * row puts the intended scene on. */
+        static int s_flip = -1;
+        if (s_flip < 0) { const char *e = getenv("DOA3_FLIPW"); s_flip = (e && *e == '1'); }
+        if (s_flip && apply_composite) { c[0] = -c[0]; c[1] = -c[1]; c[2] = -c[2]; c[3] = -c[3]; }
+    }
     w = c[3];
     inv = (w != 0.0f) ? (1.0f / w) : 1.0f;
 
-    /* Fall back to a full-surface viewport when the game has not set one;
-     * a zero scale would collapse every vertex onto a point. */
     sx = g_pg.vp_scale[0]; sy = g_pg.vp_scale[1]; sz = g_pg.vp_scale[2];
     ox = g_pg.vp_offset[0]; oy = g_pg.vp_offset[1]; oz = g_pg.vp_offset[2];
     if (sx == 0.0f && sy == 0.0f) {
-        sx = 320.0f;  ox = 320.0f;
-        sy = -240.0f; oy = 240.0f;
-        sz = 1.0f;    oz = 0.0f;
+        /* No viewport programmed: treat the output as NDC over the full
+         * surface, as before. */
+        v->x   = c[0] * inv * 320.0f + 320.0f;
+        v->y   = c[1] * inv * -240.0f + 240.0f;
+        v->z   = c[2] * inv;
+        v->rhw = inv;
+        return;
     }
 
-    v->x   = c[0] * inv * sx + ox;
-    v->y   = c[1] * inv * sy + oy;
-    v->z   = c[2] * inv * sz + oz;
+    /* The Xbox D3D runtime folds the viewport (w/2, -h/2, x0+w/2, y0+h/2,
+     * and the 2^24-1 z range) into the composite matrix itself -- DOA3's
+     * [MATMUL] shows proj x viewport being multiplied before upload -- so the
+     * transform output divided by w is already the screen position. The
+     * SET_VIEWPORT_SCALE/OFFSET registers describe that mapping for the
+     * hardware's clipper; applying them again scaled everything by another
+     * 360x. Only z still needs normalising from the viewport z range to
+     * D3D's [0,1]. */
+    (void)ox; (void)oy; (void)oz; (void)sx; (void)sy;
+    v->x   = c[0] * inv;
+    v->y   = c[1] * inv;
+    v->z   = (sz != 0.0f) ? (c[2] * inv) / sz : c[2] * inv;
     v->rhw = inv;
 }
 
@@ -783,8 +806,14 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
     for (_i = 0; _i < out_vert_count; _i++)
         if (out[_i].color != 0) { diffuse_all_zero = 0; break; }
 
-    /* Set up 2D render state — always enable alpha for menu transparency */
-    dev->lpVtbl->SetRenderState(dev, D3DRS_ZENABLE, FALSE);
+    /* Alpha blending stays on for the 2D menu path. Depth follows the
+     * guest: DOA3's 3D screens draw with SET_DEPTH_TEST_ENABLE and rely on
+     * the z-buffer for ordering -- with the test forced off, whatever the
+     * camera-facing stage wall drawn last covered the characters and the
+     * frame went black seconds after the title appeared. The XYZRHW z is the
+     * transformed z/w in [0,1], so the compat layer's depth buffer works. */
+    dev->lpVtbl->SetRenderState(dev, D3DRS_ZENABLE, g_pg.depth_test ? TRUE : FALSE);
+    dev->lpVtbl->SetRenderState(dev, D3DRS_ZWRITEENABLE, g_pg.depth_test ? TRUE : FALSE);
     dev->lpVtbl->SetRenderState(dev, D3DRS_LIGHTING, FALSE);
     dev->lpVtbl->SetRenderState(dev, D3DRS_CULLMODE, D3DCULL_NONE);
     dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHABLENDENABLE, TRUE);
@@ -904,9 +933,136 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
 
 }
 
+
+/* Near-plane clipping for the fixed-function array path.
+ *
+ * The NV2A clips in clip space before the divide; the D3D8 layer only takes
+ * pre-transformed XYZRHW, which cannot represent a vertex behind the eye
+ * (w <= 0): its screen position is mirrored and a triangle straddling the
+ * near plane sweeps across the frame. DOA3's title/attract camera sits inside
+ * the stage, so most batches straddle. Rebuild each triangle in clip space
+ * from the XYZRHW output (W = 1/rhw, X = x*W, ...), clip it against the D3D
+ * near plane Zc >= 0 (Sutherland-Hodgman, attributes interpolated in clip
+ * space where they are linear), and re-project the pieces. Batches that lie
+ * entirely in front are drawn untouched. */
+typedef struct { float X, Y, Z, W; float r, g, b, a; float u, v; } ClipVert;
+
+static void nv_clip_from_out(const OutputVertex *o, ClipVert *c)
+{
+    float W = (o->rhw != 0.0f) ? 1.0f / o->rhw : 1.0f;
+    c->X = o->x * W; c->Y = o->y * W; c->Z = o->z * W; c->W = W;
+    c->a = (float)((o->color >> 24) & 255); c->r = (float)((o->color >> 16) & 255);
+    c->g = (float)((o->color >> 8) & 255);  c->b = (float)(o->color & 255);
+    c->u = o->u; c->v = o->v;
+}
+
+static void nv_clip_to_out(const ClipVert *c, OutputVertex *o)
+{
+    float inv = (c->W != 0.0f) ? 1.0f / c->W : 1.0f;
+    int a = (int)(c->a + 0.5f), r = (int)(c->r + 0.5f), g = (int)(c->g + 0.5f), b = (int)(c->b + 0.5f);
+    o->x = c->X * inv; o->y = c->Y * inv; o->z = c->Z * inv; o->rhw = inv;
+    if (a < 0) a = 0; if (a > 255) a = 255; if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255; if (b < 0) b = 0; if (b > 255) b = 255;
+    o->color = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    o->u = c->u; o->v = c->v;
+}
+
+static void nv_clip_lerp(const ClipVert *a, const ClipVert *b, float t, ClipVert *o)
+{
+    const float *fa = (const float *)a, *fb = (const float *)b; float *fo = (float *)o;
+    int i;
+    for (i = 0; i < (int)(sizeof(ClipVert) / sizeof(float)); i++)
+        fo[i] = fa[i] + (fb[i] - fa[i]) * t;
+}
+
+/* Clip one triangle against Zc >= 0; writes up to 2 triangles (6 verts). */
+static int nv_clip_triangle(const ClipVert in[3], OutputVertex *dst)
+{
+    ClipVert poly[4]; int n = 0, i;
+    for (i = 0; i < 3; i++) {
+        const ClipVert *a = &in[i], *b = &in[(i + 1) % 3];
+        int ina = (a->Z >= 0.0f), inb = (b->Z >= 0.0f);
+        if (ina) poly[n++] = *a;
+        if (ina != inb) {
+            float t = a->Z / (a->Z - b->Z);
+            nv_clip_lerp(a, b, t, &poly[n++]);
+        }
+    }
+    if (n < 3) return 0;
+    nv_clip_to_out(&poly[0], &dst[0]); nv_clip_to_out(&poly[1], &dst[1]); nv_clip_to_out(&poly[2], &dst[2]);
+    if (n == 3) return 1;
+    dst[3] = dst[0]; dst[4] = dst[2]; nv_clip_to_out(&poly[3], &dst[5]);
+    return 2;
+}
+
+/* Does any vertex of the batch lie behind the near plane / eye? */
+static int nv_batch_needs_clip(const OutputVertex *out, uint32_t n)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        if (out[i].rhw <= 0.0f || out[i].z < 0.0f) return 1;
+    return 0;
+}
+
+/* Expand strip/fan/list into clipped triangle-list vertices. Returns the
+ * vertex count written to dst (capacity 6 per source triangle). */
+static uint32_t nv_clip_batch(const OutputVertex *out, uint32_t n, int prim, OutputVertex *dst)
+{
+    uint32_t tri, ntri, o = 0;
+    switch (prim) {
+    case D3DPT_TRIANGLELIST:  ntri = n / 3; break;
+    case D3DPT_TRIANGLESTRIP:
+    case D3DPT_TRIANGLEFAN:   ntri = (n >= 3) ? n - 2 : 0; break;
+    default: return 0;
+    }
+    for (tri = 0; tri < ntri; tri++) {
+        uint32_t i0, i1, i2; ClipVert cv[3];
+        if (prim == D3DPT_TRIANGLELIST)      { i0 = tri * 3; i1 = i0 + 1; i2 = i0 + 2; }
+        else if (prim == D3DPT_TRIANGLEFAN)  { i0 = 0; i1 = tri + 1; i2 = tri + 2; }
+        else { /* strip: keep winding consistent */
+            if (tri & 1) { i0 = tri + 1; i1 = tri; i2 = tri + 2; }
+            else         { i0 = tri; i1 = tri + 1; i2 = tri + 2; }
+        }
+        nv_clip_from_out(&out[i0], &cv[0]); nv_clip_from_out(&out[i1], &cv[1]); nv_clip_from_out(&out[i2], &cv[2]);
+        o += 3 * (uint32_t)nv_clip_triangle(cv, &dst[o]);
+    }
+    return o;
+}
+/* DOA3: follow the guest's colour surface. The Xbox D3D renders a 256x256
+ * reflection/shadow pass into a texture every frame, then switches back to
+ * one of its two frame buffers for the scene. The surface pitch
+ * (NV097_SET_SURFACE_PITCH, always programmed before the colour offset)
+ * identifies the target regardless of method order: the frame buffers are
+ * the widest surfaces the guest has ever drawn to (pitch 0xC00), the
+ * reflection texture is narrower (0x400). Anything narrower than the frame
+ * buffer gets an offscreen D3D11 target of its own size; the frame buffer
+ * width restores the swap chain. Keying this on the clip rectangle or on
+ * learning offsets both misclassified one of the two frame buffers at some
+ * point, which routed the scene offscreen and froze the picture. */
+static uint32_t g_pg_surf_coff, g_pg_surf_pitch;
+static void nv_sync_render_target(void)
+{
+    extern int  d3d8_SetOffscreenTarget(unsigned w, unsigned h);
+    extern void d3d8_RestoreDefaultTarget(void);
+    extern int  d3d8_OffscreenTargetActive(void);
+    /* Frame buffers are 720 px wide (pitch 0xC00); the reflection texture is
+     * 256. A learned "widest seen" bound was poisoned once by a wider
+     * surface and then classed the frame buffer itself as offscreen. */
+    unsigned pw = (g_pg_surf_pitch & 0xFFFF) / 4;
+    unsigned h  = (g_pg.surface_clip_v >> 16) & 0xFFFF;
+    if (pw < 16 || pw > 2048) return;             /* pitch not programmed yet */
+    if (pw >= 512) {
+        if (d3d8_OffscreenTargetActive()) d3d8_RestoreDefaultTarget();
+    } else {
+        if (h < 16 || h > 2048) h = pw;
+        d3d8_SetOffscreenTarget(pw, h);
+    }
+}
+
 /* Draw from the bound vertex arrays (the title-screen path). */
 static void submit_array_draw(void)
 {
+    nv_sync_render_target();
     IDirect3DDevice8 *dev;
     OutputVertex *out;
     uint32_t n = g_pg.idx_count, i, prim_count, out_n;
@@ -1017,6 +1173,30 @@ static void submit_array_draw(void)
 
     nv_apply_draw_state(dev, out, out_n);
 
+    if ((prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
+        nv_batch_needs_clip(out, out_n)) {
+        uint32_t ntri = (prim == D3DPT_TRIANGLELIST) ? out_n / 3 : out_n - 2;
+        OutputVertex *cl = (OutputVertex *)_alloca(ntri * 6 * sizeof(OutputVertex));
+        uint32_t cn = nv_clip_batch(out, out_n, prim, cl);
+        {   /* DOA3 DIAG: clip statistics, one line every ~2 s. */
+            static DWORD s_next = 0; static uint32_t s_b = 0, s_ti = 0, s_to = 0, s_empty = 0;
+            s_b++; s_ti += ntri; s_to += cn / 3; if (cn < 3) s_empty++;
+            if (GetTickCount() >= s_next) {
+                s_next = GetTickCount() + 2000;
+                fprintf(stderr, "[CLIP] batches=%u tris_in=%u tris_out=%u empty=%u | this: n=%u prim=%d -> %u verts v0=(%.1f %.1f %.3f %.4f) in0=(%.1f %.1f %.3f %.4f)\n",
+                        s_b, s_ti, s_to, s_empty, out_n, prim, cn,
+                        cn ? cl[0].x : 0.f, cn ? cl[0].y : 0.f, cn ? cl[0].z : 0.f, cn ? cl[0].rhw : 0.f,
+                        out[0].x, out[0].y, out[0].z, out[0].rhw);
+                fflush(stderr);
+                s_b = s_ti = s_to = s_empty = 0;
+            }
+        }
+        if (!getenv("DOA3_NOCLIP")) {
+            if (cn < 3) { g_pg.idx_count = 0; return; }
+            out = cl; out_n = cn; prim = D3DPT_TRIANGLELIST; prim_count = cn / 3;
+        }
+    }
+
     {   DWORD prev_vs = 0;
         HRESULT got = dev->lpVtbl->GetVertexShader(dev, &prev_vs);
         dev->lpVtbl->SetVertexShader(dev,
@@ -1036,6 +1216,7 @@ uint32_t g_dbail_lastic, g_dbail_lastst;
 
 static void submit_draw(void)
 {
+    nv_sync_render_target();
     /* Vertex-array draws take precedence: the game issues these with no
      * INLINE_ARRAY data at all, so the inline path below would see an
      * empty buffer and drop them. */
@@ -1563,12 +1744,19 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     case NV097_CLEAR_SURFACE:
     {
         IDirect3DDevice8 *dev = xbox_GetD3DDevice();
+        nv_sync_render_target();
         if (dev) {
             uint32_t flags = 0;
             if (param & 0xF0) flags |= 1;  /* D3DCLEAR_TARGET */
             if (param & 0x01) flags |= 2;  /* D3DCLEAR_ZBUFFER */
             if (param & 0x02) flags |= 4;  /* D3DCLEAR_STENCIL */
             dev->lpVtbl->Clear(dev, 0, NULL, flags, g_pg.clear_color, 1.0f, 0);
+            {   /* DOA3 DIAG: clear trace alongside [RTT] SETRT lines. */
+                extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
+                static int s_t = 0;
+                if (g_doa3_post_movie && s_t < 400) { s_t++;
+                    fprintf(stderr, "[RTT] p=%ld CLEAR flags=%X color=%08X draws=%u\n", (long)g_doa3_heartbeat, flags, g_pg.clear_color, g_pg.stats.draw_calls); fflush(stderr); }
+            }
         }
         g_pg.stats.clears++;
         return 1;
@@ -1672,6 +1860,24 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     case NV097_SET_SURFACE_CLIP_VERTICAL:
         g_pg.surface_clip_v = param;
         return 1;
+
+    /* DOA3 DIAG: colour surface offset/format/pitch (0x0210/0x0208/0x020C),
+     * traced with the [RTT] lines to see the per-frame render-target switch. */
+    case 0x0208: case 0x020C: case 0x0210:
+    {
+        extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
+        static uint32_t s_last[3]; static int s_t = 0;
+        int k = (method - 0x0208) / 4;
+        if (g_doa3_post_movie && s_last[k] != param && s_t < 300) { s_t++;
+            fprintf(stderr, "[RTT] p=%ld SURF %s=%08X clip=%08X/%08X draws=%u%c", (long)g_doa3_heartbeat,
+                    k == 0 ? "fmt" : k == 1 ? "pitch" : "coff", param,
+                    g_pg.surface_clip_h, g_pg.surface_clip_v, g_pg.stats.draw_calls, 10);
+            fflush(stderr); }
+        s_last[k] = param;
+        if (k == 1) g_pg_surf_pitch = param;
+        if (k == 2) g_pg_surf_coff = param;
+        return 1;
+    }
 
     /* ── Texture state tracking (4 stages, 0x40 stride) ── */
     case NV097_SET_TEXTURE_OFFSET:

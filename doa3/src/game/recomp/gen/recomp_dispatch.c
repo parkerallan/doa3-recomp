@@ -5505,6 +5505,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x000E54D0u, (recomp_func_t)sub_000E54D0 },
     { 0x000E54F0u, (recomp_func_t)sub_000E54F0 },
     { 0x000E5540u, (recomp_func_t)sub_000E5540 },
+    { 0x000E5590u, (recomp_func_t)sub_000E5590 },
     { 0x000E55E0u, (recomp_func_t)sub_000E55E0 },
     { 0x000E5640u, (recomp_func_t)sub_000E5640 },
     { 0x000E5691u, (recomp_func_t)sub_000E5691 },

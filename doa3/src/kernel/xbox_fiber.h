@@ -70,7 +70,8 @@ void xbox_fiber_dump_states(void);
 
 /* Create a dormant fiber that will run routine_va(param) when first switched to.
  * Returns the fiber index (>0) or -1. */
-int  xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param);
+int  xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param,
+                               uint32_t stack_size);
 
 /* Destroy a dormant fiber created by xbox_fiber_create_dormant. */
 void xbox_fiber_destroy(int idx);

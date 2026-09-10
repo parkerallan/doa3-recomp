@@ -472,6 +472,8 @@ static DWORD g_d3d_draw_count = 0;
 static DWORD g_d3d_settransform_count = 0;
 static DWORD g_d3d_setrs_count = 0;
 static DWORD g_d3d_settexture_count = 0;
+static DWORD g_d3d_draw_off = 0, g_d3d_clear_def = 0, g_d3d_clear_off = 0;   /* DOA3 DIAG: target split */
+static int g_off_active;
 
 static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, const RECT *dst, HWND hWnd, void *pDirty)
 {
@@ -491,6 +493,9 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
                 g_d3d_clear_count, g_d3d_draw_count,
                 g_d3d_settransform_count, g_d3d_setrs_count,
                 g_d3d_settexture_count);
+        fprintf(stderr, "  [TGT] draws_off=%lu clears_def=%lu clears_off=%lu off_active=%d\n",
+                (unsigned long)g_d3d_draw_off, (unsigned long)g_d3d_clear_def, (unsigned long)g_d3d_clear_off, g_off_active);
+        g_d3d_draw_off = g_d3d_clear_def = g_d3d_clear_off = 0;
         fprintf(stderr, "  [FLIP] guest=%u host=%u blocked=%u\n",
                 g_flip_guest, g_flip_host, g_flip_blocked);
         g_flip_guest = g_flip_host = g_flip_blocked = 0;
@@ -548,6 +553,18 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
         DispatchMessageA(&msg);
     }
 
+    /* While the intro movie is playing the host presenter owns the swap
+     * chain (movie_present.c). The game runs its own frame loop underneath
+     * and calls Present every frame; flipping its back buffer here shows a
+     * frame the movie never wrote, which is the flicker. Count it and drop
+     * it until the presenter hands the screen over. */
+    {
+        extern int doa3_movie_host_owns_screen(void);
+        if (doa3_movie_host_owns_screen()) {
+            g_flip_blocked++;
+            return S_OK;
+        }
+    }
     g_flip_guest++;
     return IDXGISwapChain_Present(g_device_state.swap_chain, 0, 0);
 }
@@ -575,10 +592,66 @@ static HRESULT __stdcall dev_EndScene(IDirect3DDevice8 *self)
     return S_OK;
 }
 
+/* DOA3: offscreen colour target for the guest's render-to-texture passes.
+ *
+ * The guest D3D switches its colour surface every frame (a 256x256 texture
+ * for a reflection/shadow pass, then the back buffer); the pgraph translator
+ * follows NV097_SET_SURFACE_COLOR_OFFSET and asks for an offscreen target
+ * of the surface-clip size while a non-backbuffer surface is bound. Until
+ * this existed every such pass -- including its clear -- landed on the swap
+ * chain and wiped the scene drawn just before it. */
+static ID3D11Texture2D        *g_off_tex;
+static ID3D11RenderTargetView *g_off_rtv;
+static ID3D11Texture2D        *g_off_depth;
+static ID3D11DepthStencilView *g_off_dsv;
+static UINT g_off_w, g_off_h;
+
+static ID3D11RenderTargetView *cur_rtv(void) { return g_off_active ? g_off_rtv : g_device_state.default_rtv; }
+static ID3D11DepthStencilView *cur_dsv(void) { return g_off_active ? g_off_dsv : g_device_state.default_dsv; }
+
+int d3d8_SetOffscreenTarget(UINT w, UINT h)
+{
+    ID3D11Device *dev = g_device_state.d3d11_device;
+    if (!dev || !w || !h) return 0;
+    if (!g_off_rtv || g_off_w != w || g_off_h != h) {
+        D3D11_TEXTURE2D_DESC td; HRESULT hr;
+        if (g_off_rtv)   { ID3D11RenderTargetView_Release(g_off_rtv);   g_off_rtv = NULL; }
+        if (g_off_tex)   { ID3D11Texture2D_Release(g_off_tex);          g_off_tex = NULL; }
+        if (g_off_dsv)   { ID3D11DepthStencilView_Release(g_off_dsv);   g_off_dsv = NULL; }
+        if (g_off_depth) { ID3D11Texture2D_Release(g_off_depth);        g_off_depth = NULL; }
+        memset(&td, 0, sizeof td);
+        td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &g_off_tex);
+        if (FAILED(hr)) return 0;
+        hr = ID3D11Device_CreateRenderTargetView(dev, (ID3D11Resource *)g_off_tex, NULL, &g_off_rtv);
+        if (FAILED(hr)) { ID3D11Texture2D_Release(g_off_tex); g_off_tex = NULL; return 0; }
+        td.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; td.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+        hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &g_off_depth);
+        if (SUCCEEDED(hr))
+            ID3D11Device_CreateDepthStencilView(dev, (ID3D11Resource *)g_off_depth, NULL, &g_off_dsv);
+        g_off_w = w; g_off_h = h;
+    }
+    ID3D11DeviceContext_OMSetRenderTargets(g_device_state.d3d11_context, 1, &g_off_rtv, g_off_dsv);
+    g_off_active = 1;
+    return 1;
+}
+
+void d3d8_RestoreDefaultTarget(void)
+{
+    if (!g_device_state.d3d11_context) return;
+    ID3D11DeviceContext_OMSetRenderTargets(g_device_state.d3d11_context, 1,
+                                            &g_device_state.default_rtv, g_device_state.default_dsv);
+    g_off_active = 0;
+}
+
+int d3d8_OffscreenTargetActive(void) { return g_off_active; }
+
 static HRESULT __stdcall dev_Clear(IDirect3DDevice8 *self, DWORD Count, const D3DRECT *pRects, DWORD Flags, D3DCOLOR Color, float Z, DWORD Stencil)
 {
     (void)self; (void)Count; (void)pRects; (void)Stencil;
-    g_d3d_clear_count++;
+    g_d3d_clear_count++; if (g_off_active) g_d3d_clear_off++; else g_d3d_clear_def++;
 
     /* While the intro movie is playing, movie_present.c owns the screen.
      *
@@ -590,7 +663,17 @@ static HRESULT __stdcall dev_Clear(IDirect3DDevice8 *self, DWORD Count, const D3
      * the background flickered away on every guest present while the overlay
      * the game draws on top survived. Hold the clear back until the presenter
      * hands the screen over, the same way the pgraph translator already holds
-     * back guest geometry. */
+     * back guest geometry.
+     *
+     * The rationale above was written when the hold-back was added to the
+     * pgraph translator; the clear itself was never actually gated, so once
+     * SetRenderTarget started working the movie flickered on every guest
+     * frame. Gate it on the same predicate the translator uses. */
+    {
+        extern int doa3_movie_host_owns_screen(void);
+        if (doa3_movie_host_owns_screen())
+            Flags &= ~(DWORD)D3DCLEAR_TARGET;
+    }
     if (Flags & D3DCLEAR_TARGET) {
         float clear_color[4] = {
             ((Color >> 16) & 0xFF) / 255.0f,  /* R */
@@ -599,7 +682,7 @@ static HRESULT __stdcall dev_Clear(IDirect3DDevice8 *self, DWORD Count, const D3
             ((Color >> 24) & 0xFF) / 255.0f,  /* A */
         };
         ID3D11DeviceContext_ClearRenderTargetView(g_device_state.d3d11_context,
-                                                   g_device_state.default_rtv,
+                                                   cur_rtv(),
                                                    clear_color);
     }
 
@@ -608,8 +691,9 @@ static HRESULT __stdcall dev_Clear(IDirect3DDevice8 *self, DWORD Count, const D3
         if (Flags & D3DCLEAR_ZBUFFER) clear_flags |= D3D11_CLEAR_DEPTH;
         if (Flags & D3DCLEAR_STENCIL) clear_flags |= D3D11_CLEAR_STENCIL;
 
-        ID3D11DeviceContext_ClearDepthStencilView(g_device_state.d3d11_context,
-                                                    g_device_state.default_dsv,
+        if (cur_dsv())
+            ID3D11DeviceContext_ClearDepthStencilView(g_device_state.d3d11_context,
+                                                    cur_dsv(),
                                                     clear_flags, Z, (UINT8)Stencil);
     }
 
@@ -933,7 +1017,7 @@ static HRESULT __stdcall dev_DrawIndexedPrimitive(IDirect3DDevice8 *self, D3DPRI
 static HRESULT __stdcall dev_DrawPrimitiveUP(IDirect3DDevice8 *self, D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, const void *pVertexData, UINT VertexStreamZeroStride)
 {
     (void)self;
-    g_d3d_draw_count++;
+    g_d3d_draw_count++; if (g_off_active) g_d3d_draw_off++;
     D3D11_PRIMITIVE_TOPOLOGY topology;
     UINT vertex_count, vb_size, ring_offset;
     const void *draw_data = pVertexData;

@@ -346,7 +346,8 @@ class FunctionTranslator:
                                              "fucompi", "fucomip", "fcomi",
                                              "fcom", "fcomp", "fcompp",
                                              "fucom", "fucomp", "fucompp",
-                                             "fnstsw", "ftst", "fxam")
+                                             "fnstsw", "ftst", "fxam",
+                                             "comiss", "ucomiss")
                           for insn in instructions)
         if has_fpu_cmp:
             lines.append(f"    int _fpu_cmp = 0; /* FPU compare result: -1/0/1 */")
@@ -357,7 +358,10 @@ class FunctionTranslator:
             mmx_regs = sorted([r for r in used_xmm if r.startswith("mm")
                                and not r.startswith("xmm")])
             if xmm_regs:
-                lines.append(f"    float {', '.join(xmm_regs)};")
+                # 128-bit: the XDK maths library runs packed ops on these
+                # (movaps/mulps/shufps ...); a scalar float model dropped
+                # three of every four lanes and all packed arithmetic.
+                lines.append(f"    xmm128_t {', '.join(xmm_regs)};")
             if mmx_regs:
                 lines.append(f"    uint64_t {', '.join(mmx_regs)};")
 

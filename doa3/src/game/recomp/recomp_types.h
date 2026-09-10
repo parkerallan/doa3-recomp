@@ -34,6 +34,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <math.h>    /* x87_frndint: floor/ceil/trunc/rint */
 
 /* ── Memory offset ──────────────────────────────────────── */
 
@@ -72,6 +73,19 @@ extern uint32_t g_str_a, g_str_b;   /* last REP cmps/scas operand pair (see xbox
 extern double  g_fp_stack[8];       /* GLOBAL x87 FPU stack (recomp bug #8: was per-function
                                      * locals, breaking every cross-function ST0 transfer) */
 extern int     g_fp_top;
+extern uint16_t g_x87_cw;          /* x87 control word (fnstcw/fldcw); default 0x027F */
+
+/* frndint honouring the control word's rounding mode (bits 10-11):
+ * 0 nearest-even, 1 down, 2 up, 3 toward zero. */
+static __inline double x87_frndint(double v)
+{
+    switch ((g_x87_cw >> 10) & 3) {
+    case 1:  return floor(v);
+    case 2:  return ceil(v);
+    case 3:  return trunc(v);
+    default: return rint(v);
+    }
+}
 
 /**
  * SEH frame pointer bridge.
@@ -245,6 +259,39 @@ XMM_PACKED_OP(xmm_orps,  r.u[_i] = a.u[_i] | b.u[_i])
 /* CMPNEQPS is true for unordered operands too, which is what !(x == y)
  * gives for NaN. */
 XMM_PACKED_OP(xmm_cmpneqps, r.u[_i] = !(a.f[_i] == b.f[_i]) ? 0xFFFFFFFFu : 0u)
+XMM_PACKED_OP(xmm_divps, r.f[_i] = a.f[_i] / b.f[_i])
+XMM_PACKED_OP(xmm_minps, r.f[_i] = (a.f[_i] < b.f[_i]) ? a.f[_i] : b.f[_i])
+XMM_PACKED_OP(xmm_maxps, r.f[_i] = (a.f[_i] > b.f[_i]) ? a.f[_i] : b.f[_i])
+XMM_PACKED_OP(xmm_andps, r.u[_i] = a.u[_i] & b.u[_i])
+XMM_PACKED_OP(xmm_andnps, r.u[_i] = ~a.u[_i] & b.u[_i])
+XMM_PACKED_OP(xmm_xorps, r.u[_i] = a.u[_i] ^ b.u[_i])
+XMM_PACKED_OP(xmm_cmpeqps, r.u[_i] = (a.f[_i] == b.f[_i]) ? 0xFFFFFFFFu : 0u)
+XMM_PACKED_OP(xmm_cmpltps, r.u[_i] = (a.f[_i] < b.f[_i]) ? 0xFFFFFFFFu : 0u)
+XMM_PACKED_OP(xmm_cmpleps, r.u[_i] = (a.f[_i] <= b.f[_i]) ? 0xFFFFFFFFu : 0u)
+static __forceinline xmm128_t xmm_unpcklps(xmm128_t a, xmm128_t b) {
+    xmm128_t r; r.u[0] = a.u[0]; r.u[1] = b.u[0]; r.u[2] = a.u[1]; r.u[3] = b.u[1]; return r;
+}
+static __forceinline xmm128_t xmm_unpckhps(xmm128_t a, xmm128_t b) {
+    xmm128_t r; r.u[0] = a.u[2]; r.u[1] = b.u[2]; r.u[2] = a.u[3]; r.u[3] = b.u[3]; return r;
+}
+static __forceinline xmm128_t xmm_movlhps(xmm128_t a, xmm128_t b) {
+    a.u[2] = b.u[0]; a.u[3] = b.u[1]; return a;
+}
+static __forceinline xmm128_t xmm_movhlps(xmm128_t a, xmm128_t b) {
+    a.u[0] = b.u[2]; a.u[1] = b.u[3]; return a;
+}
+static __forceinline xmm128_t xmm_sqrtps(xmm128_t a) {
+    int _i; for (_i = 0; _i < 4; _i++) a.f[_i] = sqrtf(a.f[_i]); return a;
+}
+static __forceinline xmm128_t xmm_rsqrtps(xmm128_t a) {
+    int _i; for (_i = 0; _i < 4; _i++) a.f[_i] = 1.0f / sqrtf(a.f[_i]); return a;
+}
+static __forceinline xmm128_t xmm_rcpps(xmm128_t a) {
+    int _i; for (_i = 0; _i < 4; _i++) a.f[_i] = 1.0f / a.f[_i]; return a;
+}
+static __forceinline uint32_t xmm_movmskps(xmm128_t a) {
+    return (a.u[0] >> 31) | ((a.u[1] >> 31) << 1) | ((a.u[2] >> 31) << 2) | ((a.u[3] >> 31) << 3);
+}
 
 
 /* ── Flag computation helpers ───────────────────────────── */

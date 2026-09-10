@@ -396,7 +396,7 @@ def _make_condition(jcc, flag_setter, flag_ops):
 
     # ── FPU compare-to-EFLAGS and sahf: no standard operands ──
     if flag_setter in ("fcompi", "fcomip", "fucomi", "fucompi",
-                        "fucomip", "fcomi", "sahf"):
+                        "fucomip", "fcomi", "sahf", "comiss", "ucomiss"):
         fpu_cmp_map = {
             "ja": ">", "jnbe": ">",
             "jae": ">=", "jnb": ">=", "jnc": ">=",
@@ -1463,150 +1463,152 @@ class Lifter:
     # ── SSE (scalar/packed float) ──
 
     def _lift_sse(self, insn, m, ops):
-        """Translate SSE instructions to C float operations."""
+        """SSE translation over xmm128_t lanes (see recomp_types.h xmm_*).
+
+        Every xmm register is a 4-lane union. Scalar ops (movss/addss/...)
+        touch lane 0 and keep the others; a movss load from memory zeroes
+        lanes 1-3 like the hardware. Packed ops go through the helpers, so
+        the XDK matrix routines (movaps/shufps/mulps/addps/subps/cmpneqps/
+        orps/xorps/movlps/movhps/rcpss) compute what the Xbox computed.
+        """
         nops = len(ops)
         if nops < 1:
             return [f"/* {m}: no operands */"]
 
-        # SSE register names (xmm0-xmm7) are used as float locals
-        def _sse_read(op):
-            if op.type == "reg":
-                return op.reg  # xmm0, xmm1, etc.
-            elif op.type == "mem":
-                if op.mem_size == 8:
-                    return f"MEMD({_fmt_mem(op)})"
+        def is_xmm(op):
+            return op.type == "reg" and op.reg.startswith("xmm")
+
+        def rd(op):
+            """Read a 128-bit value (register, or 16-byte memory)."""
+            if is_xmm(op):
+                return op.reg
+            if op.type == "mem":
+                return f"xmm_load({_fmt_mem(op)})"
+            return "xmm_zero()"
+
+        def rd_ss(op):
+            """Read a scalar float (lane 0 of a register, or a float in memory)."""
+            if is_xmm(op):
+                return f"{op.reg}.f[0]"
+            if op.type == "mem":
                 return f"MEMF({_fmt_mem(op)})"
-            elif op.type == "imm":
+            if op.type == "imm":
                 return _fmt_imm(op.imm)
-            return f"/* sse_read? */"
+            return "0.0f"
 
-        def _sse_write(op, val):
-            if op.type == "reg":
-                return f"{op.reg} = {val};"
-            elif op.type == "mem":
-                if op.mem_size == 8:
-                    return f"MEMD({_fmt_mem(op)}) = {val};"
-                return f"MEMF({_fmt_mem(op)}) = {val};"
-            return f"/* sse_write? */;"
-
-        # ── Moves ──
-        if m in ("movss", "movsd", "movaps", "movups", "movlps", "movhps"):
+        # -- 128-bit moves --
+        if m in ("movaps", "movups", "movntps", "movapd", "movupd", "movdqa", "movdqu"):
             if nops >= 2:
-                src = _sse_read(ops[1])
-                return [_sse_write(ops[0], src) + f" /* {m} */"]
+                if is_xmm(ops[0]):
+                    return [f"{ops[0].reg} = {rd(ops[1])}; /* {m} */"]
+                if ops[0].type == "mem" and is_xmm(ops[1]):
+                    return [f"xmm_store({_fmt_mem(ops[0])}, {ops[1].reg}); /* {m} */"]
             return [f"/* {m} {insn.op_str} */"]
 
-        if m == "movd":
+        # -- 64-bit half moves --
+        if m in ("movlps", "movlpd"):
             if nops >= 2:
-                src = _fmt_operand_read(ops[1]) if ops[1].type != "reg" or not ops[1].reg.startswith("xmm") else _sse_read(ops[1])
-                if ops[0].type == "reg" and ops[0].reg.startswith("xmm"):
-                    return [f"memcpy(&{ops[0].reg}, &{src}, 4); /* movd to xmm */"]
-                else:
-                    return [f"{_fmt_operand_write(ops[0], src)} /* movd */"]
-            return [f"/* movd {insn.op_str} */"]
+                if is_xmm(ops[0]) and ops[1].type == "mem":
+                    return [f"{ops[0].reg} = xmm_load_lo({ops[0].reg}, {_fmt_mem(ops[1])}); /* {m} */"]
+                if ops[0].type == "mem" and is_xmm(ops[1]):
+                    return [f"xmm_store_lo({_fmt_mem(ops[0])}, {ops[1].reg}); /* {m} */"]
+        if m in ("movhps", "movhpd"):
+            if nops >= 2:
+                if is_xmm(ops[0]) and ops[1].type == "mem":
+                    return [f"{ops[0].reg} = xmm_load_hi({ops[0].reg}, {_fmt_mem(ops[1])}); /* {m} */"]
+                if ops[0].type == "mem" and is_xmm(ops[1]):
+                    return [f"xmm_store_hi({_fmt_mem(ops[0])}, {ops[1].reg}); /* {m} */"]
+        if m == "movlhps" and nops >= 2 and is_xmm(ops[0]) and is_xmm(ops[1]):
+            return [f"{ops[0].reg} = xmm_movlhps({ops[0].reg}, {ops[1].reg}); /* movlhps */"]
+        if m == "movhlps" and nops >= 2 and is_xmm(ops[0]) and is_xmm(ops[1]):
+            return [f"{ops[0].reg} = xmm_movhlps({ops[0].reg}, {ops[1].reg}); /* movhlps */"]
+        if m == "movq" and nops >= 2:
+            if is_xmm(ops[0]) and ops[1].type == "mem":
+                return [f"{ops[0].reg} = xmm_load_lo(xmm_zero(), {_fmt_mem(ops[1])}); /* movq */"]
+            if ops[0].type == "mem" and is_xmm(ops[1]):
+                return [f"xmm_store_lo({_fmt_mem(ops[0])}, {ops[1].reg}); /* movq */"]
+            if is_xmm(ops[0]) and is_xmm(ops[1]):
+                d, sname = ops[0].reg, ops[1].reg
+                return [f"{{ xmm128_t _t = xmm_zero(); _t.u[0] = {sname}.u[0]; _t.u[1] = {sname}.u[1]; {d} = _t; }} /* movq */"]
 
-        # ── Arithmetic ──
-        if m in ("addss", "addsd"):
+        # -- scalar moves --
+        if m == "movss":
             if nops >= 2:
-                return [_sse_write(ops[0], f"{_sse_read(ops[0])} + {_sse_read(ops[1])}") + f" /* {m} */"]
-        if m in ("subss", "subsd"):
+                if is_xmm(ops[0]) and ops[1].type == "mem":
+                    return [f"{ops[0].reg} = xmm_load_ss({_fmt_mem(ops[1])}); /* movss */"]
+                if ops[0].type == "mem" and is_xmm(ops[1]):
+                    return [f"xmm_store_ss({_fmt_mem(ops[0])}, {ops[1].reg}); /* movss */"]
+                if is_xmm(ops[0]) and is_xmm(ops[1]):
+                    return [f"{ops[0].reg}.u[0] = {ops[1].reg}.u[0]; /* movss reg,reg (upper lanes kept) */"]
+        if m == "movsd":
             if nops >= 2:
-                return [_sse_write(ops[0], f"{_sse_read(ops[0])} - {_sse_read(ops[1])}") + f" /* {m} */"]
-        if m in ("mulss", "mulsd"):
-            if nops >= 2:
-                return [_sse_write(ops[0], f"{_sse_read(ops[0])} * {_sse_read(ops[1])}") + f" /* {m} */"]
-        if m in ("divss", "divsd"):
-            if nops >= 2:
-                return [_sse_write(ops[0], f"{_sse_read(ops[0])} / {_sse_read(ops[1])}") + f" /* {m} */"]
-        if m in ("sqrtss", "sqrtsd"):
-            if nops >= 2:
-                return [_sse_write(ops[0], f"sqrtf({_sse_read(ops[1])})") + f" /* {m} */"]
-        if m in ("minss", "minsd"):
-            if nops >= 2:
-                a, b = _sse_read(ops[0]), _sse_read(ops[1])
-                return [_sse_write(ops[0], f"({a} < {b} ? {a} : {b})") + f" /* {m} */"]
-        if m in ("maxss", "maxsd"):
-            if nops >= 2:
-                a, b = _sse_read(ops[0]), _sse_read(ops[1])
-                return [_sse_write(ops[0], f"({a} > {b} ? {a} : {b})") + f" /* {m} */"]
+                if is_xmm(ops[0]) and ops[1].type == "mem":
+                    return [f"{ops[0].reg} = xmm_load_lo(xmm_zero(), {_fmt_mem(ops[1])}); /* movsd */"]
+                if ops[0].type == "mem" and is_xmm(ops[1]):
+                    return [f"xmm_store_lo({_fmt_mem(ops[0])}, {ops[1].reg}); /* movsd */"]
+                if is_xmm(ops[0]) and is_xmm(ops[1]):
+                    return [f"{ops[0].reg}.u[0] = {ops[1].reg}.u[0]; {ops[0].reg}.u[1] = {ops[1].reg}.u[1]; /* movsd reg,reg */"]
+        if m == "movd" and nops >= 2:
+            if is_xmm(ops[0]):
+                return [f"{ops[0].reg} = xmm_zero(); {ops[0].reg}.u[0] = {_fmt_operand_read(ops[1])}; /* movd to xmm */"]
+            if is_xmm(ops[1]):
+                return [_fmt_operand_write(ops[0], f"{ops[1].reg}.u[0]") + " /* movd from xmm */"]
 
-        # ── Packed arithmetic ──
-        if m in ("addps", "subps", "mulps", "divps"):
-            if nops >= 2:
-                c_op = {"addps": "+", "subps": "-", "mulps": "*", "divps": "/"}[m]
-                d, s = _sse_read(ops[0]), _sse_read(ops[1])
-                return [f"/* {m}: {d} {c_op}= {s} (packed 4xfloat) */"]
+        # -- scalar arithmetic (lane 0) --
+        sc_ops = {"addss": "+", "subss": "-", "mulss": "*", "divss": "/"}
+        if m in sc_ops and nops >= 2 and is_xmm(ops[0]):
+            return [f"{ops[0].reg}.f[0] = {ops[0].reg}.f[0] {sc_ops[m]} {rd_ss(ops[1])}; /* {m} */"]
+        if m == "sqrtss" and nops >= 2 and is_xmm(ops[0]):
+            return [f"{ops[0].reg}.f[0] = sqrtf({rd_ss(ops[1])}); /* sqrtss */"]
+        if m == "rsqrtss" and nops >= 2 and is_xmm(ops[0]):
+            return [f"{ops[0].reg}.f[0] = 1.0f / sqrtf({rd_ss(ops[1])}); /* rsqrtss */"]
+        if m == "rcpss" and nops >= 2 and is_xmm(ops[0]):
+            return [f"{ops[0].reg}.f[0] = 1.0f / {rd_ss(ops[1])}; /* rcpss */"]
+        if m in ("minss", "maxss") and nops >= 2 and is_xmm(ops[0]):
+            a, b = f"{ops[0].reg}.f[0]", rd_ss(ops[1])
+            cmp = "<" if m == "minss" else ">"
+            return [f"{{ float _b = {b}; {a} = ({a} {cmp} _b) ? {a} : _b; }} /* {m} */"]
 
-        # ── Conversions ──
-        if m == "cvtsi2ss":
-            if nops >= 2:
-                src = _fmt_operand_read(ops[1])
-                return [_sse_write(ops[0], f"(float)(int32_t){src}") + " /* cvtsi2ss */"]
-        if m in ("cvtss2si", "cvttss2si"):
-            if nops >= 2:
-                return [_fmt_operand_write(ops[0], f"(int32_t){_sse_read(ops[1])}") + f" /* {m} */"]
-        if m == "cvtsi2sd":
-            if nops >= 2:
-                src = _fmt_operand_read(ops[1])
-                return [_sse_write(ops[0], f"(double)(int32_t){src}") + " /* cvtsi2sd */"]
-        if m in ("cvtsd2si", "cvttsd2si"):
-            if nops >= 2:
-                return [_fmt_operand_write(ops[0], f"(int32_t){_sse_read(ops[1])}") + f" /* {m} */"]
-        if m == "cvtss2sd":
-            if nops >= 2:
-                return [_sse_write(ops[0], f"(double){_sse_read(ops[1])}") + " /* cvtss2sd */"]
-        if m == "cvtsd2ss":
-            if nops >= 2:
-                return [_sse_write(ops[0], f"(float){_sse_read(ops[1])}") + " /* cvtsd2ss */"]
+        # -- packed arithmetic / bitwise / compares / shuffles --
+        pk = {"addps": "xmm_addps", "subps": "xmm_subps", "mulps": "xmm_mulps",
+              "divps": "xmm_divps", "minps": "xmm_minps", "maxps": "xmm_maxps",
+              "andps": "xmm_andps", "andnps": "xmm_andnps", "orps": "xmm_orps",
+              "xorps": "xmm_xorps",
+              "cmpeqps": "xmm_cmpeqps", "cmpneqps": "xmm_cmpneqps",
+              "cmpltps": "xmm_cmpltps", "cmpleps": "xmm_cmpleps",
+              "unpcklps": "xmm_unpcklps", "unpckhps": "xmm_unpckhps"}
+        if m in pk and nops >= 2 and is_xmm(ops[0]):
+            if m == "xorps" and is_xmm(ops[1]) and ops[0].reg == ops[1].reg:
+                return [f"{ops[0].reg} = xmm_zero(); /* xorps self */"]
+            return [f"{ops[0].reg} = {pk[m]}({ops[0].reg}, {rd(ops[1])}); /* {m} */"]
+        if m in ("sqrtps", "rsqrtps", "rcpps") and nops >= 2 and is_xmm(ops[0]):
+            return [f"{ops[0].reg} = xmm_{m}({rd(ops[1])}); /* {m} */"]
+        if m == "shufps" and nops >= 3 and is_xmm(ops[0]):
+            return [f"{ops[0].reg} = xmm_shufps({ops[0].reg}, {rd(ops[1])}, {_fmt_imm(ops[2].imm)}); /* shufps */"]
+        if m == "movmskps" and nops >= 2 and is_xmm(ops[1]):
+            return [_fmt_operand_write(ops[0], f"xmm_movmskps({ops[1].reg})") + " /* movmskps */"]
 
-        # ── Comparison ──
-        if m in ("comiss", "comisd", "ucomiss", "ucomisd"):
-            if nops >= 2:
-                return [f"/* {m} {_sse_read(ops[0])}, {_sse_read(ops[1])} - sets EFLAGS */"]
+        # -- conversions --
+        if m == "cvtsi2ss" and nops >= 2 and is_xmm(ops[0]):
+            return [f"{ops[0].reg}.f[0] = (float)(int32_t){_fmt_operand_read(ops[1])}; /* cvtsi2ss */"]
+        if m in ("cvtss2si", "cvttss2si") and nops >= 2:
+            fn = "(int32_t)rintf" if m == "cvtss2si" else "(int32_t)"
+            return [_fmt_operand_write(ops[0], f"{fn}({rd_ss(ops[1])})") + f" /* {m} */"]
+        if m in ("cvtsi2sd", "cvtsd2si", "cvttsd2si", "cvtss2sd", "cvtsd2ss",
+                 "addsd", "subsd", "mulsd", "divsd", "sqrtsd", "minsd", "maxsd",
+                 "comisd", "ucomisd"):
+            return [f"/* TODO SSE2 double: {m} {insn.op_str} */"]
 
-        # ── Bitwise ──
-        if m in ("xorps", "xorpd"):
-            if nops >= 2 and ops[0].type == "reg" and ops[1].type == "reg" and ops[0].reg == ops[1].reg:
-                return [_sse_write(ops[0], "0.0f") + f" /* {m} self = zero */"]
-            if nops >= 2:
-                return [f"/* {m} {_sse_read(ops[0])}, {_sse_read(ops[1])} */"]
-        if m in ("andps", "orps"):
-            if nops >= 2:
-                return [f"/* {m} {_sse_read(ops[0])}, {_sse_read(ops[1])} */"]
+        # -- scalar compare -> _fpu_cmp, consumed by the following jcc --
+        if m in ("comiss", "ucomiss") and nops >= 2:
+            a, b = rd_ss(ops[0]), rd_ss(ops[1])
+            return [f"_fpu_cmp = ({a} < {b}) ? -1 : ({a} > {b}) ? 1 : 0; /* {m} */"]
 
-        # ── Packed min/max ──
-        if m in ("minps", "maxps"):
-            if nops >= 2:
-                return [f"/* {m} {_sse_read(ops[0])}, {_sse_read(ops[1])} (packed 4xfloat) */"]
-
-        # ── Reciprocal / rsqrt ──
-        if m == "rsqrtss":
-            if nops >= 2:
-                return [_sse_write(ops[0], f"1.0f / sqrtf({_sse_read(ops[1])})") + " /* rsqrtss */"]
-        if m == "rcpss":
-            if nops >= 2:
-                return [_sse_write(ops[0], f"1.0f / {_sse_read(ops[1])}") + " /* rcpss */"]
-
-        # ── Packed comparison ──
-        if m in ("cmpneqps", "cmpeqps", "cmpltps", "cmpleps"):
-            if nops >= 2:
-                return [f"/* {m} {_sse_read(ops[0])}, {_sse_read(ops[1])} (packed compare) */"]
-
-        # ── Move mask ──
-        if m == "movmskps":
-            if nops >= 2:
-                return [_fmt_operand_write(ops[0], f"0 /* movmskps {_sse_read(ops[1])} */")]
-
-        # ── MMX / integer SIMD ──
+        # -- integer SIMD on xmm (unused by this image) --
         if m in ("pand", "pandn", "por", "pxor", "pcmpgtd"):
-            if nops >= 2:
-                return [f"/* {m} {insn.op_str} (MMX/SIMD integer) */"]
+            return [f"/* TODO: {m} {insn.op_str} (integer SIMD on xmm) */"]
 
-        # ── Shuffle/unpack ──
-        if m in ("shufps", "unpcklps", "unpckhps"):
-            return [f"/* {m} {insn.op_str} */"]
-
-        return [f"/* SSE: {m} {insn.op_str} */"]
+        return [f"/* TODO SSE: {m} {insn.op_str} */"]
 
     # ── FPU (x87) ──
 
@@ -1709,8 +1711,88 @@ class Lifter:
             return [f"fp_top() = fabs(fp_top()); /* fabs */"]
         if m == "fsqrt":
             return [f"fp_top() = sqrt(fp_top()); /* fsqrt */"]
+
+        # RECOMP BUG #18: the x87 transcendentals were never lifted -- they
+        # fell through to the bare-comment fallback and were dropped, so every
+        # tan/atan/sin/cos/pow/exp/log the game computes returned whatever was
+        # already on the FPU stack. D3D_UpdateProjectionViewportTransform's
+        # projection reached the composite multiply with inf in m00/m11
+        # (1 / tan(fov/2) where the tan never happened), which turned the
+        # whole composite matrix into 0xFFC00000 and put every post-movie
+        # vertex at NaN.
+        if m == "fsin":
+            return ["fp_top() = sin(fp_top()); /* fsin */"]
+        if m == "fcos":
+            return ["fp_top() = cos(fp_top()); /* fcos */"]
+        if m == "fsincos":
+            # ST(0) = sin(x), then push cos(x): ST(1)=sin, ST(0)=cos.
+            return ["{ double _x = fp_top(); fp_top() = sin(_x); fp_push(cos(_x)); }"
+                    " /* fsincos */"]
+        if m == "fptan":
+            # ST(0) = tan(x), then push 1.0: ST(1)=tan, ST(0)=1.0.
+            return ["{ fp_top() = tan(fp_top()); fp_push(1.0); } /* fptan */"]
+        if m == "fpatan":
+            # ST(1) = atan2(ST(1), ST(0)), then pop.
+            return ["fp_st1() = atan2(fp_st1(), fp_top()); fp_pop(); /* fpatan */"]
+        if m == "f2xm1":
+            return ["fp_top() = pow(2.0, fp_top()) - 1.0; /* f2xm1 */"]
+        if m == "fyl2x":
+            return ["fp_st1() = fp_st1() * (log(fp_top()) / 0.69314718055994531);"
+                    " fp_pop(); /* fyl2x */"]
+        if m == "fyl2xp1":
+            return ["fp_st1() = fp_st1() * (log(fp_top() + 1.0) / 0.69314718055994531);"
+                    " fp_pop(); /* fyl2xp1 */"]
+        if m == "fscale":
+            # ST(0) *= 2^trunc(ST(1)); ST(1) is left in place.
+            return ["fp_top() = fp_top() * pow(2.0, (double)(int)fp_st1()); /* fscale */"]
+        if m == "frndint":
+            # Round to integer in the CURRENT x87 rounding mode (RC bits of
+            # the control word). The CRT's floor/ceil set RC=down/up with
+            # fldcw around frndint; rint() (nearest) made floor(12.7)==13,
+            # which flagged "inexact" and sent floor down its exception path.
+            return ["fp_top() = x87_frndint(fp_top()); /* frndint */"]
+        if m == "fprem":
+            # Truncating partial remainder (C2 is reported complete).
+            return ["fp_top() = fmod(fp_top(), fp_st1()); /* fprem */"]
+        if m == "fprem1":
+            return ["fp_top() = remainder(fp_top(), fp_st1()); /* fprem1 */"]
+        if m == "fldpi":
+            return ["fp_push(3.14159265358979323846); /* fldpi */"]
+        if m == "fldl2e":
+            return ["fp_push(1.44269504088896340736); /* fldl2e */"]
+        if m == "fldl2t":
+            return ["fp_push(3.32192809488736234787); /* fldl2t */"]
+        if m == "fldlg2":
+            return ["fp_push(0.30102999566398119521); /* fldlg2 */"]
+        if m == "fldln2":
+            return ["fp_push(0.69314718055994530942); /* fldln2 */"]
+        if m == "ftst":
+            return ["_fpu_cmp = (fp_top() < 0.0) ? -1 : (fp_top() > 0.0) ? 1 : 0;"
+                    " /* ftst */"]
+        if m == "fisttp":
+            if len(ops) >= 1 and ops[0].type == "mem":
+                mem_acc = _mem_accessor(ops[0].mem_size)
+                return [f"{mem_acc}({_fmt_mem(ops[0])}) = (int32_t)fp_top(); fp_popp();"
+                        f" /* fisttp */"]
+            return ["fp_popp(); /* fisttp */"]
+        if m == "fincstp":
+            return ["fp_pop(); /* fincstp */"]
+        if m == "fdecstp":
+            return ["g_fp_top--; /* fdecstp */"]
         if m == "fxch":
-            i = _st_index(ops[0].reg) if (len(ops) >= 1 and ops[0].type == "reg") else 1
+            # RECOMP BUG #17: capstone reports fxch -- alone among the x87
+            # ops -- in its two-operand form "fxch st(0), st(i)", so reading
+            # ops[0] always yielded st(0) and every fxch became a no-op.
+            # `fxch st(2)` in D3D_UpdateProjectionViewportTransform's tail
+            # (0x001B60B1) is what rotated the viewport matrix's diagonal:
+            # the device got m00=1, m11=halfwidth, m33=-halfheight instead of
+            # halfwidth/-halfheight/1, so the composite matrix was wrong and
+            # every post-movie vertex landed off screen. The index lives in
+            # the last st operand; a bare fxch means st(1).
+            i = 1
+            for _o in ops:
+                if _o.type == "reg" and _o.reg.startswith("st"):
+                    i = _st_index(_o.reg)
             return [f"{{ double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + {i}) & 7]; g_fp_stack[(g_fp_top + {i}) & 7] = _t; }} /* fxch st({i}) */"]
         if m in ("fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp"):
             # Set _fpu_cmp for the fcomp/fnstsw/sahf pattern.
@@ -1751,8 +1833,15 @@ class Lifter:
                 return [f"SET_HI8(eax, (_fpu_cmp < 0 ? 0x01 : 0) | (_fpu_cmp == 0 ? 0x40 : 0)); /* fnstsw ax */"]
             return [f"/* fnstsw {insn.op_str} - store FPU status word */"]
         if m == "fnstcw":
+            # The control word is real state: the CRT's _ctrlfp reads it back
+            # to decide which FP exceptions are masked. Left untranslated it
+            # read stack garbage and floor() raised STATUS_FLOAT_INEXACT.
+            if ops and ops[0].type == "mem":
+                return [f"MEM16({_fmt_mem(ops[0])}) = g_x87_cw; /* fnstcw */"]
             return [f"/* fnstcw {insn.op_str} - store FPU control word */"]
         if m == "fldcw":
+            if ops and ops[0].type == "mem":
+                return [f"g_x87_cw = MEM16({_fmt_mem(ops[0])}); /* fldcw */"]
             return [f"/* fldcw {insn.op_str} - load FPU control word */"]
         if m == "fldz":
             return [f"fp_push(0.0); /* fldz */"]

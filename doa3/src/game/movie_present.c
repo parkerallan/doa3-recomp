@@ -45,6 +45,10 @@ static ID3D11PixelShader        *s_ps;
 static ID3D11SamplerState       *s_smp;
 static int s_w, s_h, s_failed;
 static int s_host_stopped;
+/* Set once the bundled decoder runs out of frames: the movie file is over.
+ * doa3_pump_cri_servers uses it to complete the movie through the game's own
+ * PLAYEND path when the guest Sofdec stalls and never publishes one. */
+int g_doa3_host_movie_ended = 0;
 static plm_video_t *s_host_video;
 static unsigned char *s_host_frame;
 static unsigned s_host_frames;
@@ -405,6 +409,7 @@ static const void *movie_host_frame(void)
                 fprintf(stderr, "[HOSTFMV] presenter ended at frame %u\n", s_host_frames);
                 fflush(stderr);
                 s_host_stopped = 1;
+                g_doa3_host_movie_ended = 1;
                 break;
             }
             plm_frame_to_bgra(frame, s_host_frame, WIDTH * 4);
@@ -421,6 +426,7 @@ static const void *movie_host_frame(void)
 static void movie_upload(ID3D11DeviceContext *ctx, const void *src, int pitch)
 {
     D3D11_MAPPED_SUBRESOURCE map;
+    { extern void doa3_ptinfo_check(const char *); doa3_ptinfo_check("movie-upload"); }
     if (FAILED(ID3D11DeviceContext_Map(ctx, (ID3D11Resource *)s_tex, 0,
                                        D3D11_MAP_WRITE_DISCARD, 0, &map)))
         return;

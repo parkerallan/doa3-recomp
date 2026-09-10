@@ -119,8 +119,89 @@ void doa3_pump_messages(void)
     }
 }
 
+/* ── Hang watchdog ────────────────────────────────────────────────────────
+ * The post-movie failures in this project are non-faulting hangs: the process
+ * stays alive, every capped diagnostic has gone quiet, and the log simply
+ * stops. There is nothing to catch with an exception handler, so sample the
+ * guest thread instead. g_doa3_heartbeat is bumped once per present; if it
+ * stops moving, suspend the guest thread, read its RIP from the thread
+ * context and print it with the recompiler's register globals. Resolve the
+ * RIP against build/debug/doa3.map ("Rva+Base" column) to get the function.
+ * Always on: it costs one sleeping thread and it is the only thing that
+ * localises this class of failure. */
+volatile LONG g_doa3_heartbeat = 0;
+static HANDLE g_doa3_guest_thread;
+
+static DWORD WINAPI doa3_watchdog(LPVOID unused)
+{
+    LONG last = -1; int stalled = 0, reports = 0;
+    (void)unused;
+    for (;;) {
+        LONG now;
+        Sleep(2000);
+        now = g_doa3_heartbeat;
+        if (now != last) { last = now; stalled = 0; continue; }
+        /* Never arm before the first present: the heartbeat is legitimately 0
+         * through boot, and a "stall" there is meaningless. */
+        if (now == 0) continue;
+        if (++stalled < 3 || reports >= 10) continue;   /* ~6s of no progress */
+        reports++;
+        {
+            CONTEXT ctx;
+            int got = 0;
+            memset(&ctx, 0, sizeof ctx);
+            ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            /* CAPTURE ONLY while the guest thread is suspended -- no stdio.
+             * The guest is very often inside fprintf holding the CRT stream
+             * lock; printing from here while it is suspended deadlocks the
+             * process (it froze boot exactly once and cost a run to find). */
+            if (SuspendThread(g_doa3_guest_thread) != (DWORD)-1) {
+                got = GetThreadContext(g_doa3_guest_thread, &ctx);
+                ResumeThread(g_doa3_guest_thread);
+            }
+            if (got)
+                fprintf(stderr,
+                        "[WDOG] STALLED %ds at heartbeat %ld: rip=0x%llX rsp=0x%llX | "
+                        "guest eax=%08X ecx=%08X edx=%08X ebx=%08X esp=%08X esi=%08X edi=%08X sehebp=%08X\n",
+                        stalled * 2, (long)now,
+                        (unsigned long long)ctx.Rip, (unsigned long long)ctx.Rsp,
+                        g_eax, g_ecx, g_edx, g_ebx, g_esp, g_esi, g_edi, g_seh_ebp);
+            else
+                fprintf(stderr, "[WDOG] STALLED but could not read guest context\n");
+            /* Fiber states: read after resuming, so this never contends with
+             * the guest for the stdio lock while it cannot run. */
+            if (reports <= 2) {
+                extern void xbox_fiber_dump(void);
+                xbox_fiber_dump();
+            }
+            fflush(stderr);
+        }
+    }
+}
+
+static void doa3_watchdog_start(void)
+{
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
+                    GetCurrentProcess(), &g_doa3_guest_thread,
+                    0, FALSE, DUPLICATE_SAME_ACCESS);
+    if (g_doa3_guest_thread) {
+        HANDLE h = CreateThread(NULL, 0, doa3_watchdog, NULL, 0, NULL);
+        if (h) CloseHandle(h);
+    }
+}
+
 void doa3_present_frame(void)
 {
+    InterlockedIncrement(&g_doa3_heartbeat);
+    {   /* DOA3 DIAG: which surface the guest device is rendering into at
+         * present time (device+0x40C), sampled every ~2 s post-movie. */
+        extern volatile int g_doa3_post_movie;
+        static DWORD s_next = 0;
+        if (g_doa3_post_movie && GetTickCount() >= s_next) {
+            s_next = GetTickCount() + 2000;
+            fprintf(stderr, "[RT@PRESENT] dev40C=%08X dev5A0[0]=%g\n", MEM32(0x1C0C0Cu), MEMF(0x1C0DA0u));
+        }
+    }
     if (getenv("DOA3_NO_PRESENT")) return;   /* isolation: skip pump + present entirely */
     MSG msg;
     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
@@ -509,19 +590,51 @@ static volatile int g_watch_pending = 0;        /* reprotect after single-step *
 static uint32_t g_watch_rips_seen[24];
 static int g_watch_rips_n = 0;
 
+/* DOA3 DIAG: opt-in exact-address write watch, DOA3_WATCHVA=<hex guest VA>.
+ * Arms the containing page at startup and reports every writer RIP plus the
+ * value stored. Used to find who writes the mwPly handle state word. */
+uint32_t g_watch_exact_va = 0;
+uint32_t g_watch_exact_len = 8;   /* DOA3_WATCHLEN=<hex bytes> widens the window */
+
+/* DOA3 DIAG: the watched page is protected in EVERY view of the RAM
+ * mapping (base + the 28 mirror views at xbox_GetMemorySize() stride,
+ * which includes the on-demand 0x80000000 cached-RAM mirror), so a write
+ * through an alias address is caught too. The partition table at 0x4BDA20
+ * was corrupted during the movie with the primary-view watch armed and
+ * silent, which is only possible through an alias or the host. */
+static uint32_t g_watch_pageoff = 0;    /* page offset inside one view */
+static void watch_protect_all(DWORD prot)
+{
+    uintptr_t base = (uintptr_t)xbox_GetMemoryBase();
+    size_t sz = xbox_GetMemorySize();
+    DWORD old; int m;
+    for (m = 0; m <= XBOX_NUM_MIRRORS; m++)
+        VirtualProtect((LPVOID)(base + (uintptr_t)m * sz + g_watch_pageoff), 0x1000, prot, &old);
+}
+/* host address -> guest offset inside the view it belongs to (any view),
+ * or 0xFFFFFFFF when it is not inside the RAM mapping at all. */
+static uint32_t watch_view_offset(uintptr_t f)
+{
+    uintptr_t base = (uintptr_t)xbox_GetMemoryBase();
+    size_t sz = xbox_GetMemorySize();
+    if (!sz || f < base || f >= base + (uintptr_t)(XBOX_NUM_MIRRORS + 1) * sz) return 0xFFFFFFFFu;
+    return (uint32_t)((f - base) % sz);
+}
 void doa3_watch_arm(uint32_t xb_page)
 {
     uintptr_t host = (uintptr_t)g_xbox_mem_offset + xb_page;
     DWORD old;
-    if (VirtualProtect((LPVOID)host, 0x1000, PAGE_READONLY, &old))
+    if (VirtualProtect((LPVOID)host, 0x1000, PAGE_READONLY, &old)) {
         g_watch_page = host;
+        g_watch_pageoff = (uint32_t)(host - (uintptr_t)xbox_GetMemoryBase());
+        watch_protect_all(PAGE_READONLY);
+    }
 }
 
 void doa3_watch_disarm(void)
 {
     if (g_watch_page) {
-        DWORD old;
-        VirtualProtect((LPVOID)g_watch_page, 0x1000, PAGE_READWRITE, &old);
+        watch_protect_all(PAGE_READWRITE);
         g_watch_page = 0;
     }
 }
@@ -547,9 +660,140 @@ static int watch_slot_state(uint32_t xbva)
     if (rel % 0x50u) return -1;
     return (int)(rel / 0x50u);
 }
+/* DOA3 diag (opt-in, DOA3_EBXWP=1): hardware data breakpoint on the
+ * recompiler's g_ebx global. The boot task sub_00084340 zeroes ebx once and
+ * relies on it staying 0 (callee-saved) through its one-time init chain, but
+ * measured at its loop top ebx already holds a stack-looking value, so the
+ * gate that clears 0x4B838A after the intro movie never fires. Armed by the
+ * sub_00084340 wrapper and disarmed at its loop top, both from the guest
+ * thread by raising a private exception: the VEH edits Dr0/Dr7 in the
+ * continuation context and NtContinue applies them to the thread. Every
+ * fiber runs on this one thread, so the breakpoint follows all of them. */
+#define DOA3_EXC_WPARM 0xE0D0A301u
+#define DOA3_EXC_WPOFF 0xE0D0A302u
+static int g_ebxwp_armed = 0, g_ebxwp_reports = 0, g_ebxwp_exact = 0;
+void doa3_ebxwp_arm(void)
+{
+    const char *e = getenv("DOA3_EBXWP");
+    if (e && *e == '1') RaiseException(DOA3_EXC_WPARM, 0, 0, NULL);
+}
+void doa3_ebxwp_disarm(void)
+{
+    if (g_ebxwp_armed) RaiseException(DOA3_EXC_WPOFF, 0, 0, NULL);
+}
+/* Pause across the intro sequencer (sub_00021F70 runs the whole opening
+ * movie; a data breakpoint through the decoder would starve it). */
+static int g_ebxwp_paused = 0;
+void doa3_ebxwp_pause(void)
+{
+    if (g_ebxwp_armed) { g_ebxwp_paused = 1; doa3_ebxwp_disarm(); }
+}
+void doa3_ebxwp_resume(void)
+{
+    if (g_ebxwp_paused) { g_ebxwp_paused = 0; doa3_ebxwp_arm(); }
+}
+/* Same, plus esp drift: in this recomp model a callee pops only the dummy
+ * return slot, so esp must come back exactly where it was before the
+ * PUSH32(esp, 0) -- except for callee-clean (ret N) functions, which show a
+ * constant positive delta at every site. Deduped per (caller, callee). */
+void doa3_cs_report2(const char *caller, const char *callee, uint32_t site, uint32_t before, uint32_t esp_before)
+{
+    static struct { const char *a, *b; uint32_t site; int n; } seen[512];
+    static int nseen = 0;
+    int i;
+    for (i = 0; i < nseen; i++)
+        if (seen[i].a == caller && seen[i].b == callee && seen[i].site == site) break;
+    if (i == nseen) { if (nseen >= 512) return; seen[nseen].a = caller; seen[nseen].b = callee; seen[nseen].site = site; seen[nseen].n = 0; nseen++; }
+    if (seen[i].n >= 3) return;
+    seen[i].n++;
+    fprintf(stderr, "[CSCHK2] %s: %s (site 0x%08X) ebx %08X -> %08X, esp %08X -> %08X (d=%+d) fiber=%d\n",
+            caller, callee, site, before, g_ebx, esp_before, g_esp, (int)(g_esp - esp_before), xbox_fiber_current());
+    fflush(stderr);
+}
+/* Callee-saved ebx/esi/edi + esp drift, deduped per (caller, callee, site).
+ * Emitted into the vertex-block walker sub_00157700 and its callees. */
+void doa3_cs_report3(const char *caller, const char *callee, uint32_t site,
+                     uint32_t b, uint32_t sp, uint32_t si, uint32_t di)
+{
+    static struct { const char *a, *b; uint32_t site; int n; } seen[512];
+    static int nseen = 0;
+    int i;
+    for (i = 0; i < nseen; i++)
+        if (seen[i].a == caller && seen[i].b == callee && seen[i].site == site) break;
+    if (i == nseen) { if (nseen >= 512) return; seen[nseen].a = caller; seen[nseen].b = callee; seen[nseen].site = site; seen[nseen].n = 0; nseen++; }
+    if (seen[i].n >= 3) return;
+    seen[i].n++;
+    fprintf(stderr, "[CSCHK3] %s: %s (site 0x%08X)%s%s%s%s ebx %08X->%08X esi %08X->%08X edi %08X->%08X esp %08X->%08X (d=%+d) fiber=%d\n",
+            caller, callee, site,
+            (g_ebx != b) ? " EBX" : "", (g_esi != si) ? " ESI" : "", (g_edi != di) ? " EDI" : "", (g_esp != sp) ? " ESP" : "",
+            b, g_ebx, si, g_esi, di, g_edi, sp, g_esp, (int)(g_esp - sp), xbox_fiber_current());
+    fflush(stderr);
+}
+/* Call-site callee-saved check emitted into sub_00084340_gen and
+ * sub_00021F70_gen: reports a callee that returned with ebx changed. */
+void doa3_cs_report(const char *caller, const char *callee, uint32_t site, uint32_t before)
+{
+    static int n = 0;
+    if (n >= 60) return;
+    n++;
+    fprintf(stderr, "[CSCHK] %s: %s (site 0x%08X) returned with ebx %08X -> %08X esp=%08X fiber=%d\n",
+            caller, callee, site, before, g_ebx, g_esp, xbox_fiber_current());
+    fflush(stderr);
+}
+/* Walk the guest thread's native frames from an exception context. */
+static void doa3_ctx_backtrace(const CONTEXT *src, int max)
+{
+    CONTEXT c = *src;
+    int i;
+    for (i = 0; i < max && c.Rip; i++) {
+        DWORD64 base = 0; PVOID hd = NULL; DWORD64 est = 0;
+        PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &base, NULL);
+        fprintf(stderr, " %llX", (unsigned long long)c.Rip);
+        if (!rf) { c.Rip = *(DWORD64 *)c.Rsp; c.Rsp += 8; continue; }
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, rf, &c, &hd, &est, NULL);
+    }
+}
+/* returns 1 when the exception was ours (always continue execution) */
+static int doa3_ebxwp_veh(DWORD code, PEXCEPTION_POINTERS info)
+{
+    CONTEXT *c = info->ContextRecord;
+    if (code == DOA3_EXC_WPARM || code == DOA3_EXC_WPOFF) {
+        c->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+        if (code == DOA3_EXC_WPARM) {
+            c->Dr0 = (DWORD64)(uintptr_t)&g_ebx;
+            /* L0 | RW0=01 (write) | LEN0=11 (4 bytes) */
+            c->Dr7 = (c->Dr7 & ~0xF0003ull) | 0x1ull | (0x1ull << 16) | (0x3ull << 18);
+            g_ebxwp_armed = 1;
+        } else {
+            c->Dr7 &= ~0xF0003ull; c->Dr0 = 0; g_ebxwp_armed = 0;
+        }
+        fprintf(stderr, "[EBXWP] %s (g_ebx at %p, fiber=%d)\n",
+                g_ebxwp_armed ? "armed" : "disarmed", (void *)&g_ebx, xbox_fiber_current());
+        fflush(stderr);
+        return 1;
+    }
+    if (code == EXCEPTION_SINGLE_STEP && (c->Dr6 & 1)) {
+        uint32_t v = g_ebx;
+        int exact = (v == 0x024AAEA4u);
+        c->Dr6 &= ~0xFull;
+        if ((exact && g_ebxwp_exact < 20) ||
+            (!exact && v >= 0x02000000u && v < 0x03000000u && g_ebxwp_reports < 80)) {
+            if (exact) g_ebxwp_exact++; else g_ebxwp_reports++;
+            fprintf(stderr, "[EBXWP] g_ebx=%08X%s esp=%08X fiber=%d rip=0x%llX bt:",
+                    v, exact ? " EXACT" : "", g_esp, xbox_fiber_current(),
+                    (unsigned long long)c->Rip);
+            doa3_ctx_backtrace(c, 10);
+            fprintf(stderr, "\n");
+            fflush(stderr);
+        }
+        return g_watch_pending ? 0 : 1;
+    }
+    return 0;
+}
 static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
 {
     DWORD code = info->ExceptionRecord->ExceptionCode;
+    if (doa3_ebxwp_veh(code, info)) return EXCEPTION_CONTINUE_EXECUTION;
     /* write-watch single-step: re-protect and resume */
     if (code == EXCEPTION_SINGLE_STEP && g_watch_pending) {
         g_watch_pending = 0;
@@ -577,7 +821,12 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
                 }
             } else {
                 static int s_vals = 0;
-                if (s_vals < 40) {
+                /* DOA3_WATCHNAN=1: only report stores of NaN/Inf floats, so a
+                 * hot matrix slot does not burn the line budget on sane
+                 * values before the corrupting store arrives. */
+                static int s_nan_only = -1;
+                if (s_nan_only < 0) { const char *e = getenv("DOA3_WATCHNAN"); s_nan_only = (e && *e == '1'); }
+                if (s_vals < 400 && (!s_nan_only || (newv & 0x7F800000u) == 0x7F800000u)) {
                     s_vals++;
                     fprintf(stderr, "[WATCHV] xbva=0x%08X = 0x%X (rip 0x%llX)%c",
                             g_watch_last_va, newv,
@@ -587,24 +836,36 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
             }
             g_watch_last_va = 0;
         }
-        if (g_watch_page) {
-            DWORD old;
-            VirtualProtect((LPVOID)g_watch_page, 0x1000, PAGE_READONLY, &old);
-        }
+        if (g_watch_page)
+            watch_protect_all(PAGE_READONLY);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     /* write-watch fault: log new writer RIPs, unprotect, single-step */
     if (code == EXCEPTION_ACCESS_VIOLATION && g_watch_page) {
         uintptr_t f = info->ExceptionRecord->ExceptionInformation[1];
-        if (f >= g_watch_page && f < g_watch_page + 0x1000 &&
+        uint32_t voff = watch_view_offset(f);
+        if (voff >= g_watch_pageoff && voff < g_watch_pageoff + 0x1000 &&
             info->ExceptionRecord->ExceptionInformation[0]) {
             uint32_t rip32 = (uint32_t)info->ContextRecord->Rip;
-            uint32_t xbva = (uint32_t)(f - (uintptr_t)g_xbox_mem_offset);
+            /* guest VA of the write as seen through the PRIMARY view; the
+             * alias it actually came through is logged separately. */
+            uint32_t xbva = voff;
+            {   static int s_alias = 0;
+                if (f < g_watch_page || f >= g_watch_page + 0x1000) {
+                    if (s_alias < 20) { s_alias++;
+                        fprintf(stderr, "[WATCH-ALIAS] write via alias host=%llX (guest-ish 0x%llX) -> xbva=0x%08X rip=0x%llX\n",
+                                (unsigned long long)f,
+                                (unsigned long long)(f - (uintptr_t)g_xbox_mem_offset),
+                                xbva, (unsigned long long)info->ContextRecord->Rip);
+                        fflush(stderr); } } }
             /* focus filter (item 87): the decode-slot index [h+0x35F8]
              * (0xC12DB8) — its writer is the decode-path slot manager we
              * cannot find statically (computed addressing). */
             int slot_idx = watch_slot_state(xbva);
             int interesting = (xbva == 0xC12DB8u) || slot_idx >= 0;
+            if (g_watch_exact_va &&
+                xbva >= g_watch_exact_va && xbva < g_watch_exact_va + g_watch_exact_len)
+                interesting = 1;
             if (!interesting && g_watch_arr_stride) {
                 uint32_t _rel = xbva - g_watch_arr_base;
                 if (xbva >= g_watch_arr_base &&
@@ -634,8 +895,7 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
                         (uint32_t)(f - (uintptr_t)g_xbox_mem_offset));
                 fflush(stderr);
             }
-            DWORD old;
-            VirtualProtect((LPVOID)g_watch_page, 0x1000, PAGE_READWRITE, &old);
+            watch_protect_all(PAGE_READWRITE);
             info->ContextRecord->EFlags |= 0x100;   /* TF: single-step */
             g_watch_pending = 1;
             return EXCEPTION_CONTINUE_EXECUTION;
@@ -720,6 +980,7 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
                             "eax=%08X ecx=%08X edx=%08X ebx=%08X esi=%08X edi=%08X\n",
                     s_wild, _xv, (unsigned long long)info->ContextRecord->Rip,
                     g_blk50380, g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi);
+            { extern void doa3_vbw_dump(void); if (s_wild <= 6) doa3_vbw_dump(); }
             fflush(stderr);
         }
     }
@@ -841,11 +1102,22 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
     } else {
         /* Native (non-Xbox-region) access violation — a real host-side crash, e.g.
          * in the pgraph/D3D11 path. Log it so we can locate the culprit. */
-        fprintf(stderr, "[NATIVE-CRASH] %s 0x%llX rip=0x%llX\n",
-                is_write ? "write" : "read",
-                (unsigned long long)fault,
-                (unsigned long long)info->ContextRecord->Rip);
-        fflush(stderr);
+        {   /* Name the faulting module: a bare rip in a system DLL tells us
+             * nothing, and guessing which of d3d11/dxgi/ntdll it is has
+             * already cost a run. */
+            HMODULE mod = NULL; char modname[MAX_PATH] = "?";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)info->ContextRecord->Rip, &mod) && mod)
+                GetModuleFileNameA(mod, modname, sizeof modname);
+            fprintf(stderr, "[NATIVE-CRASH] %s 0x%llX rip=0x%llX in %s (+0x%llX)\n",
+                    is_write ? "write" : "read",
+                    (unsigned long long)fault,
+                    (unsigned long long)info->ContextRecord->Rip,
+                    modname,
+                    (unsigned long long)(info->ContextRecord->Rip - (uintptr_t)mod));
+            fflush(stderr);
+        }
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -947,6 +1219,7 @@ int main(int argc, char **argv)
 {
     void *xbe_data = NULL; size_t xbe_size = 0;
     (void)argc; (void)argv;
+    doa3_watchdog_start();   /* localise non-faulting hangs (see doa3_watchdog) */
     /* Find the project root so relative asset paths work from any build
      * configuration directory. */
     {
@@ -1046,6 +1319,22 @@ int main(int argc, char **argv)
     {
         extern void nv2a_hook_init(ptrdiff_t xbox_mem_offset);
         nv2a_hook_init(g_xbox_mem_offset);
+        {   /* DOA3 DIAG: record the exact-address write watch target
+             * (DOA3_WATCHVA=<hex guest VA>). The page is armed later, from
+             * doa3_pump_cri_servers once the movie has handed the screen
+             * over -- protecting a hot page for the whole movie perturbs the
+             * decode timing enough to change what happens. */
+            extern uint32_t g_watch_exact_va;
+            const char *wv = getenv("DOA3_WATCHVA");
+            if (wv) {
+                extern uint32_t g_watch_exact_len;
+                const char *wl = getenv("DOA3_WATCHLEN");
+                g_watch_exact_va = (uint32_t)strtoul(wv, NULL, 16);
+                if (wl) g_watch_exact_len = (uint32_t)strtoul(wl, NULL, 16);
+                fprintf(stderr, "  [WATCHVA] will arm on guest 0x%08X\n",
+                        g_watch_exact_va);
+            }
+        }
     }
 
     /* D3D8 push-buffer RAM backing (mirrors burnout3 main.c step 2d/2e).

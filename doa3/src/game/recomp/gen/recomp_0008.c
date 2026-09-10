@@ -7,6 +7,7 @@
 #include "recomp_funcs.h"
 #include <stdio.h>
 #include <math.h>
+extern void doa3_cs_report2(const char *, const char *, uint32_t, uint32_t, uint32_t); /* DOA3 diag */
 
 /**
  * sub_001641BC
@@ -945,6 +946,7 @@ loc_001645C9: ;
 loc_00164610: ;
     if (TEST_NZ(LO8(eax), LO8(eax))) { g_seh_ebp = ebp; sub_00164620(); return; } /* jne: not equal / not zero */
 
+    g_seh_ebp = ebp; sub_00164614(); return; /* DOA3: restored dropped fall-through to sub_00164614 */
 }
 
 /**
@@ -11904,7 +11906,7 @@ loc_0016867A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00168684(void)
+void sub_00168684_oldsse(void)
 {
     xmm128_t xmm0, xmm1, xmm2, xmm3, xmm4, xmm5;
 
@@ -15369,7 +15371,7 @@ loc_00169D5D: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00169D62(void)
+void sub_00169D62_oldfpu2(void)
 {
     #define fp_push(v) (g_fp_stack[--g_fp_top & 7] = (v))
     #define fp_pop() (g_fp_top++)
@@ -18048,7 +18050,7 @@ loc_0016B06C: ;
     ecx = esi + eax;
     PUSH32(esp, ecx);
     PUSH32(esp, edx);
-    PUSH32(esp, 0); sub_001730C0(); /* call 0x001730C0 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_001730C0(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_0016B04A", "sub_001730C0", 0x001730C0, _cb, _cs); } /* call 0x001730C0 */
 
 loc_0016B07C: ;
     esp = esp + 8;
@@ -18067,7 +18069,7 @@ loc_0016B08F: ;
     PUSH32(esp, eax);
     PUSH32(esp, ecx);
     PUSH32(esp, ebx);
-    PUSH32(esp, 0); sub_0016AF80(); /* call 0x0016AF80 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_0016AF80(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_0016B04A", "sub_0016AF80", 0x0016AF80, _cb, _cs); } /* call 0x0016AF80 */
 
 loc_0016B09F: ;
     esp = esp + 0xC;
@@ -23426,7 +23428,7 @@ loc_0016D0D1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0016CFB0(void)
+void sub_0016CFB0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -23475,7 +23477,7 @@ loc_0016CFDF: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0016CFF0(void)
+void sub_0016CFF0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -37180,7 +37182,7 @@ loc_001730FC: ;
     eax = MEM32(edx * 4 + 0x3BF0B4);
     PUSH32(esp, eax);
     PUSH32(esp, ecx);
-    PUSH32(esp, 0); sub_001C7493(); /* call 0x001C7493 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_001C7493(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001730E0", "sub_001C7493", 0x001C7493, _cb, _cs); } /* call 0x001C7493 */
 
 loc_00173117: ;
     esp += 4; return; /* ret */
@@ -39376,7 +39378,7 @@ loc_00173E20: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00173E30(void)
+void sub_00173E30_oldfpu4(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -45516,7 +45518,7 @@ loc_00176597: ;
     PUSH32(esp, esi);
     PUSH32(esp, ecx);
     PUSH32(esp, edx);
-    PUSH32(esp, 0); sub_00176470(); /* call 0x00176470 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00176470(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_00176580_gen", "sub_00176470", 0x00176470, _cb, _cs); } /* call 0x00176470 */
 
 loc_001765AC: ;
     esp = esp + 0x14;
@@ -47007,7 +47009,7 @@ loc_00176F40: ;
     PUSH32(esp, eax);
     PUSH32(esp, 6);
     PUSH32(esp, edi);
-    PUSH32(esp, 0); sub_0017D570(); /* call 0x0017D570 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_0017D570(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_00176F30", "sub_0017D570", 0x0017D570, _cb, _cs); } /* call 0x0017D570 */
 
 loc_00176F4D: ;
     esp = esp + 0xC;
@@ -47017,13 +47019,13 @@ loc_00176F54: ;
     if (CMP_NE(MEM32(esp + 0x10), 1)) goto loc_00176F60; /* jne: not equal / not zero */
 
 loc_00176F5B: ;
-    PUSH32(esp, 0); sub_00175AB0(); /* call 0x00175AB0 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00175AB0(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_00176F30", "sub_00175AB0", 0x00175AB0, _cb, _cs); } /* call 0x00175AB0 */
 
 loc_00176F60: ;
     ebx = MEM32(esp + 0x14);
     PUSH32(esp, ebx);
     PUSH32(esp, edi);
-    PUSH32(esp, 0); sub_0017D710(); /* call 0x0017D710 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_0017D710(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_00176F30", "sub_0017D710", 0x0017D710, _cb, _cs); } /* call 0x0017D710 */
 
 loc_00176F6B: ;
     esp = esp + 8;
@@ -47041,7 +47043,7 @@ loc_00176F86: ;
 loc_00176F8B: ;
     PUSH32(esp, eax);
     PUSH32(esp, 0x217C68);
-    PUSH32(esp, 0); sub_00177910(); /* call 0x00177910 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00177910(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_00176F30", "sub_00177910", 0x00177910, _cb, _cs); } /* call 0x00177910 */
 
 loc_00176F96: ;
     esp = esp + 8;
@@ -47741,7 +47743,7 @@ loc_001774A0: ;
 loc_001774A5: ;
     PUSH32(esp, 0x217EA4);
     MEM32(0xC0F74C) = 0xFFFFFFF5u;
-    PUSH32(esp, 0); sub_00177910(); /* call 0x00177910 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00177910(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00177910", 0x00177910, _cb, _cs); } /* call 0x00177910 */
 
 loc_001774B9: ;
     esp = esp + 4;
@@ -47756,14 +47758,14 @@ loc_001774C3: ;
     PUSH32(esp, esi);
     PUSH32(esp, edi);
     PUSH32(esp, ebx);
-    PUSH32(esp, 0); sub_00176550(); /* call 0x00176550 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00176550(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00176550", 0x00176550, _cb, _cs); } /* call 0x00176550 */
 
 loc_001774D0: ;
     esi = eax;
     eax = MEM32(ebx + 0x14);
     PUSH32(esp, ebx);
     MEM32(esp + 0x18) = eax;
-    PUSH32(esp, 0); sub_00176500(); /* call 0x00176500 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00176500(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00176500", 0x00176500, _cb, _cs); } /* call 0x00176500 */
 
 loc_001774DF: ;
     ecx = MEM32(ebx + 0x18);
@@ -47773,7 +47775,7 @@ loc_001774DF: ;
 
 loc_001774EB: ;
     PUSH32(esp, 0x217E74);
-    PUSH32(esp, 0); sub_00177910(); /* call 0x00177910 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00177910(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00177910", 0x00177910, _cb, _cs); } /* call 0x00177910 */
 
 loc_001774F5: ;
     esp = esp + 4;
@@ -47815,7 +47817,7 @@ loc_0017752A: ;
     PUSH32(esp, eax);
     PUSH32(esp, ecx);
     PUSH32(esp, ebp);
-    PUSH32(esp, 0); sub_00176970(); /* call 0x00176970 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00176970(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00176970", 0x00176970, _cb, _cs); } /* call 0x00176970 */
 
 loc_00177546: ;
     esp = esp + 0x20;
@@ -47828,11 +47830,11 @@ loc_00177554: ;
     PUSH32(esp, 0x217E50);
 
 loc_00177559: ;
-    PUSH32(esp, 0); sub_00177910(); /* call 0x00177910 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00177910(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00177910", 0x00177910, _cb, _cs); } /* call 0x00177910 */
 
 loc_0017755E: ;
     PUSH32(esp, ebp);
-    PUSH32(esp, 0); sub_001771F0(); /* call 0x001771F0 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_001771F0(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_001771F0", 0x001771F0, _cb, _cs); } /* call 0x001771F0 */
 
 loc_00177564: ;
     esp = esp + 8;
@@ -47861,7 +47863,7 @@ loc_00177571: ;
     PUSH32(esp, ecx);
     PUSH32(esp, edx);
     PUSH32(esp, eax);
-    PUSH32(esp, 0); sub_00176330(); /* call 0x00176330 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00176330(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00176330", 0x00176330, _cb, _cs); } /* call 0x00176330 */
 
 loc_0017759B: ;
     ecx = MEM32(0xC0F758);
@@ -47870,11 +47872,11 @@ loc_0017759B: ;
     PUSH32(esp, edx);
     PUSH32(esp, ebx);
     PUSH32(esp, ebp);
-    PUSH32(esp, 0); sub_001766E0(); /* call 0x001766E0 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_001766E0(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_001766E0", 0x001766E0, _cb, _cs); } /* call 0x001766E0 */
 
 loc_001775B0: ;
     PUSH32(esp, ebp);
-    PUSH32(esp, 0); sub_00176820(); /* call 0x00176820 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00176820(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00176820", 0x00176820, _cb, _cs); } /* call 0x00176820 */
 
 loc_001775B6: ;
     esp = esp + 0x34;
@@ -47889,7 +47891,7 @@ loc_001775C0: ;
 loc_001775C7: ;
     PUSH32(esp, 0);
     PUSH32(esp, 0);
-    PUSH32(esp, 0); sub_00170AB0(); /* call 0x00170AB0 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00170AB0(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00170AB0", 0x00170AB0, _cb, _cs); } /* call 0x00170AB0 */
 
 loc_001775D0: ;
     esp = esp + 8;
@@ -47921,7 +47923,7 @@ loc_001775E4: ;
     PUSH32(esp, 3);
     PUSH32(esp, edx);
     MEM32(ebp + 0x78) = ecx;
-    PUSH32(esp, 0); sub_0017D5D0(); /* call 0x0017D5D0 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_0017D5D0(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_0017D5D0", 0x0017D5D0, _cb, _cs); } /* call 0x0017D5D0 */
 
 loc_00177623: ;
     esp = esp + 0xC;
@@ -47939,7 +47941,7 @@ loc_0017762C: ;
     MEM8(ebp + 0x7D) = 0;
     MEM8(ebp + 0x7E) = 0;
     MEM8(ebp + 0x7F) = 0;
-    PUSH32(esp, 0); sub_0016E060(); /* call 0x0016E060 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_0016E060(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_0016E060", 0x0016E060, _cb, _cs); } /* call 0x0016E060 */
 
 loc_0017764D: ;
     esp = esp + 4;
@@ -47955,7 +47957,7 @@ loc_0017764D: ;
     esp += 4; return; /* ret */
 
     PUSH32(esp, 0x217ED0);
-    PUSH32(esp, 0); sub_00177910(); /* call 0x00177910 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00177910(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00177910", 0x00177910, _cb, _cs); } /* call 0x00177910 */
 
 loc_00177682: ;
     esp = esp + 4;
@@ -47967,7 +47969,7 @@ loc_00177686: ;
     PUSH32(esp, eax);
     eax = MEM32(esp + 0x10);
     PUSH32(esp, eax);
-    PUSH32(esp, 0); sub_00177270(); /* call 0x00177270 */
+    { uint32_t _cb = ebx, _cs = esp; PUSH32(esp, 0); sub_00177270(); if (ebx != _cb || esp != _cs) doa3_cs_report2("sub_001773F0", "sub_00177270", 0x00177270, _cb, _cs); } /* call 0x00177270 */
 
 loc_00177695: ;
     esp = esp + 0x10;
@@ -51783,6 +51785,7 @@ loc_00179326: ;
     esp = esp + 4;
     if (CMP_NE(eax, 4)) { sub_00179336(); return; } /* jne: not equal / not zero */
 
+    sub_0017932E(); return; /* DOA3: restored dropped fall-through to sub_0017932E */
 }
 
 /**
@@ -52111,6 +52114,7 @@ loc_00179488: ;
     edx = ecx + 4;
     if (CMP_NE(ebp, edx)) { g_seh_ebp = ebp; sub_001794B2(); return; } /* jne: not equal / not zero */
 
+    g_seh_ebp = ebp; sub_00179493(); return; /* DOA3: restored dropped fall-through to sub_00179493 */
 }
 
 /**
@@ -52656,7 +52660,7 @@ loc_001797E6: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001797FF(void)
+void sub_001797FF_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -54272,7 +54276,7 @@ loc_0017A283: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017A2A0(void)
+void sub_0017A2A0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

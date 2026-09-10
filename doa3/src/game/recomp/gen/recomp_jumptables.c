@@ -5131,7 +5131,7 @@ loc_0003D785: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0003DAE0(void)
+void sub_0003DAE0_oldfpu4(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -6206,7 +6206,7 @@ loc_0004D4AA: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0004D580(void)
+void sub_0004D580_oldfpu3(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -6952,7 +6952,7 @@ loc_0006A928: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0006C560(void)
+void sub_0006C560_oldfpu4(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -9737,7 +9737,7 @@ loc_0007DF66: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00080CC0(void)
+void sub_00080CC0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -11134,7 +11134,7 @@ loc_00086BF3: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000977A0(void)
+void sub_000977A0_oldfpu2(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -11837,7 +11837,7 @@ loc_00097D12: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000978E9(void)
+void sub_000978E9_oldfpu2(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -12388,7 +12388,7 @@ loc_00097D58: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_000978F4(void)
+void sub_000978F4_oldfpu2(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -35955,6 +35955,7 @@ loc_0018E093: ;
     SET_LO8(eax, LO8(eax) + LO8(eax));
     if (_flags /* loopne: loopne */) { g_seh_ebp = ebp; sub_0018E0AF(); return; }
 
+    g_seh_ebp = ebp; sub_0018E098(); return; /* DOA3: restored dropped fall-through to sub_0018E098 */
 }
 
 /**
@@ -38984,7 +38985,7 @@ loc_001C4047: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C408A_gen(void)
+void sub_001C408A_oldfpu2(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

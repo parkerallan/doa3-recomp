@@ -30,7 +30,7 @@
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00080020(void)
+void sub_00080020_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -82,7 +82,7 @@ loc_00080064: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00080070(void)
+void sub_00080070_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */

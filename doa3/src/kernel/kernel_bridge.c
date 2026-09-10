@@ -1308,6 +1308,8 @@ static void bridge_KeDelayExecutionThread(void)
     g_eax = 0; /* STATUS_SUCCESS (timeout elapsed) */
 }
 
+int g_kernel_trace_reads = 0;
+extern void (*g_kernel_ptinfo_hook)(const char *where);
 static void bridge_NtReadFile(void)
 {
     HANDLE   handle     = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
@@ -1343,9 +1345,13 @@ static void bridge_NtReadFile(void)
         result = ReadFile(handle, buffer, length, &bytes_read, NULL);
     }
 
+    if (g_kernel_ptinfo_hook) g_kernel_ptinfo_hook("ntread");
     {
+        /* DOA3 DIAG: the first 16 reads cover boot; g_kernel_trace_reads is
+         * raised by the game once the intro movie is over so the post-movie
+         * resource loads (few, and the ones that arrive empty) are visible. */
         static int s_read_log = 0;
-        if (s_read_log < 16) {
+        if (s_read_log < 16 || g_kernel_trace_reads) {
             s_read_log++;
             fprintf(stderr, "  [NTREAD] h=0x%X buf=0x%08X len=0x%X off=%s%u res=%d bytes=0x%lX err=%lu b0..3=%02X %02X %02X %02X\n",
                     (uint32_t)(uintptr_t)handle, buffer_va, length,
@@ -1732,6 +1738,12 @@ static void bridge_NtQueryDirectoryFile(void)
         if (s_qdir_enum[i].dir == handle && s_qdir_enum[i].find) { slot = i; break; }
 
 
+    {   static int s_call_log = 0;
+        if (s_call_log < 24) { s_call_log++;
+            fprintf(stderr, "  [QDIR-CALL] handle=%p mask_va=%08X restart=%u slot=%d\n",
+                    handle, filename_va, restart, slot);
+            fflush(stderr); } }
+
     if (filename_va || restart || slot < 0) {
         /* (Re)start the enumeration. */
         if (slot >= 0) { FindClose(s_qdir_enum[slot].find); s_qdir_enum[slot].find = NULL; }
@@ -1769,6 +1781,15 @@ static void bridge_NtQueryDirectoryFile(void)
                 s_qdir_log++;
                 fprintf(stderr, "  [QDIR] start search='%S' -> %s\n", search_path,
                         (fh == INVALID_HANDLE_VALUE) ? "NO_SUCH_FILE" : "found-first");
+                {   /* Name the guest scanner: it takes one entry per directory
+                     * and stops, which is why the wxCi cache registry holds
+                     * only '\bgm.afs'. */
+                    void *bt[10]; USHORT nb = CaptureStackBackTrace(1, 10, bt, NULL); int bi;
+                    fprintf(stderr, "  [QDIR-BT]");
+                    for (bi = 0; bi < nb; bi++)
+                        fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[bi]);
+                    fprintf(stderr, "\n");
+                }
                 fflush(stderr);
             }
             if (fh == INVALID_HANDLE_VALUE) {
@@ -1801,6 +1822,11 @@ static void bridge_NtQueryDirectoryFile(void)
                 more = FindNextFileW(s_qdir_enum[slot].find, &fd);
             } while (more && qdir_is_dot_entry(fd.cFileName));
             have_entry = more ? 1 : 0;
+            {   static int s_cont_log = 0;
+                if (s_cont_log < 24) { s_cont_log++;
+                    fprintf(stderr, "  [QDIR-NEXT] slot=%d more=%d name='%S'\n",
+                            slot, more ? 1 : 0, more ? fd.cFileName : L"(none)");
+                    fflush(stderr); } }
         }
         if (have_entry) {
             /* fall through with the entry */

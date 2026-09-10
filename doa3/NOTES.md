@@ -140,6 +140,173 @@ compensation. The current implementation includes:
 The helper implements unsigned packed-byte averaging with Xbox/MMX rounding:
 `(a + b + 1) >> 1` for each byte.
 
+### x87 control word and `frndint` rounding mode
+
+The lifter emitted `fnstcw`/`fldcw` as comments and translated `frndint` as
+host `rint()` (round-to-nearest). The CRT `floor()` (`sub_0018DE71`) sets the
+rounding mode to "down" with `fldcw` around `frndint`, then reads the old
+control word back through `_ctrlfp` (`sub_00191A4D`) to decide which
+exceptions are masked. With neither modelled, `floor(x)` rounded to nearest,
+flagged the result inexact, read stack garbage as the mask, and took its
+exception path (`RtlRaiseException 0xC000008F`). On that path `_except1`
+(`sub_00191848`) tail-jumps internally and leaves `g_seh_ebp` at its own
+frame, and the fragment `sub_0018DF33` falls into the epilogue
+`sub_0018DF3B` (`mov esp, ebp`) without restoring it, so `floor()` returned
+with esp 52 bytes low.
+
+The Sofdec timecode splitter (`sub_001796F0` -> `sub_001797FF`) calls this
+`floor()` once per picture through `sub_001809E0` and then reads its output
+pointer from `[esp+0x20]`; with esp shifted it read a leftover double
+(`0x3FE0....`) as the pointer and wrote four dwords through it every frame of
+the intro movie. Those writes landed in the loadfile.afs partition
+sector-size table at `0x4BDA20+0x116`, so every post-movie resource load
+resolved to the wrong file offset and the title screen never got its data.
+
+Current fixes:
+
+- `g_x87_cw` (`xbox_memory_layout.c`, default 0x027F) and `x87_frndint()`
+  (`recomp_types.h`) model the control word; `tools/recomp/lifter.py` emits
+  `MEM16(m) = g_x87_cw` / `g_x87_cw = MEM16(m)` for `fnstcw`/`fldcw` and
+  `x87_frndint()` for `frndint`. The same translation was applied to every
+  live site in `src/game/recomp/gen/` (13 `fnstcw`, 18 `fldcw`, 39 `frndint`).
+- `sub_0018DF33` (`recomp_0009.c`) saves and restores `g_seh_ebp` around its
+  call to `sub_00191848`.
+
+Measured result: `floor` returns +4, no float exception is raised, the
+timecode output lands on the stack, the partition table is intact after the
+movie, and the post-movie loads read `XPR0` data.
+
+### Packed SSE (xmm as 128-bit lanes)
+
+The lifter modelled every xmm register as one `float`: `movaps` moved 4 of
+16 bytes and `mulps`/`addps`/`subps`/`shufps`/`cmpneqps`/`orps` were emitted
+as comments. The XDK maths library (matrix copy, multiply, inverse,
+translate on the matrix stack at `0x90FAA0`) is built from those, so the
+post-movie camera/model matrices came out NaN and every vertex of the title
+screen collapsed.
+
+`tools/recomp/lifter.py` now translates the SSE set through `xmm128_t` and
+the `xmm_*` helpers in `recomp_types.h` (`translator.py` declares xmm
+registers as `xmm128_t`); `comiss`/`ucomiss` set `_fpu_cmp` for the
+following `jcc`. The 11 functions in the image that use xmm were re-emitted
+into `src/game/recomp/gen/recomp_sse.c`; their previous bodies remain as
+`sub_*_oldsse`. `sub_001B7E50` keeps its `recomp_manual.c` wrapper (body is
+`sub_001B7E50_gen`).
+
+### Dropped fall-through in the D3D state applier
+
+`sub_001B632C` (`recomp_cffix.c`) lost its fall-through into the shared
+epilogue `sub_001B63E5` during the cffix re-emission and returned with its
+four pushes still on the stack (-24 bytes); the flusher `sub_001B7690` then
+lost esi/ebx and the lazy vertex apply walked wild pointers on the first
+post-movie draw. Restored.
+
+### Function pointer target `sub_000E5590`
+
+Reached only through the callback table built at `sub_000B8xxx`
+(`recomp_0005.c`: `[ebp-56] = 0xE5590`); binds the post-movie screen's four
+texture stages. Seeded in `functions.json` and emitted into
+`recomp_extra2.c`.
+
+### Dropped x87 arithmetic in functions emitted before bug #13
+
+234 live functions still carried `/* FPU: fsubr|fdivr|fidiv|fimul|fiadd|
+fisub|fdivrp|fsubrp ... */` comments -- instructions the pre-bug-#13 lifter
+dropped -- because they were never in the fpuarith re-emission batch. One of
+them is the character position update `sub_000910B9` (writes the position
+table at `0x4BB950 + 16*i`), whose dropped `fsubr` produced NaN positions
+after the movie and so NaN camera/model matrices. They were re-emitted with
+the current lifter into `src/game/recomp/gen/recomp_fpu2.c` (previous
+bodies kept as `sub_*_oldfpu2`; 31 restored fall-throughs transplanted).
+The remaining `/* FPU: fnsave|frstor|fnclex|ffree|fxam */` sites are CRT
+state save/restore and were dropped before as well.
+
+### Dropped `fld st(i)` / `fstp st(0)` in hand-emitted units
+
+13 live functions (the `recomp_extra2.c` animation helpers `sub_00095430`,
+`sub_000954E0`, `sub_000955B0`, `sub_00046030`, and nine in `recomp_fpufix.c`
+/ `recomp_jumptables.c`) still had `fld st(i)` and `fstp st(0)` as bare
+comments (emitted before recomp bug #12 was fixed). A dropped load with a
+kept pop unbalances the global x87 stack index by one per call, which is how
+the character base positions at `0x4BAFD0 + 0xE8*k` became NaN after the
+movie. Re-emitted into `src/game/recomp/gen/recomp_fpu3.c` (previous bodies
+`sub_*_oldfpu3`). Rule for any hand emission: run it through the CURRENT
+lifter and grep the result for bare `/* f... */` lines before committing it.
+
+### Fall-throughs after a conditional tail-call, and statement-less fragments
+
+`tools/recomp/fix_fallthroughs.py` decided that a body was terminated when its
+last statement contained `return`; the lifter's conditional tail-call form
+`if (...) { g_seh_ebp = ebp; sub_X(); return; }` (a `jcc` whose not-taken
+path continues into the next function) matched that test, and a fragment
+with no statements at all (a lone `test esi,esi` before a split epilogue)
+never reached it. Both classes lost their fall-through.
+
+- `sub_0019037C` (the `write_multi_char` loop body of the CRT `_output`) ended
+  in `je -> sub_00190395` with no continuation into `sub_0019038F` (`pop esi;
+  pop ebp; ret`), so every `sprintf` with a padded field returned 12 bytes low
+  and `_output`'s final `pop ebx` read a pushed pointer. The boot task
+  `sub_00084340` keeps ebx = 0 across its init chain and compares
+  `[0x4B83AD]` against `bl`; with ebx = 0x024AAEA4 the post-movie attract gate
+  at 0x00084479 never cleared and the screen id stayed at 5.
+- `sub_001579A0` (the `test esi,esi` at the exit of the vertex-block walker
+  `sub_00157700`) had no statements and no fall-through into `sub_001579A2`
+  (`jne loop; pop edi; pop esi; pop ebx; add esp,0x88; ret`): every walker
+  call returned 0x94 bytes low with ebx/esi/edi unpopped, the caller's index
+  loop in `sub_00152B9A` walked off its 4-entry table and the run died on the
+  fault-skip cap about a minute into the title screen.
+
+The tool now treats a trailing `if (...)` line as a jcc and restores the
+fall-through for empty bodies (`not last or not term`); `FIX_DRYRUN=1` lists
+candidates without writing. Rerun restored 85 + 9 fragments in the game
+`.text` range. The four non-`if` candidates in `recomp_ctors.c` /
+`recomp_vtbl.c` target padding (`sub_0019B000`, `sub_001A4000`, ...) and were
+not applied.
+
+Measured: ebx stays 0 through `sub_000833C0`, screen id 5 -> 1, ~250 array
+draws per frame, the walker's boundary check shows only the +4 of the dummy
+return slot, no wild reads in the title phase. FMV unchanged (568 frames).
+
+### Composite matrix convention in the array-draw path
+
+`SET_COMPOSITE_MATRIX` rows are the coefficients of each output component
+(the D3D runtime uploads the row-vector matrix transposed), and the Xbox D3D
+folds the viewport (`proj x [w/2, -h/2, 2^24-1; x0+w/2, y0+h/2]`, visible in
+the game's `[MATMUL]`) into it, so `c.xy / w` is already the pixel position.
+`nv_transform_clip` in `src/nv2a/nv2a_pgraph_d3d11.c` multiplied the
+transpose and then applied `SET_VIEWPORT_SCALE/OFFSET` again, which put the
+2^24 z-scale into w and collapsed every title-screen draw to one point. Now
+`c[i] = dot(in, row i)`, screen = `c.xy / w`, z = `(c.z / w) / vp_scale.z`.
+Pre-movie screens issue no array draws, so this path cannot affect the FMV.
+User-observed: real stage geometry after the movie.
+
+### Title-screen array path: render target, depth test, near-plane clipping
+
+Three more pieces were needed before the title stage was visible for more
+than one frame (all in `src/nv2a/nv2a_pgraph_d3d11.c` / `src/d3d/d3d8_device.c`):
+
+- **Render target.** Every frame the guest binds a 256x256 texture surface
+  (reflection/shadow pass: clear + a few draws) before the back buffer. The
+  compat layer's `SetRenderTarget` is a no-op and the translator ignored
+  `NV097_SET_SURFACE_COLOR_OFFSET`, so that pass and its clear landed on the
+  swap chain. The surface clip rectangle (0x0200/0x0204, which arrives after
+  the colour offset) now selects the target lazily at each clear/draw:
+  `nv_sync_render_target` binds an offscreen D3D11 target of the clip size
+  (`d3d8_SetOffscreenTarget`) and restores the swap chain when the clip is the
+  guest frame size (720x480 -- not the 640x480 host back buffer). `dev_Clear`
+  clears whichever target is bound. The offscreen result is not yet fed back
+  to draws that sample it.
+- **Depth.** `nv_apply_draw_state` forced `D3DRS_ZENABLE = FALSE` (2D menu
+  state); it now follows `SET_DEPTH_TEST_ENABLE`. Without it the stage wall
+  drawn last covered the scene.
+- **Clipping.** XYZRHW cannot represent w <= 0. Batches with any vertex behind
+  the eye or the near plane are rebuilt in clip space from the transformed
+  output, clipped against Zc >= 0 (Sutherland-Hodgman, attributes interpolated
+  pre-divide) and re-projected; strips/fans become triangle lists only then.
+  `DOA3_NOCLIP=1` bypasses it for A/B. `DOA3_FLIPW=1` (negate the homogeneous
+  position) was tested and is wrong: the game's own w sign is correct.
+
+
 ## Regeneration Contract
 
 A full pipeline regeneration can overwrite generated fixes. Run from `doa3/`:
@@ -167,6 +334,10 @@ After regeneration:
    `ebp` is overwritten.
 5. Confirm generated PSGSFD code emits `mmx_pavgb`; the lifter mapping should
    make this survive regeneration.
+6. Confirm `fnstcw`/`fldcw`/`frndint` emit the `g_x87_cw` / `x87_frndint`
+   forms (the lifter now does this) and that `sub_0018DF33` still preserves
+   `g_seh_ebp` across `sub_00191848` -- a fragment-boundary fix the lifter
+   does not yet make on its own.
 6. Build Release and run the opening movie before accepting regenerated output.
 
 Do not edit generated files casually. When a generated correction is general,

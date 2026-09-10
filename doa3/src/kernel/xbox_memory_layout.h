@@ -106,6 +106,7 @@ BOOL xbox_IsXboxAddress(uintptr_t address);
  * Returns NULL if memory layout is not initialized.
  */
 void *xbox_GetMemoryBase(void);
+size_t xbox_GetMemorySize(void);   /* size of one view (mirrors repeat at this stride) */
 
 /**
  * Get the offset from Xbox VA to actual mapped address.
@@ -154,8 +155,17 @@ ptrdiff_t xbox_GetMemoryOffset(void);
 
 /** Base VA of the stack area (above last XBE section).
  *  DOA3's image (incl. BSS, DOLBY, $$XTIMAGE) extends to ~0x00C31500, so the
- *  stack must sit above that, unlike Burnout 3 (which ended near 0x00770000). */
-#define XBOX_STACK_BASE     0x00D00000
+ *  stack must sit above that, unlike Burnout 3 (which ended near 0x00770000).
+ *
+ *  Sits directly above the fake TLS/RW-data pages (xbox_memory_layout.c) with
+ *  no padding, because everything below XBOX_HEAP_BASE is low-heap space the
+ *  game cannot use. Once D3DDevice_CreateDevice started allocating its real
+ *  720x480 depth buffer (1,474,560 bytes -- it had been getting a 4096-byte
+ *  stub from a garbage descriptor) the game's own allocations came to
+ *  51.7 MB against a 51.4 MB heap and the asset loader died with
+ *  "E9040828:'flid' is range outside". Dropping the base from 0x00D00000
+ *  reclaims the 768 KB of dead gap between the image and the stack. */
+#define XBOX_STACK_BASE     0x00C40000
 
 /** Initial ESP value (top of stack, 16-byte aligned). */
 #define XBOX_STACK_TOP      (XBOX_STACK_BASE + XBOX_STACK_SIZE - 16)

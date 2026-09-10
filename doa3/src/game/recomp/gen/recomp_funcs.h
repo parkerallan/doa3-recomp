@@ -5322,6 +5322,7 @@ void sub_000E54C2(void);
 void sub_000E54D0(void);
 void sub_000E54F0(void);
 void sub_000E5540(void);
+void sub_000E5590(void);
 void sub_000E55E0(void);
 void sub_000E5640(void);
 void sub_000E5691(void);

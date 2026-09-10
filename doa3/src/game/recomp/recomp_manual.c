@@ -106,7 +106,8 @@ void sub_00170330(void)
  * fiber layer (xbox_fiber.c direct-switch coroutines). Handles are encoded as
  * 0xF1BE0000|index; any foreign handle (e.g. the ConvertThreadToFiber main-fiber
  * pointer stored at 0x5E5C48) means "switch back to the dispatcher fiber". */
-extern int  xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param);
+extern int  xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param,
+                                      uint32_t stack_size);
 extern void xbox_fiber_destroy(int idx);
 extern void xbox_fiber_switch_direct(int idx);
 extern int  xbox_fiber_current(void);
@@ -116,11 +117,12 @@ extern int  xbox_fiber_current(void);
 void sub_00164F50(void)
 {
     extern uint32_t g_eax, g_esp;
+    uint32_t stack_sz = MEM32(g_esp + 4);   /* arg0: the size the game asked for */
     uint32_t routine = MEM32(g_esp + 8);
     uint32_t param   = MEM32(g_esp + 0xC);
-    int idx = xbox_fiber_create_dormant(routine, param);
+    int idx = xbox_fiber_create_dormant(routine, param, stack_sz);
     static int n = 0;
-    if (n < 24) { fprintf(stderr, "[XFIBER] create routine=0x%08X param=0x%08X -> #%d\n", routine, param, idx); fflush(stderr); n++; }
+    if (n < 24) { fprintf(stderr, "[XFIBER] create routine=0x%08X param=0x%08X stack=%u -> #%d\n", routine, param, stack_sz, idx); fflush(stderr); n++; }
     g_eax = (idx > 0) ? (XFIBER_TAG | (uint32_t)idx) : 0;
     g_esp += 16;
 }
@@ -254,7 +256,8 @@ void sub_001719E0(void)
     static uint32_t s_sig = 0xFFFFFFFF; static int n = 0;
     if (h && MEM8(h)) {
         uint32_t sig = (MEM8(h + 1) << 24) | (MEM32(h + 0x148) << 16) | (MEM32(0xB25618) & 0xFFFF);
-        if (sig != s_sig && n < 24) {
+        extern volatile int g_doa3_post_movie;
+        if (sig != s_sig && (n < 24 || g_doa3_post_movie)) {
             s_sig = sig; n++;
             fprintf(stderr, "[WX-REQ] h=0x%08X active=%u st=%u req148=%u lock=%u async=%u pos18=0x%X len1C=0x%X\n",
                     h, MEM8(h), MEM8(h + 1), MEM32(h + 0x148),
@@ -441,7 +444,8 @@ void sub_0016CA10(void)
     uint32_t fname = MEM32(g_esp + 4);
     char nm[48]; int i; for (i = 0; i < 47; i++) { nm[i] = fname ? (char)MEM8(fname + i) : 0; if (!nm[i]) break; } nm[47] = 0;
     static int n = 0;
-    if (n < 16) { fprintf(stderr, "[cvFsOpen] fname=0x%08X '%s'\n", fname, nm); fflush(stderr); n++; }
+    extern volatile int g_doa3_post_movie;
+    if (n < 16 || g_doa3_post_movie) { fprintf(stderr, "[cvFsOpen] fname=0x%08X '%s'\n", fname, nm); fflush(stderr); n++; }
     sub_0016CA10_gen();
 }
 
@@ -887,11 +891,61 @@ void sub_0007E720(void)
 {
     static int s_n = 0;
     uint32_t a1 = MEM32(esp + 4), a2 = MEM32(esp + 8);
+    uint32_t esp0 = esp;
     sub_0007E720_gen();
     s_n++;
-    if (s_n <= 10) {
+    if (s_n <= 40) {
         fprintf(stderr, "[LDW-OP] #%d a1=0x%08X a2=0x%08X -> eax=0x%08X (op tbl0=0x%08X)\n",
                 s_n, a1, a2, eax, MEM32(0x4A10A8));
+        {   void *bt[10]; int nb = CaptureStackBackTrace(1, 10, bt, NULL), k;
+            fprintf(stderr, "  [LDW-BT]");
+            for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+            fprintf(stderr, "%c", 10); }
+        if (a1 & 0x8000u) {
+            /* named load: the "T:\%s" path is sprintf'd into the frame at
+             * entry_esp-0x3C (sub_0007E720: sub esp,40h; push ebx; push esi;
+             * lea ecx,[esp+0Ch]) and is still intact after the return. */
+            char nm[48]; int k;
+            for (k = 0; k < 47; k++) { nm[k] = (char)MEM8(esp0 - 0x3C + k); if (!nm[k]) break; }
+            nm[k] = 0;
+            fprintf(stderr, "[LDW-NAME] #%d '%s'\n", s_n, nm);
+        }
+        {   /* ADXF partition info (sub_00168E95): block = [0xC07640+4*ptid],
+             * base sector u16 at +0x114, u16 sector sizes at +0x116+2*id,
+             * sector(id) = base + sum(sizes[0..id)). Sample it on every load
+             * so a corrupted table shows up against the boot values. */
+            int pt;
+            for (pt = 0; pt < 4; pt++) {
+                uint32_t blk = MEM32(0xC07640 + 4u * pt);
+                uint32_t sum = 0, i; char fn[24];
+                if (blk < 0x10000 || blk >= 0x08000000u) continue;
+                for (i = 0; i < 0x21D; i++) sum += MEM16(blk + 0x116 + 2u * i);
+                for (i = 0; i < 23; i++) { fn[i] = (char)MEM8(blk + 0x10 + i); if (!fn[i]) break; }
+                fn[i] = 0;
+                fprintf(stderr, "[PTINFO] pt%d blk=%08X next=%08X cnt=%u fn='%s' base=%04X sz[0]=%04X sz[1]=%04X sz[15]=%04X sz[16]=%04X sz[40]=%04X sz[21D]=%04X sect(21D)=%X\n",
+                        pt, blk, MEM32(blk), MEM16(blk + 0xC), fn, MEM16(blk + 0x114),
+                        MEM16(blk + 0x116), MEM16(blk + 0x118), MEM16(blk + 0x116 + 2 * 0x15),
+                        MEM16(blk + 0x116 + 2 * 0x16), MEM16(blk + 0x116 + 2 * 0x40),
+                        MEM16(blk + 0x116 + 2 * 0x21D), MEM16(blk + 0x114) + sum);
+            }
+        }
+        {   /* DOA3 DIAG: DOA3_WATCHVA_EARLY=1 arms the exact-address write
+             * watch here, at the second boot load (the table is verified
+             * intact by the [PTINFO] line above), instead of after the movie,
+             * to catch the writer that corrupts the loadfile.afs partition
+             * table during the movie. */
+            extern uint32_t g_watch_exact_va;
+            extern void doa3_watch_arm(uint32_t xb_page);
+            static int s_early = 0;
+            if (s_n == 2) { extern void (*g_kernel_ptinfo_hook)(const char *); extern void doa3_ptinfo_check(const char *);
+                            g_kernel_ptinfo_hook = doa3_ptinfo_check; doa3_ptinfo_check("ldw-op2"); }
+            if (s_n == 2 && g_watch_exact_va && !s_early && getenv("DOA3_WATCHVA_EARLY")) {
+                s_early = 1;
+                doa3_watch_arm(g_watch_exact_va & ~0xFFFu);
+                fprintf(stderr, "[WATCHVA] armed EARLY on guest 0x%08X (now = 0x%08X)\n",
+                        g_watch_exact_va, MEM32(g_watch_exact_va));
+            }
+        }
         fflush(stderr);
     }
 }
@@ -963,9 +1017,21 @@ void sub_00068D90(void) {
 
 CALL_COUNT_PROBE(sub_0008038C)
 CALL_COUNT_PROBE(sub_000804EB)
-CALL_COUNT_PROBE(sub_0006B7E0)
+void sub_0006B7E0_gen(void);
+void sub_0006B7E0(void) {
+    static int n = 0; int log = (n < 4); n++;
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0006B7E0 enter\n"); fflush(stderr); }
+    sub_0006B7E0_gen();
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0006B7E0 exit (eax=0x%X)\n", eax); fflush(stderr); }
+}
 CALL_COUNT_PROBE(sub_0006AAA0)
-CALL_COUNT_PROBE(sub_0006AD20)
+void sub_0006AD20_gen(void);
+void sub_0006AD20(void) {
+    static int n = 0; int log = (n < 4); n++;
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0006AD20 enter\n"); fflush(stderr); }
+    sub_0006AD20_gen();
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0006AD20 exit (eax=0x%X)\n", eax); fflush(stderr); }
+}
 CALL_COUNT_PROBE(sub_0006ACD0)
 CALL_COUNT_PROBE(sub_0006AADC)
 CALL_COUNT_PROBE(sub_0006AD6A)
@@ -2570,9 +2636,10 @@ void sub_0016AE80(void)
         MEM32(esp + 8) = 0x800;  /* clamp: minimal sane ring */
     }
     sub_0016AE80_gen();
-    if (s_n < 40) { s_n++;
-        fprintf(stderr, "[SJ] #%d a1=0x%X a2=0x%X -> 0x%X\n", s_n, a1, a2, eax);
-        fflush(stderr); }
+    {   extern volatile int g_doa3_post_movie;
+        if (s_n < 40 || g_doa3_post_movie) { s_n++;
+            fprintf(stderr, "[SJ] #%d a1=0x%X a2=0x%X -> 0x%X\n", s_n, a1, a2, eax);
+            fflush(stderr); } }
 }
 void sub_0016E060_gen(void);
 void sub_0016E060(void)
@@ -2744,13 +2811,234 @@ void sub_0017C980(void)
     void name(void) { \
         extern void name##_gen(void); \
         static int n = 0; \
-        int log = (n < 4); n++; \
+        int log = (n < 60); n++; \
         if (log) { fprintf(stderr, "[BOOTMARK] " #name " enter\n"); fflush(stderr); } \
         name##_gen(); \
         if (log) { fprintf(stderr, "[BOOTMARK] " #name " exit (eax=0x%X)\n", eax); fflush(stderr); } \
     }
+/* The resource-load service (sub_000804EB) keeps the slot pointer in ESI
+ * across its callees and, on completion at 0x00080646, writes the request key
+ * back through it: [esi+3] = [esi+1], [esi+4] = [esi+2]. ESI is callee-saved,
+ * but the recompiled callees drop it (the split-epilogue class), so the
+ * completed resource is filed under key (0xFF,0xFF) instead of its real one.
+ * sub_0007ED10 then never finds it and sub_00074470 retries forever, which is
+ * what keeps the screen dispatcher out of its loop. Enforce the ABI. */
+#define ABI_MARK2(name) \
+    void name##_gen(void); \
+    void name(void) { \
+        uint32_t _di = edi, _si = esi, _bx = ebx; \
+        static int n = 0; int log = (n < 60); n++; \
+        if (log) { fprintf(stderr, "[BOOTMARK] " #name " enter esi=%08X\n", esi); fflush(stderr); } \
+        name##_gen(); \
+        edi = _di; esi = _si; ebx = _bx; \
+        if (log) { fprintf(stderr, "[BOOTMARK] " #name " exit (eax=0x%X)\n", eax); fflush(stderr); } \
+    }
+#define ABI_MARK(name) \
+    void name##_gen(void); \
+    void name(void) { \
+        uint32_t _di = edi, _si = esi, _bx = ebx; \
+        name##_gen(); \
+        edi = _di; esi = _si; ebx = _bx; \
+    }
 BOOT_MARK2(sub_000833E0)         /* boot task stage driver (enter/exit) */
-BOOT_MARK2(sub_00084340)         /* boot task body (enter/exit) */
+/* boot task body (enter/exit) + arms the g_ebx data breakpoint (DOA3_EBXWP=1)
+ * across its one-time init chain; sub_00084340_gen disarms it at loop top. */
+void sub_00084340(void) {
+    extern void sub_00084340_gen(void);
+    extern void doa3_ebxwp_arm(void);
+    static int n = 0;
+    int log = (n < 60); n++;
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_00084340 enter\n"); fflush(stderr); }
+    doa3_ebxwp_arm();
+    sub_00084340_gen();
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_00084340 exit (eax=0x%X)\n", eax); fflush(stderr); }
+}
+/* sub_00084340's one-time init chain, between the intro sequencer and the
+ * screen loop at 0x00084430. The loop calls sub_000821B0 unconditionally on
+ * every iteration and that never happens, while sub_00084340 has entered and
+ * not exited -- so one of these does not return and the screen dispatcher
+ * never starts. */
+/* sub_00082060's callees: it enters and never returns. */
+BOOT_MARK2(sub_00050940)
+BOOT_MARK2(sub_0009EF10)
+BOOT_MARK2(sub_0009F540)
+BOOT_MARK2(sub_0009F010)
+BOOT_MARK2(sub_0007F790)
+BOOT_MARK2(sub_0007FE50)
+BOOT_MARK2(sub_0007E510)
+BOOT_MARK2(sub_0009DB30)
+BOOT_MARK2(sub_0009D8F0)
+BOOT_MARK2(sub_0007E300)
+/* sub_0006AD20 is a wait loop: it polls sub_0006E050 and only returns when
+ * that reports 0. Post-movie it never does, which blocks sub_00084340 before
+ * its screen loop ever starts, so sub_000821B0 never runs and the title
+ * screen is never created. Report the poll result together with the load-op
+ * the [LDT] diag shows parked at status 2. */
+void sub_0006E050_gen(void);
+void sub_0006E050(void) {
+    sub_0006E050_gen();
+    {   static DWORD s_next = 0; static int s_n = 0;
+        DWORD now = GetTickCount();
+        if (s_n < 30 && now >= s_next) {
+            uint32_t ph = MEM32(0x4A1004);
+            uint32_t op = (ph < 8) ? MEM32(ph * 4 + 0x4A10A8) : 0;
+            s_next = now + 1000; s_n++;
+            fprintf(stderr, "[LOADW] poll=0x%X phase=%u op=%08X st=%d q=%08X flag4A2128=%u\n",
+                    eax, ph, op, op ? (int)(int8_t)MEM8(op + 1) : -1,
+                    MEM32(0xC07620), MEM8(0x4A2128));
+            fflush(stderr);
+        }
+    }
+}
+BOOT_MARK2(sub_00080200)
+BOOT_MARK2(sub_00050060)
+BOOT_MARK2(sub_00082E90)
+BOOT_MARK2(sub_0009E482)
+BOOT_MARK2(sub_00050995)
+BOOT_MARK2(sub_00077580)
+BOOT_MARK2(sub_0007CC10)
+BOOT_MARK2(sub_00076FC0)
+BOOT_MARK2(sub_000D5700)
+/* Load-wait exit: what did the resource loader actually leave in the
+ * destination? id/dest are the request globals (sub_0007E4A0). */
+void sub_0007E860_gen(void);
+void sub_0007E860(void) {
+    uint32_t _di = edi, _si = esi, _bx = ebx;
+    static int n = 0; int log = (n < 60); n++;
+    if (log) { fprintf(stderr, "[BOOTMARK] sub_0007E860 enter esi=%08X\n", esi); fflush(stderr); }
+    sub_0007E860_gen();
+    edi = _di; esi = _si; ebx = _bx;
+    if (log) {
+        uint32_t dst = MEM32(0x4A212C); int k;
+        fprintf(stderr, "[BOOTMARK] sub_0007E860 exit (eax=0x%X) id=%04X dst=%08X bytes:", eax, MEM16(0x4A2124), dst);
+        if (dst >= 0x1000 && dst < 0x08000000u)
+            for (k = 0; k < 16; k++) fprintf(stderr, " %02X", MEM8(dst + k));
+        fprintf(stderr, "\n"); fflush(stderr);
+    }
+}
+ABI_MARK2(sub_0007E9C0)
+ABI_MARK2(sub_0007E8C0)
+BOOT_MARK2(sub_00076FE8)
+BOOT_MARK2(sub_00076FF6)
+BOOT_MARK2(sub_0006F6F0)
+BOOT_MARK2(sub_00074470)
+BOOT_MARK2(sub_00070A00)
+BOOT_MARK2(sub_0007F2A0)
+BOOT_MARK2(sub_0007F350)
+BOOT_MARK2(sub_0007F410)
+BOOT_MARK2(sub_00080BD0)
+BOOT_MARK2(sub_00070130)
+void sub_0007ED10_gen(void);
+void sub_0007ED10(void) {
+    uint32_t a1 = MEM32(esp + 4), a2 = MEM32(esp + 8), a3 = MEM32(esp + 0xC);
+    sub_0007ED10_gen();
+    {   static DWORD nx = 0; static int n = 0; DWORD now = GetTickCount();
+        if (n < 40 && now >= nx) { nx = now + 1000; n++;
+            fprintf(stderr, "[RESLK] want a1=%u a2=%u a3=%u -> %u | slots", 
+                    a1 & 0xFF, a2 & 0xFF, a3 & 0xFF, eax & 0xFF);
+            for (int i = 0; i < 4; i++)
+                fprintf(stderr, " [%d]%u,%u,%u,%u,%u,%u", i,
+                        MEM8(0x4A104A + i*6 + 0), MEM8(0x4A104A + i*6 + 1),
+                        MEM8(0x4A104A + i*6 + 2), MEM8(0x4A104A + i*6 + 3),
+                        MEM8(0x4A104A + i*6 + 4), MEM8(0x4A104A + i*6 + 5));
+            fprintf(stderr, "\n"); fflush(stderr); } }
+}
+ABI_MARK2(sub_00080C30)
+ABI_MARK2(sub_0007E9FA)
+ABI_MARK2(sub_0007EA0C)
+ABI_MARK2(sub_000810A0)
+ABI_MARK2(sub_00046B40)
+ABI_MARK2(sub_001B4A30)
+ABI_MARK2(sub_00080CC0)
+ABI_MARK2(sub_0007DD40)
+/* Make the resource loader synchronous again.
+ *
+ * sub_0007EA0C calls the loader through [0x4A10C8] and then immediately
+ * parses the blob (sub_000810A0 -> sub_00080F10). On hardware that is safe:
+ * the loader does not return until the data is resident. Here the CRI read is
+ * queued and serviced by the file server, so the loader returns with the
+ * destination buffer still zero -- and the parser is a tight loop with no
+ * yield, so it never gives the pump a chance to service the read. The result
+ * is a deadlock on an all-zero blob, which is what keeps the screen
+ * dispatcher out of its loop and the title screen off the screen.
+ *
+ * Wait here instead, pumping the CRI file server (sub_00170710, which guards
+ * its own re-entry) and yielding so the decode/IO fibers run. The load op is
+ * the one the [LDT] diag tracks: table 0x4A10A8 indexed by the phase at
+ * 0x4A1004, status byte at op+1, 3 = complete. Post-movie only: boot loads
+ * already complete on their own and the movie timing is verified. */
+static void doa3_wait_resource_load(void)
+{
+    extern volatile int g_doa3_post_movie;
+    extern void sub_00170710(void);
+    extern void xbox_fiber_yield(void);
+    int spins;
+    if (!g_doa3_post_movie) return;
+    for (spins = 0; spins < 20000; spins++) {
+        uint32_t ph = MEM32(0x4A1004);
+        uint32_t op = (ph < 8u) ? MEM32(ph * 4 + 0x4A10A8) : 0;
+        if (!op) break;                              /* nothing outstanding */
+        if ((int)(int8_t)MEM8(op + 1) == 3) break;   /* complete */
+        { uint32_t sv = esp; PUSH32(esp, 0); sub_00170710(); esp = sv; }
+        xbox_fiber_yield();
+    }
+    {   static int n = 0;
+        if (n < 8) { n++;
+            uint32_t ph = MEM32(0x4A1004);
+            uint32_t op = (ph < 8u) ? MEM32(ph * 4 + 0x4A10A8) : 0;
+            fprintf(stderr, "[RESWAIT] spins=%d op=%08X st=%d\n", spins, op,
+                    op ? (int)(int8_t)MEM8(op + 1) : -1);
+            fflush(stderr); } }
+}
+void sub_00080020_gen(void);
+void sub_00080020(void) {
+    uint32_t _di = edi, _si = esi, _bx = ebx;
+    sub_00080020_gen();
+    edi = _di; esi = _si; ebx = _bx;
+    doa3_wait_resource_load();
+}
+void sub_00080070_gen(void);
+void sub_00080070(void) {
+    uint32_t _di = edi, _si = esi, _bx = ebx;
+    sub_00080070_gen();
+    edi = _di; esi = _si; ebx = _bx;
+    doa3_wait_resource_load();
+}
+
+ABI_MARK(sub_0007E870)
+ABI_MARK(sub_0007E8A6)
+void sub_0016CFB0_gen(void);
+void sub_0016CFB0(void) {
+    uint32_t a1 = MEM32(esp + 4), a2 = MEM32(esp + 8), a3 = MEM32(esp + 0xC);
+    char nm[80]; int k;
+    for (k = 0; k < 79; k++) { nm[k] = (char)MEM8(a2 + k); if (!nm[k]) break; }
+    nm[79] = 0;
+    sub_0016CFB0_gen();
+    {   static int n = 0;
+        if (n < 20) { n++;
+            fprintf(stderr, "[CVCB] sub_0016CFB0 a1=%08X path='%s' a3=%08X -> eax=%d\n",
+                    a1, nm, a3, (int)eax);
+            fflush(stderr); } }
+}
+void sub_0016CFF0_gen(void);
+void sub_0016CFF0(void) {
+    uint32_t a1 = MEM32(esp + 4), a2 = MEM32(esp + 8), a3 = MEM32(esp + 0xC);
+    char nm[80]; int k;
+    for (k = 0; k < 79; k++) { nm[k] = (char)MEM8(a2 + k); if (!nm[k]) break; }
+    nm[79] = 0;
+    sub_0016CFF0_gen();
+    {   static int n = 0;
+        if (n < 20) { n++;
+            fprintf(stderr, "[CVCB] sub_0016CFF0 a1=%08X path='%s' a3=%08X -> eax=%d\n",
+                    a1, nm, a3, (int)eax);
+            fflush(stderr); } }
+}
+BOOT_MARK2(sub_000833C0)
+BOOT_MARK2(sub_0009EFC0)
+BOOT_MARK2(sub_0009EEB0)
+BOOT_MARK2(sub_0009EEE0)
+BOOT_MARK2(sub_00082060)
+BOOT_MARK2(sub_00081950)
 BOOT_MARK2(sub_001770B0)   /* movie teardown chain (enter/exit) */
 BOOT_MARK2(sub_0017D320)   /* movie teardown chain (enter/exit) */
 /* sub_00175AB0 -> sub_00177900 -> sub_00170540(5): dispatches CRI callback
@@ -2777,6 +3065,30 @@ BOOT_MARK2(sub_001778E0)   /* movie teardown chain (enter/exit) */
  * sets that latch via sub_00050160 whenever the mode is 2, and clears
  * it again only when sub_00050250() returns 0. While it stays 1 the
  * screen task is never created and the title screen is never armed. */
+/* [JOIN] the gate that decides whether the attract loop hands over to the
+ * title screen. sub_000821B0 runs every frame from the screen dispatcher
+ * sub_00084340. At 0x000822C0 it requires the mode byte 0x480B70 == 2, then
+ * rejects screen ids 1 and 7, then opens the change path at 0x0008243B when
+ * either the connected-pad mask 0x5E5CC8 has the port's bit, or
+ * sub_00081E90(port) reports a press. That path is what reaches
+ * sub_000826D5, the only site that sets the mode byte to 0 and creates the
+ * title-screen task 0x000CEF80. Sample the inputs to that decision. */
+void sub_000821B0_gen(void);
+void sub_000821B0(void) {
+    {   static DWORD s_next = 0; static int s_n = 0;
+        DWORD now = GetTickCount();
+        if (s_n < 40 && now >= s_next) {
+            s_next = now + 1000; s_n++;
+            fprintf(stderr, "[JOIN] mode=%u scr=%u padmask=%08X agg=%08X req=%u "
+                            "latch=%u e653=%02X 49231C=%08X arm47E74C=%u\n",
+                    MEM8(0x480B70), MEM8(0x48A2FA), MEM32(0x5E5CC8),
+                    MEM32(0x5E5ED8), MEM8(0x48A528), MEM8(0x47ADB8),
+                    MEM8(0x48E653), MEM32(0x49231C), MEM8(0x47E74C));
+            fflush(stderr);
+        }
+    }
+    sub_000821B0_gen();
+}
 void sub_00050250_gen(void);
 void sub_00050250(void) {
     static unsigned n = 0, shown = 0;
@@ -2969,6 +3281,12 @@ void sub_001B1350(void)
 {
     uint32_t arg = MEM32(esp + 4);
     sub_001B1350_gen();
+    {   /* DOA3 DIAG: per-frame render-target switch trace (post-movie). */
+        extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
+        static int s_t = 0;
+        if (g_doa3_post_movie && s_t < 200) { s_t++;
+            fprintf(stderr, "[RTT] p=%ld SETRT arg=%08X\n", (long)g_doa3_heartbeat, arg); fflush(stderr); }
+    }
     {   static int s_n = 0;
         if (s_n < 20) { s_n++;
             uint32_t d = MEM32(0x001C3390);
@@ -2998,7 +3316,10 @@ void sub_001B18A0(void)
     u = MEM32(vp + 0x14); memcpy(&zf, &u, 4);
     sub_001B18A0_gen();
     {   static int s_n = 0;
-        if (s_n < 40) { s_n++;
+        extern volatile int g_doa3_post_movie;
+        static int s_pm = 0;
+        if (s_n < 40 || (g_doa3_post_movie && s_pm < 12)) {
+            if (s_n < 40) s_n++; else s_pm++;
             uint32_t d = MEM32(0x001C3390);
             fprintf(stderr, "[SETVP] dev=%08X ", d);
             fprintf(stderr, "in x=%u y=%u w=%u h=%u zn=%g zf=%g -> "
@@ -3020,7 +3341,10 @@ void sub_001B5FD0(void)
 {
     sub_001B5FD0_gen();
     {   static int s_n = 0;
-        if (s_n < 12) { s_n++;
+        extern volatile int g_doa3_post_movie;
+        static int s_pm = 0;
+        if (s_n < 12 || (g_doa3_post_movie && s_pm < 12)) {
+            if (s_n < 12) s_n++; else s_pm++;
             uint32_t d = MEM32(0x001C3390);
             float f4ec, f4f0, f4f4, f4f8, f500, f504;
             uint32_t u;
@@ -3059,7 +3383,25 @@ void sub_001B7E50(void)
     sub_001B7E50_gen();
     {   extern volatile int g_doa3_post_movie;
         static int s_n = 0;
-        if (g_doa3_post_movie && s_n < 6) { s_n++;
+        int nan_r = 0;
+        {   /* The composite matrix reaches the GPU as 16 x 0xFFC00000 (x87
+             * indefinite). Every matrix the driver streams comes out of this
+             * multiply, so alarm on the first products that produce a NaN and
+             * show both operands -- that names the matrix that is already
+             * bad rather than the one that merely carries it. */
+            int i;
+            for (i = 0; i < 16; i++) if (MEM32(dst + i * 4) == 0xFFC00000u) { nan_r = 1; break; }
+        }
+        if (nan_r) {
+            static int s_nan = 0;
+            if (s_nan < 12) { s_nan++;
+                uint32_t d = MEM32(0x001C3390);
+                fprintf(stderr, "[MATNAN] dst=%08X(dev%+d) A=%08X(dev%+d) B=%08X(dev%+d)",
+                        dst, (int)(dst - d), a, (int)(a - d), b, (int)(b - d));
+                doa3_dump_mat4(" A", a); doa3_dump_mat4(" B", b);
+                fprintf(stderr, "%c", 10); fflush(stderr); }
+        }
+        if (g_doa3_post_movie && s_n < 24) { s_n++;
             int i;
             fprintf(stderr, "[MATMUL] dst=%08X A=%08X B=%08X A=[", dst, a, b);
             for (i = 0; i < 16; i++) { float f; uint32_t u = MEM32(a + i * 4);
@@ -3185,6 +3527,45 @@ void sub_0006D410(void) {
     edi = s_edi; esi = s_esi; ebx = s_ebx;
 }
 
+/* DOA3 DIAG: sub_00157700 (vertex-block walker, this in ecx) ring of the
+ * last entries -- dumped by the VEH when a wild read fires inside it, so the
+ * object whose block chain is garbage is identified at the fault. */
+struct doa3_vbw_ent { uint32_t self, f4, f8, l50, l54, l58, l5c, l60, blk, blk68, seq; };
+struct doa3_vbw_ent g_vbw_ring[8]; unsigned g_vbw_seq = 0;
+void doa3_vbw_dump(void)
+{
+    unsigned i;
+    for (i = 0; i < 8; i++) {
+        struct doa3_vbw_ent *e = &g_vbw_ring[i];
+        if (!e->seq) continue;
+        fprintf(stderr, "  [VBW] #%u this=%08X +4=%08X +8=%08X list+50=%08X %08X %08X %08X %08X blk=%08X [blk+68]=%08X\n",
+                e->seq, e->self, e->f4, e->f8, e->l50, e->l54, e->l58, e->l5c, e->l60, e->blk, e->blk68);
+    }
+    fflush(stderr);
+}
+void sub_00157700_gen(void);
+void sub_00157700(void) {
+    uint32_t t = ecx;
+    struct doa3_vbw_ent *e = &g_vbw_ring[g_vbw_seq & 7];
+    int ok = (t >= 0x1000 && t < 0x08000000u);
+    e->seq = ++g_vbw_seq; e->self = t;
+    e->f4 = ok ? MEM32(t + 4) : 0; e->f8 = ok ? MEM32(t + 8) : 0;
+    e->l50 = ok ? MEM32(t + 0x50) : 0; e->l54 = ok ? MEM32(t + 0x54) : 0;
+    e->l58 = ok ? MEM32(t + 0x58) : 0; e->l5c = ok ? MEM32(t + 0x5C) : 0;
+    e->l60 = ok ? MEM32(t + 0x60) : 0;
+    e->blk = ok ? (t + 0x60) : 0;          /* ebx after `lea ebx,[esi+0x50]; add ebx,0x10` */
+    e->blk68 = ok ? MEM32(t + 0x60 + 0x68) : 0;
+    {   /* DOA3 DIAG: the walker's own callee-saved/esp contract (ret 0, this in ecx). */
+        uint32_t sb = ebx, ss = esi, sd = edi, sp = esp;
+        static int n = 0;
+        sub_00157700_gen();
+        if ((ebx != sb || esi != ss || edi != sd || esp != sp) && n < 30) { n++;
+            fprintf(stderr, "[VBW-ABI] #%u this=%08X%s%s%s%s ebx %08X->%08X esi %08X->%08X edi %08X->%08X esp %08X->%08X (d=%+d) [blk+8]w=%04X\n",
+                    g_vbw_seq, t, ebx != sb ? " EBX" : "", esi != ss ? " ESI" : "", edi != sd ? " EDI" : "", esp != sp ? " ESP" : "",
+                    sb, ebx, ss, esi, sd, edi, sp, esp, (int)(esp - sp), ok ? MEM16(t + 0x60 + 8) : 0);
+            fflush(stderr); }
+    }
+}
 /* sub_001B3940 -- the same callee-saved leak on the D3D8 inline-vertex path,
  * and by far the most expensive instance of it.
  *
@@ -3253,6 +3634,29 @@ void sub_001B0EC0(void) {
         extern volatile int g_doa3_post_movie;
         static int s_n = 0, s_pm = 0;
         int want = (s_n < 8) || (g_doa3_post_movie && s_pm < 24);
+        {   /* The projection at device+0x8C0 reaches the composite multiply
+             * with inf in m00/m11, which is what turns the whole composite
+             * matrix into 0xFFC00000. Report any non-finite matrix the game
+             * hands SetTransform, with the guest call chain, so it is clear
+             * whether the game computes it or the driver loses it. */
+            static int s_bad = 0;
+            uint32_t m = MEM32(esp + 8);
+            int i, bad = 0;
+            if (m >= 0x1000 && m < 0x08000000u)
+                for (i = 0; i < 16; i++) {
+                    uint32_t u = MEM32(m + i * 4);
+                    if ((u & 0x7F800000u) == 0x7F800000u) { bad = 1; break; }
+                }
+            if (bad && s_bad < 12) { s_bad++;
+                void *bt[10]; USHORT nb = CaptureStackBackTrace(1, 10, bt, NULL); int k;
+                extern void doa3_dump_mat4(const char *tag, uint32_t p);
+                fprintf(stderr, "[XFBAD] state=%u mat=%08X ", MEM32(esp + 4), m);
+                doa3_dump_mat4("M", m);
+                fprintf(stderr, " bt:");
+                for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+                fprintf(stderr, "%c", 10); fflush(stderr);
+            }
+        }
         if (want) { if (s_n < 8) s_n++; else s_pm++;
             extern void doa3_dump_mat4(const char *tag, uint32_t p);
             fprintf(stderr, "[SETXF] state=%u mat=%08X ",
@@ -3415,6 +3819,7 @@ void sub_0009E340(void) {
     if (log) { fprintf(stderr, "[BOOTMARK] sub_0009E340 enter\n"); fflush(stderr); }
     sub_0009E340_gen();
     g_doa3_post_movie = 1;
+    { extern int g_kernel_trace_reads; g_kernel_trace_reads = 1; }
     if (log) { fprintf(stderr, "[BOOTMARK] sub_0009E340 exit (eax=0x%X)\n", eax);
                fflush(stderr); }
 }
@@ -3683,9 +4088,42 @@ void sub_0006C480(void)
     static int s_n = 0;
     s_n++;
     if (s_n <= 4 || (s_n % 600) == 0) {
-        fprintf(stderr, "[RWALK] #%d a1=0x%08X a2=0x%08X ecx=0x%08X\n",
-                s_n, MEM32(esp + 4), MEM32(esp + 8), ecx);
+        /* The walk at 0x0006C548 iterates the dword vector
+         * [0x49A98C, 0x49A990) with `jne`, re-reading the end pointer every
+         * iteration, and is spinning -- hundreds of millions of D3DX quad
+         * draws, all returning D3DERR_INVALIDCALL because the sprite argument
+         * is NULL. Report the bounds so it is clear whether the end pointer is
+         * simply unreachable or the list grows under the walk. */
+        fprintf(stderr, "[RWALK] #%d a1=0x%08X a2=0x%08X ecx=0x%08X "
+                        "beg=%08X end=%08X cap=%08X n=%d dxflag=%u dxobj=%08X\n",
+                s_n, MEM32(esp + 4), MEM32(esp + 8), ecx,
+                MEM32(0x49A98C), MEM32(0x49A990), MEM32(0x49A994),
+                (int)((MEM32(0x49A990) - MEM32(0x49A98C)) / 4),
+                MEM32(0x49A950), MEM32(0x49A954));
         fflush(stderr);
+    }
+    /* Skip the walk when the D3DX sprite it draws through does not exist.
+     *
+     * Every command this walks ends in sub_001C408A, whose first act is to
+     * return D3DERR_INVALIDCALL when its sprite argument is NULL -- so with
+     * no sprite the walk cannot put a pixel on screen no matter how long it
+     * runs. It does not merely waste time: the renderer loops waiting for a
+     * draw that can never succeed, 365 million failed quads deep, and that
+     * starves the cooperative fibers the movie decode runs on, which is what
+     * froze the intro movie. Observed 0x49A954 == 0 for whole runs, so this
+     * skips exactly the case that cannot work; once the sprite is created
+     * the walk runs normally again.
+     *
+     * Returns eax = 1 and a plain `ret` (0x0006C858/0x0006C861), the same as
+     * the real body's success exit. */
+    if (MEM32(0x49A954) == 0) {
+        static int s_skip = 0;
+        if (s_skip < 2) { s_skip++;
+            fprintf(stderr, "[RWALK] skipped: no D3DX sprite (0x49A954 == 0)\n");
+            fflush(stderr); }
+        eax = 1;
+        esp += 4;   /* ret */
+        return;
     }
     sub_0006C480_gen();
 }
@@ -3704,7 +4142,9 @@ void sub_00021F70(void)
                 s_n, a1, a2, a3, eax);
         fflush(stderr);
     }
+    { extern void doa3_ebxwp_pause(void); doa3_ebxwp_pause(); }   /* DOA3 diag: no ebx watch through the movie */
     sub_00021F70_gen();
+    { extern void doa3_ebxwp_resume(void); doa3_ebxwp_resume(); }
     fprintf(stderr, "[T21F70] #%d RETURNED eax=0x%08X\n", s_n, eax);
     fflush(stderr);
 }
@@ -4193,22 +4633,46 @@ void sub_00176C80(void) {
 ESP_PROBE(sub_001B37F0)
 ESP_PROBE(sub_001C4069)   /* D3DX context Release (vtbl slot 2) */
 ESP_PROBE(sub_00069C70)   /* boot-screen D3DX teardown (RestoreState+Release) */
-/* [S66D0] temporary: log the incoming selector. arg 0 = reset (zeroes the
- * frame counter and re-arms the screen), non-zero = advance one frame. */
+/* Boot warning/legal screen (arg 0 = reset and arm, non-zero = advance one
+ * frame). SKIPPED on the user's instruction: the game is to boot straight
+ * into the intro movie.
+ *
+ * Skipping it is also what stops a livelock. The screen draws its text one
+ * glyph at a time through the D3DX quad path (sub_00055AD0 -> sub_00069BD0
+ * -> sub_001C3F50 -> sub_001C408A), and the string it walks has no
+ * terminator here, so the glyph loop never ends: 28 million quad draws, each
+ * returning D3DERR_INVALIDCALL, starving the movie decode. The path only
+ * became reachable once D3DDevice_SetRenderTarget started working -- the
+ * quad-draw count is zero in builds where the device never came up.
+ *
+ * Take the sequencer's own completion branch (0x00056809) instead of running
+ * the body: park the frame counter past its limit (3 * MEM8(0x2FD55C)) and
+ * clear the screen-active flags. The D3DX teardown that branch tail-calls
+ * (sub_00069C70) is deliberately NOT called -- the matching creation lives in
+ * the advance path being skipped, so there is nothing to release. */
 void sub_000566D0_gen(void);
 void sub_000566D0(void) {
-    uint32_t ei = esp;
-    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
     uint32_t arg = MEM32(esp + 4);
-    static int s_n = 0; static unsigned s_zero = 0, s_nz = 0;
-    if (arg) s_nz++; else s_zero++;
-    if (s_n < 40) { s_n++;
-        fprintf(stderr, "[S66D0] arg=%u ctr=%u active=%u zero=%u nz=%u\n",
-                arg, MEM32(0x491AFC), MEM8(0x305B70), s_zero, s_nz);
-        fflush(stderr); }
-    sub_000566D0_gen();
-    edi = s_edi; esi = s_esi; ebx = s_ebx;
-    (void)ei;
+    static int s_n = 0;
+    if (arg == 0) {
+        /* reset, verbatim from 0x000566DB */
+        MEM32(0x491AFC) = 0;
+        MEM32(0x491AF8) = 0;
+        MEM32(0x491AE4) = 0;
+        MEM8(0x491AF4) = 0;
+        MEM8(0x305B70) = 1;
+    } else if (MEM8(0x305B70)) {
+        MEM32(0x491AFC) = 3u * (uint32_t)MEM8(0x2FD55C) + 1u;
+        MEM8(0x305B70) = 0;
+        MEM8(0x305B1C) = 0;
+        MEM8(0x305B1B) = 0;
+        if (s_n < 2) { s_n++;
+            fprintf(stderr, "[S66D0] warning screen skipped (ctr parked at %u)\n",
+                    MEM32(0x491AFC));
+            fflush(stderr); }
+    }
+    eax = 0;
+    esp += 4;   /* ret */
 }
 ESP_PROBE(sub_00069B60)   /* boot-screen D3DX ensure-created */
 ESP_PROBE(sub_00069BD0)   /* boot-screen draw dispatcher */
@@ -4391,9 +4855,17 @@ void sub_001C408A(void)
     sub_001C408A_gen();
     edi = s_edi; esi = s_esi; ebx = s_ebx;
     s_n++;
-    if (s_n <= 6 || (s_n % 5000) == 0) {
-        fprintf(stderr, "[QUAD] #%d espin=0x%08X espout=0x%08X d=%+d hr=0x%08X\n",
+    if (s_n <= 3 || (s_n % 500000) == 0) {
+        /* This draw runs millions of times a second and always returns
+         * D3DERR_INVALIDCALL. It never ran at all before the device started
+         * working, so name the native caller chain that is spinning on it
+         * (the guest reaches it through an icall, so there is no static
+         * call site to grep for). */
+        void *bt[12]; USHORT nb = CaptureStackBackTrace(1, 12, bt, NULL); int k;
+        fprintf(stderr, "[QUAD] #%d espin=0x%08X espout=0x%08X d=%+d hr=0x%08X bt:",
                 s_n, ei, esp, (int)(esp - ei), eax);
+        for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+        fprintf(stderr, "\n");
         fflush(stderr);
     }
 }
@@ -4556,6 +5028,7 @@ static void doa3_translate_pb(uint32_t from, uint32_t to)
 static unsigned g_kick_count = 0;
 void sub_001B88C0(void)
 {
+    { extern void doa3_ptinfo_check(const char *); doa3_ptinfo_check("kickoff-in"); }
     uint32_t ctx = ecx;                              /* this-pointer (device/context) */
     if (ctx && ctx < 0x04000000u) {
         uint32_t cursor = MEM32(ctx);                /* device[0] = current write cursor */
@@ -5059,9 +5532,56 @@ void sub_001762B0(void)
  * threads; in the fiber model both starve unless pumped. Pumping ONLY from
  * Present livelocks the game-side movie wait loops ("wait vblank; poll
  * status") which never present — so the vblank wait also pumps (item 79). */
+
+/* DOA3 DIAG: integrity check of the ADXF partition table for loadfile.afs
+ * (block 0x4BDA20: u16 sector sizes at +0x116, 1102 entries). Verified
+ * intact through the boot loads and corrupted by the first post-movie load,
+ * with no write caught by the page watch -- so it is checked from several
+ * hook points to bracket the writer (an alias/host-side write). */
+void (*g_kernel_ptinfo_hook)(const char *where);   /* kernel_bridge.c calls it from NtReadFile */
+static uint16_t s_pt_ref[1102];
+static int s_pt_have = 0, s_pt_reported = 0;
+static const char *s_pt_last_ok = "none"; static unsigned s_pt_checks = 0;
+void doa3_ptinfo_check(const char *where)
+{
+    const uint32_t blk = 0x4BDA20u;
+    int i;
+    /* OFF unless DOA3_PTCHK=1. This walks 1102 entries and is called from
+     * the present/flush/kick/pump/read hooks, i.e. several times a frame.
+     * Left on by default it starves the cooperative decode fibers and the
+     * intro movie ends after a handful of frames -- measured, not assumed. */
+    {   static int s_want = -1;
+        if (s_want < 0) { const char *e = getenv("DOA3_PTCHK"); s_want = (e && *e == '1'); }
+        if (!s_want) return; }
+    if (s_pt_reported) return;
+    if (!s_pt_have) {
+        if (MEM32(0xC07640 + 4) != blk || MEM16(blk + 0xC) != 1102 ||
+            MEM16(blk + 0x116 + 2 * 0x15) != 0x328) return;
+        for (i = 0; i < 1102; i++) s_pt_ref[i] = MEM16(blk + 0x116 + 2u * i);
+        s_pt_have = 1;
+        fprintf(stderr, "[PTCHK] reference taken at %s\n", where); fflush(stderr);
+        return;
+    }
+    {   int first = -1, last = -1, n = 0;
+        for (i = 0; i < 1102; i++)
+            if (MEM16(blk + 0x116 + 2u * i) != s_pt_ref[i]) { if (first < 0) first = i; last = i; n++; }
+        if (first >= 0) {
+            void *bt[16]; USHORT nb = CaptureStackBackTrace(0, 16, bt, NULL); int k;
+            s_pt_reported = 1;
+            fprintf(stderr, "[PTCHK] TABLE CHANGED at %s (last ok at %s, check #%u): %d entries differ, first=%d (0x%X->0x%X) last=%d; bytes @%08X:",
+                    where, s_pt_last_ok, s_pt_checks, n, first, s_pt_ref[first], MEM16(blk + 0x116 + 2u * first), last,
+                    blk + 0x116 + 2u * first);
+            for (k = 0; k < 32; k++) fprintf(stderr, " %02X", MEM8(blk + 0x116 + 2u * first + k));
+            fprintf(stderr, "\n[PTCHK] bt:");
+            for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+            fprintf(stderr, "\n"); fflush(stderr);
+        } else { s_pt_last_ok = where; s_pt_checks++; }
+    }
+}
 void doa3_pump_cri_servers(void)
 {
     extern void sub_001705E0(void);
+    doa3_ptinfo_check("pump");
     extern void sub_00170640(void);
     extern void sub_00170660(void);
     static int s_inpump = 0;
@@ -5082,11 +5602,31 @@ void doa3_pump_cri_servers(void)
              * into an FF00xxxx parse error after all real pictures played.
              * Treat that error (past a sane frame count) as END: clear it and
              * complete the movie through the game's own PLAYEND path. */
+            extern int g_doa3_host_movie_ended;
+            /* Second trigger: the host presenter reached the end of the movie
+             * file. The condition above reads the parse error at h+0x988 and
+             * counts guest blits, and neither survives a mid-stream decoder
+             * stall -- runs end with the picture fully played, h+0x988 == 0,
+             * 13 blits, and the handle parked in PLAYING forever, so the
+             * sequencer never advances and the game sits on the last frame.
+             * End of file is the same event the middleware itself reports as
+             * PLAYEND; take it from the decoder that actually reached it and
+             * complete through the game's own path. */
             if ((herr & 0xFF000000u) == 0xFF000000u && g_doa3_movie_frames > 60) {
                 fprintf(stderr, "[EOSFIX] parser hit stream end (hErr=%X after %u frames) -> PLAYEND%c",
                         herr, g_doa3_movie_frames, 10);
                 MEM32(0xC0F7C0 + 0x988) = 0;
                 MEM32(mvobj + 8) = 3;
+            } else if (g_doa3_host_movie_ended && MEM32(0xC0F7C0 + 0x40) == 4) {
+                static int s_eos2 = 0;
+                if (s_eos2 < 2) { s_eos2++;
+                    fprintf(stderr, "[EOSFIX] host presenter reached end of file "
+                                    "(handle still PLAYING, %u blits) -> PLAYEND%c",
+                            g_doa3_movie_frames, 10);
+                    fflush(stderr); }
+                MEM32(0xC0F7C0 + 0x988) = 0;
+                MEM32(0xC0F7C0 + 0x40) = 6;    /* handle: PLAYEND */
+                MEM32(mvobj + 8) = 3;          /* movie object: finished */
             }
         }
     }
@@ -5096,6 +5636,24 @@ void doa3_pump_cri_servers(void)
         if ((++s_mp & 7) == 0) doa3_pump_messages();
     }
     s_inpump = 1;
+    {   /* DOA3 DIAG: arm the DOA3_WATCHVA exact-address watch once the movie
+         * has handed the screen over. The runaway scan in sub_0017CC30 walks
+         * the mwPly pool with the count at 0xC0E514 and the base at 0xC0E518;
+         * post-movie both read as garbage, so the loop sweeps memory until it
+         * leaves the mapping. Arming here (not at startup) keeps the page
+         * writable through the movie, where it is written constantly. */
+        extern uint32_t g_watch_exact_va;
+        extern volatile int g_doa3_post_movie;
+        static int s_armed = 0;
+        if (g_watch_exact_va && !s_armed && g_doa3_post_movie) {
+            extern void doa3_watch_arm(uint32_t xb_page);
+            s_armed = 1;
+            doa3_watch_arm(g_watch_exact_va & ~0xFFFu);
+            fprintf(stderr, "[WATCHVA] armed on guest 0x%08X (now = 0x%08X)%c",
+                    g_watch_exact_va, MEM32(g_watch_exact_va), 10);
+            fflush(stderr);
+        }
+    }
     {   /* item 109 (defect #1): OPT-IN write-watch on the HANDLER page
          * (0xC0F000) to catch the writer that corrupts the state word
          * 0xC0F800 (4 -> -4). Off by default (the page-guard faulting perturbs
@@ -5269,6 +5827,61 @@ void doa3_pump_cri_servers(void)
         }
         PUSH32(esp, 0); sub_00170640(); esp = saved_esp2;   /* ADX main server */
         PUSH32(esp, 0); sub_00170660(); esp = saved_esp2;   /* mwPly tick */
+        /* CRI file server. This is the tick that actually performs file I/O:
+         * sub_00170710 -> sub_00169BC0 -> sub_0016C6B0 -> sub_00171A70 ->
+         * sub_001719FE -> sub_00171620 -> NtReadFile, confirmed by backtracing
+         * the reads that do work. It was never pumped, so after the movie the
+         * boot poll that used to drive it is gone and not one read is issued:
+         * every post-movie resource load completes with an untouched
+         * destination buffer (the record parser then walks an all-zero blob
+         * forever, which is what keeps the screen dispatcher out of its loop).
+         * It guards its own re-entry through [0xB255F4], so pumping it here is
+         * safe alongside the servers above. */
+        {   /* Post-movie only: ticking it during playback perturbs the CRI
+             * stream state and the movie stops handing over. The verified
+             * intro-movie timing is left exactly as it was. */
+            extern volatile int g_doa3_post_movie;
+            if (g_doa3_post_movie) {
+                PUSH32(esp, 0); sub_00170710(); esp = saved_esp2;
+            }
+        }
+        {   /* Dispatch the other registered ADXM groups once the movie is over.
+             *
+             * sub_001705E0(g) walks the four (fn,arg) slots at
+             * 0xB254B0 + g*32; group 5 is the sfdec decode group pumped above,
+             * and the CRI file reader lives in group 2 (0xB254F0). Only group 5
+             * was ever dispatched, so after the movie the post-movie asset read
+             * sat queued forever -- the load op parked at status 2 with no
+             * NtReadFile ever issued, which blocked sub_00084340 in its init
+             * (sub_00082060 -> sub_00050940 -> sub_0006B7E0 -> sub_0006AD20)
+             * before its screen loop started, so sub_000821B0 never ran and the
+             * title screen was never created.
+             *
+             * On hardware the CRI server thread dispatches every group it has
+             * handlers for; this does the same for the groups the game actually
+             * registered. Restricted to post-movie so the verified intro-movie
+             * timing is left exactly as it is. */
+            extern volatile int g_doa3_post_movie;
+            if (g_doa3_post_movie) {
+                for (int g = 0; g < 5; g++) {
+                    uint32_t tbl = 0xB254B0u + (uint32_t)g * 32u;
+                    int has = 0, sl;
+                    for (sl = 0; sl < 4; sl++) {
+                        uint32_t fn = MEM32(tbl + (uint32_t)sl * 8);
+                        if (fn >= 0x00011000u && fn < 0x002CC800u) { has = 1; break; }
+                    }
+                    if (!has) continue;
+                    {   static int s_log[5] = {0,0,0,0,0};
+                        if (!s_log[g]) { s_log[g] = 1;
+                            fprintf(stderr, "[CRIGRP] dispatching ADXM group %d (tbl=%08X)\\n", g, tbl);
+                            fflush(stderr); } }
+                    PUSH32(esp, (uint32_t)g);
+                    PUSH32(esp, 0);
+                    sub_001705E0();
+                    esp = saved_esp2;
+                }
+            }
+        }
         /* item 92: decode runs on worker fibers that only progress when the
          * main fiber yields. Harness sessions yield thousands of times/s
          * (unthrottled), interactive sessions ~60/s (vsync-locked) -> their
@@ -5349,10 +5962,24 @@ void sub_001B8970(void)
     extern void pgraph_d3d11_flush(void);
     extern void doa3_present_frame(void);
     uint32_t arg = MEM32(esp + 4);     /* fence type (2 == per-frame Present fence) */
+    /* esi/edi/ebx are callee-saved. D3DDevice_Present (sub_001B5850) loads its
+     * device pointer into esi from MEM32(0x1C3390) and then calls us FIRST
+     * thing; its continuation sub_001B58AD uses that same esi for every device
+     * field. This wrapper runs the real SetFence plus a flush, a present and
+     * the whole vblank emulation, none of which preserved esi -- so Present
+     * came back with a junk device (0x25E340, an address with no static
+     * reference anywhere) and then waited on a vertical-blank event inside it
+     * at 0x260830. Nothing signals that, so after the intro movie the primary
+     * fiber and both CRI workers parked there forever and the game froze.
+     * Restore the callee-saved registers the original SetFence guarantees. */
+    uint32_t _sv_esi = esi, _sv_edi = edi, _sv_ebx = ebx;
+    doa3_ptinfo_check("setfence-in");
     sub_001B8970_gen();                /* real D3D_SetFence (does its own ret 4 cleanup) */
     if (arg == 2) {
         pgraph_d3d11_flush();
+        doa3_ptinfo_check("after-flush");
         doa3_present_frame();
+        doa3_ptinfo_check("after-present");
         /* Full VBLANK emulation (mirrors the D3D vblank handler sub_001BAA30, which the
          * GPU PCRTC interrupt DPC would run): bump the vblank counter (device+0x820),
          * signal the vblank event (device+0x1E8 = 0x001C2CF0), and CALL the vblank
@@ -5677,6 +6304,22 @@ void sub_001B8970(void)
                     MEM8(0xBFEE80), MEM8(0xBFEE80 + 0x10E0*4/2), MEM8(0xBFEE81));
             /* warning-screen sequencer (sub_000566D0 tail): 0x491AFC = frame
              * counter, limit = 3*MEM8(0x2FD55C); 0x305B70 = screen-active. */
+            {   /* The post-movie load state machine. sub_00084340 blocks in
+             * sub_0006AD20 -> sub_0006AD6A waiting for MEM8(0x4A2128) to
+             * clear, which only the load task sub_00080200 does. That task
+             * enters and never returns. Its gates are these bytes; note
+             * 0x00080267 is a register spin with no reload, taken when
+             * 0x4A2120 != 0 and 0x4A2122 == 0. */
+                uint32_t ph = MEM32(0x4A1004);
+                uint32_t op = (ph < 8) ? MEM32(ph * 4 + 0x4A10A8) : 0;
+                fprintf(stderr, "[LOADST] busy4A2128=%u 4A1048=%u 4A1010=%u 4A2120=%u 4A2121=%u 4A2122=%u 4A212C=%08X op=%08X st=%d slots=%u/%u/%u/%u 4A1049=%u\n",
+                        MEM8(0x4A2128), MEM8(0x4A1048), MEM8(0x4A1010),
+                        MEM8(0x4A2120), MEM8(0x4A2121), MEM8(0x4A2122),
+                        MEM32(0x4A212C), op, op ? (int)(int8_t)MEM8(op + 1) : -1,
+                        MEM8(0x4A104A + 0 * 6), MEM8(0x4A104A + 1 * 6),
+                        MEM8(0x4A104A + 2 * 6), MEM8(0x4A104A + 3 * 6),
+                        MEM8(0x4A1049));
+            }
             fprintf(stderr, "[WSCR] ctr491AFC=%d lim3x2FD55C=%u active305B70=%u fade491AE4=0x%X 491AF8=%d 491AF4=%u\n",
                     (int)MEM32(0x491AFC), 3u * MEM8(0x2FD55C), MEM8(0x305B70),
                     MEM32(0x491AE4), (int)MEM32(0x491AF8), MEM8(0x491AF4));
@@ -5729,6 +6372,7 @@ void sub_001B8970(void)
             fflush(stderr);
         }
     }
+    esi = _sv_esi; edi = _sv_edi; ebx = _sv_ebx;
 }
 
 /* PB space check (0x1B8DC0) — cdecl(device, dwords), ret 8, eax = cursor.
@@ -5994,3 +6638,129 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va)
 
 
 
+
+/* DOA3 DIAG: the Sofdec timecode chain sub_0017A2A0 -> sub_001796F0 ->
+ * sub_001797FF writes its 4-dword result through the pointer at
+ * [esp+0x20] of the shared frame, which should be sub_0017A2A0's stack
+ * scratch (esp+8 after its sub esp,1Ch / push ebp / push edi) and instead
+ * lands at 0x4BDB4E (the loadfile.afs partition sector table). Log the
+ * frame at both ends whenever the destination is not on a stack. */
+void sub_0017A2A0_gen(void);
+void sub_0017A2A0(void)
+{
+    static int n = 0;
+    uint32_t esp0 = esp;
+    if (n < 6) { n++;
+        void *bt[8]; USHORT nb = CaptureStackBackTrace(1, 8, bt, NULL); int k;
+        fprintf(stderr, "[TC-A2A0] esp=%08X eax=%08X esi=%08X ebx=%08X arg0=%08X fiber=%d bt:",
+                esp0, eax, esi, ebx, MEM32(esp0 + 4), xbox_fiber_current());
+        for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+        fprintf(stderr, "\n"); fflush(stderr); }
+    sub_0017A2A0_gen();
+}
+void sub_001797FF_gen(void);
+void sub_001797FF(void)
+{
+    static int n = 0, bad = 0;
+    uint32_t dst = MEM32(esp + 0x20);
+    int onstack = (dst >= 0x00C40000u && dst < 0x00E40000u) ||   /* main Xbox stack */
+                  (dst >= 0x00E40000u && dst < 0x04000000u);      /* heap (fiber stacks) */
+    if (n < 6 || (!onstack && bad < 12)) { n++; if (!onstack) bad++;
+        fprintf(stderr, "[TC-97FF] esp=%08X dst=%08X (%s) frame:", esp, dst, onstack ? "stack/heap" : "NOT STACK");
+        for (int k = 0; k < 12; k++) fprintf(stderr, " %08X", MEM32(esp + 4u * k));
+        fprintf(stderr, " | h=%u m=%u s=%u f=%u fiber=%d\n", edi, esi, edx, ecx, xbox_fiber_current());
+        fflush(stderr); }
+    sub_001797FF_gen();
+}
+
+/* DOA3 DIAG: esp balance of the PTS->frame chain under the timecode
+ * splitter. Expected net +4 (each returns by popping only the dummy). */
+#define ESP_BAL_PROBE(fn) \
+    void fn##_gen(void); \
+    void fn(void) { \
+        uint32_t ei = esp; static int s_bad = 0, s_n = 0; \
+        fn##_gen(); \
+        if ((int)(esp - ei) != 4 && s_bad < 12) { s_bad++; \
+            fprintf(stderr, "[ESPBAL] " #fn " in=%08X out=%08X d=%+d fiber=%d\n", ei, esp, (int)(esp - ei), xbox_fiber_current()); \
+            fflush(stderr); } \
+        else if (s_n < 3) { s_n++; \
+            fprintf(stderr, "[ESPBAL] " #fn " ok d=%+d\n", (int)(esp - ei)); fflush(stderr); } \
+    }
+ESP_BAL_PROBE(sub_001809E0)
+ESP_BAL_PROBE(sub_001809FE)
+ESP_BAL_PROBE(sub_0018DE71)
+ESP_BAL_PROBE(sub_00191A4D)
+ESP_BAL_PROBE(sub_001918E8)
+ESP_BAL_PROBE(sub_00191925)
+ESP_BAL_PROBE(sub_00191848)
+
+/* DOA3 DIAG: sub_00154420 = translate the matrix-stack top (0x90FAA0) by
+ * (x,y,z) = args. It is the first routine that stores NaN into the stack
+ * post-movie, and its own arithmetic is right, so the NaN comes in through
+ * the arguments. Log them with the native caller chain. */
+void sub_00154420_gen(void);
+void sub_00154420(void)
+{
+    static int s_bad = 0, s_n = 0;
+    uint32_t a = MEM32(esp + 4), b = MEM32(esp + 8), c = MEM32(esp + 0xC);
+    int nan = ((a & 0x7F800000u) == 0x7F800000u) || ((b & 0x7F800000u) == 0x7F800000u) || ((c & 0x7F800000u) == 0x7F800000u);
+    if ((nan && s_bad < 8) || s_n < 3) { if (nan) s_bad++; else s_n++;
+        void *bt[10]; USHORT nb = CaptureStackBackTrace(1, 10, bt, NULL); int k;
+        float fa, fb, fc; memcpy(&fa, &a, 4); memcpy(&fb, &b, 4); memcpy(&fc, &c, 4);
+        fprintf(stderr, "[XLATE] %s x=%g y=%g z=%g (%08X %08X %08X) top row0=%08X row3=%08X bt:", nan ? "NAN-IN" : "ok",
+                fa, fb, fc, a, b, c, MEM32(0x90FAA0), MEM32(0x90FAD0));
+        for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+        fprintf(stderr, "\n"); fflush(stderr); }
+    sub_00154420_gen();
+}
+
+/* DOA3 DIAG: sub_000910B9 is the fragment that writes the character position
+ * table (0x4BB950 + 16*i) from the x87 stack (st0 = a frame count to
+ * truncate, st1/st2 = accumulated deltas) and the struct at ebp (base
+ * position). Post-movie the stored positions are NaN; show what comes in. */
+void sub_000910B9_gen(void);
+void sub_000910B9(void)
+{
+    static int n = 0, bad = 0;
+    float f0, f1, f2, b0, b1, b2; uint32_t u;
+    f0 = (float)g_fp_stack[g_fp_top & 7]; f1 = (float)g_fp_stack[(g_fp_top + 1) & 7]; f2 = (float)g_fp_stack[(g_fp_top + 2) & 7];
+    u = MEM32(g_seh_ebp); memcpy(&b0, &u, 4); u = MEM32(g_seh_ebp + 4); memcpy(&b1, &u, 4); u = MEM32(g_seh_ebp + 8); memcpy(&b2, &u, 4);
+    {   int isnan_any = (f0 != f0) || (f1 != f1) || (f2 != f2) || (b0 != b0) || (b1 != b1) || (b2 != b2);
+        if (n < 3 || (isnan_any && bad < 8)) { if (isnan_any) bad++; else n++;
+            void *bt[8]; USHORT nb = CaptureStackBackTrace(1, 8, bt, NULL); int k;
+            fprintf(stderr, "[POSW] %s edi=%u ebx=%d ebp=%08X st0=%g st1=%g st2=%g base=(%g %g %g) fptop=%d bt:",
+                    isnan_any ? "NAN" : "ok", edi, (int)ebx, g_seh_ebp, f0, f1, f2, b0, b1, b2, g_fp_top);
+            for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+            fprintf(stderr, "\n"); fflush(stderr); } }
+    sub_000910B9_gen();
+}
+
+/* D3DDevice_GetBackBuffer (0x1B15B0) and D3DDevice_GetDepthStencilSurface
+ * (0x1B1870) must preserve esi/edi/ebx like any cdecl callee.
+ *
+ * sub_00157EC0 computes its slot index into esi (esi = 5*index), calls these
+ * two, and only then reads the saved colour/depth surfaces at
+ * [esi*8 + 0x90FE1C] / [+0x90FE20] to hand to SetRenderTarget. With esi
+ * clobbered across the calls it read a wrong slot and passed 1 -- a refcount,
+ * not a surface -- so SetViewport clamped every viewport against a 1x1
+ * "surface" (the logged w=1 h=1 / w=1 h=4006) and the whole title screen
+ * collapsed to nothing while the game still issued tens of thousands of
+ * draws. Same failure mode as the Present/esi bug. Report any correction so
+ * this is evidence, not a guess. */
+#define D3D_ABI_KEEP(name)                                                   \
+    void name##_gen(void);                                                   \
+    void name(void) {                                                        \
+        uint32_t _si = esi, _di = edi, _bx = ebx;                            \
+        name##_gen();                                                        \
+        if (esi != _si || edi != _di || ebx != _bx) {                        \
+            static int s_n = 0;                                              \
+            if (s_n < 6) { s_n++;                                            \
+                fprintf(stderr, "[D3DABI] " #name " clobbered:"              \
+                        " esi %08X->%08X edi %08X->%08X ebx %08X->%08X\n",   \
+                        _si, esi, _di, edi, _bx, ebx);                       \
+                fflush(stderr); }                                            \
+            esi = _si; edi = _di; ebx = _bx;                                 \
+        }                                                                    \
+    }
+D3D_ABI_KEEP(sub_001B15B0)
+D3D_ABI_KEEP(sub_001B1870)

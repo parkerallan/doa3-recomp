@@ -87,6 +87,7 @@ uint32_t g_str_a = 0, g_str_b = 0;
  * per-function locals broke every cross-function ST0 value transfer. */
 double g_fp_stack[8];
 int    g_fp_top;
+uint16_t g_x87_cw = 0x027F;   /* x87 default: all exceptions masked, 53-bit, round-nearest */
 
 /* SEH frame pointer bridge (see recomp_types.h for explanation) */
 uint32_t g_seh_ebp = 0;
@@ -352,9 +353,12 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          * (in the BSS area) and a data buffer at 0x00700000.
          */
         /* Placed in the gap between DOA3's image end (~0x00C31500) and the
-         * stack base (0x00D00000) so they don't collide with game BSS. */
-        #define FAKE_TLS_VA     0x00C40000  /* Fake TLS structure */
-        #define FAKE_RWDATA_VA  0x00C50000  /* Scratch context data area */
+         * stack base (XBOX_STACK_BASE) so they don't collide with game BSS.
+         * The stack base was lowered to 0x00C40000 to give the low heap the
+         * 768 KB it needs for the driver's real depth buffer, so these two
+         * pages moved down with it and now sit immediately after the image. */
+        #define FAKE_TLS_VA     0x00C32000  /* Fake TLS structure */
+        #define FAKE_RWDATA_VA  0x00C36000  /* Scratch context data area */
 
         MEM32_INIT(0x28, FAKE_TLS_VA);
         /* TLS[0x28] = pointer to RW data area */
@@ -522,6 +526,10 @@ BOOL xbox_IsXboxAddress(uintptr_t address)
 void *xbox_GetMemoryBase(void)
 {
     return g_memory_base;
+}
+size_t xbox_GetMemorySize(void)
+{
+    return g_memory_size;
 }
 
 ptrdiff_t xbox_GetMemoryOffset(void)

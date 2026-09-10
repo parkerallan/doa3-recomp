@@ -23,7 +23,13 @@ extern recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
 #define MAX_FIBERS         64
 #define WORKER_STACK_SIZE  0x40000      /* 256 KB Xbox stack per worker */
 #define WORKER_NATIVE_STK  (8u << 20)   /* 8 MB native fiber stack */
-#define CORO_STACK_SIZE    0x20000      /* 128 KB Xbox stack per game-task coroutine */
+#define CORO_STACK_SIZE    0x20000      /* fallback when the caller asks for nothing */
+/* Floor for a game-task Xbox stack. DOA3 asks CreateFiber for 0x4000 (16 KB)
+ * per task; this doubles that for headroom and is still 4x less than the
+ * 128 KB we used to force. The old fixed 128 KB cost 2.6 MB across the 21
+ * title-screen tasks and ran the 49 MB guest heap dry (97.9% used), which is
+ * what killed the process after the movie. */
+#define CORO_STACK_MIN     0x8000
 #define CORO_NATIVE_STK    (24u << 20)  /* 24 MB native stack per coroutine (recomp
                                          * turns each Xbox call into a native call, so
                                          * the game's deep boot-screen call trees need
@@ -38,6 +44,7 @@ typedef struct {
     uint32_t start_routine; /* Xbox VA (worker entry) */
     uint32_t ctx1, ctx2;
     uint32_t stack_top;     /* Xbox VA of this thread's stack top */
+    uint32_t stack_size;    /* bytes allocated for it (recycle only if big enough) */
     uint32_t wait_event;    /* Xbox VA of the event this fiber is blocked on (FIB_WAITING) */
     uint32_t xhandle;       /* unique fake NT thread handle (0xBEEFxxxx) — waits/wakes
                              * on thread handles (join, suspend/resume) must target ONE
@@ -193,7 +200,39 @@ void xbox_fiber_yield(void)
     } else {
         n = pick_next(me);
     }
-    if (n < 0) return;                        /* nobody else ready → keep running */
+    if (n < 0) {
+        /* Nobody else is READY.
+         *
+         * If fibers are parked on events this is a circular wait: whoever
+         * would signal them cannot run, because we are the only runnable
+         * fiber and we merely spin. xbox_fiber_block() already breaks that
+         * by releasing every waiter to re-check its own condition, but a
+         * pure yield-loop never reaches that path -- and the CRI watchdog
+         * override (sub_0016A530) is exactly such a loop. Post-movie the
+         * whole game parked behind it: the primary fiber and two CRI
+         * workers sat on event 0x260830 while the watchdog span forever.
+         *
+         * Apply the same release, but only after enough fruitless yields
+         * that this cannot be ordinary scheduling. */
+        static unsigned s_idle;
+        int waiters = 0, i;
+        for (i = 0; i < g_nfib; i++)
+            if (g_fib[i].state == FIB_WAITING) waiters++;
+        if (!waiters) { s_idle = 0; return; }
+        if (++s_idle < 200000u) return;
+        s_idle = 0;
+        for (i = 0; i < g_nfib; i++)
+            if (g_fib[i].state == FIB_WAITING) {
+                g_fib[i].state = FIB_READY; g_fib[i].wait_event = 0;
+            }
+        {   static int logged;
+            if (logged < 8) { logged++;
+                fprintf(stderr, "[FIBER] yield-spin deadlock: released %d waiter(s)\n",
+                        waiters);
+                fflush(stderr); } }
+        n = pick_next(me);
+        if (n < 0) return;
+    }
 
     save_regs(&g_fib[me]);
     if (g_fib[me].state == FIB_RUNNING) g_fib[me].state = FIB_READY;
@@ -362,7 +401,8 @@ int xbox_fiber_is_coroutine(void)
 
 /* ── Direct-switched coroutines (XAPI CreateFiber/SwitchToFiber backing) ── */
 
-int xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param)
+int xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param,
+                              uint32_t stack_size)
 {
     if (!g_active) return -1;
     int i;
@@ -376,12 +416,36 @@ int xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param)
     Fiber *f = &g_fib[i];
     if (f->handle) { DeleteFiber(f->handle); f->handle = NULL; }
     uint32_t keep_stack = f->stack_top;    /* reuse the Xbox stack of a recycled slot */
+    uint32_t keep_size  = f->stack_size;
+    if (!stack_size) stack_size = CORO_STACK_SIZE;
+    if (stack_size < CORO_STACK_MIN) stack_size = CORO_STACK_MIN;
+    stack_size = (stack_size + 15u) & ~15u;
+    /* A recycled slot's stack is only reusable if it is big enough. */
+    if (keep_stack && keep_size < stack_size) { keep_stack = 0; keep_size = 0; }
     memset(f, 0, sizeof(*f));
     f->handle = CreateFiber(CORO_NATIVE_STK, fiber_trampoline, f);
     if (!f->handle) return -1;
-    if (!keep_stack)
-        keep_stack = xbox_HeapAlloc(CORO_STACK_SIZE, 16) + CORO_STACK_SIZE - 16;
-    f->stack_top = keep_stack;
+    if (!keep_stack) {
+        /* On failure xbox_HeapAlloc returns 0. The old code still computed
+         * base + size - 16 from it, handing the fiber a stack pointer at
+         * 0x1FFF0 -- inside the XBE image -- so the task silently shredded
+         * the game's own code and the process died with no exception to
+         * catch. Fail the create instead, loudly. */
+        uint32_t base = xbox_HeapAlloc(stack_size, 16);
+        if (!base) {
+            fprintf(stderr, "[FIBER] OUT OF GUEST HEAP: cannot allocate %u-byte "
+                            "Xbox stack for task routine 0x%08X (slot %d)\n",
+                    stack_size, routine_va, i);
+            fflush(stderr);
+            DeleteFiber(f->handle); f->handle = NULL;
+            f->state = FIB_FREE;
+            return -1;
+        }
+        keep_stack = base + stack_size - 16;
+        keep_size  = stack_size;
+    }
+    f->stack_top  = keep_stack;
+    f->stack_size = keep_size;
     f->start_routine = routine_va;
     f->ctx1 = param;
     f->ctx2 = 0;
