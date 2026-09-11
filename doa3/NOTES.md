@@ -307,6 +307,107 @@ than one frame (all in `src/nv2a/nv2a_pgraph_d3d11.c` / `src/d3d/d3d8_device.c`)
   position) was tested and is wrong: the game's own w sign is correct.
 
 
+### Callee-saved ABI leak in the texture-stage applier's callees
+
+`sub_001BCC00` (`ret 0xC`) and `sub_001BC260` (`ret 0x10`), both called from
+the texture-stage applier `sub_001B6410`, returned with `ebx`/`esi`/`edi`
+clobbered and the guest stack 84 and 72 bytes low. `sub_001B6410` holds the
+D3D device -- guest `0x001C0800`, published in `0x001C3390` by
+`D3DDevice_CreateDevice` at `0x001B4F00` -- in `esi` across both calls and
+pushes it to `XMETAL_StartPush` at `0x001B6496`; its second StartPush site at
+`0x001B6790` reads the device from `[esp+0x30]`. The device therefore arrived
+as null. The callee-saved checker the pipeline already emits around those call
+sites named both functions and the exact damage (`[CSCHK3]`).
+
+Measured consequences on the title stage, before the fix:
+
+- 106 of every 127 push-buffer wraps carried a null device, and each rewound
+  `g_pb_parsed` to the ring base. 100% of parse calls then started at the base
+  and ~81 MB was re-translated every two seconds, replaying every
+  draw *and every clear* of the frames still in the buffer over the live one:
+  ~890 array draws a frame instead of ~263.
+- `sub_001B6410`'s own pushes landed at the ring base, on top of the live
+  command stream. That produced ~1000 undecodable DMA words every two seconds
+  and the parse walked past each of them a dword at a time,
+  spraying floats and vertex data into `SET_BLEND_FUNC`, `SET_FRONT_FACE`,
+  `SET_DEPTH_FUNC`, `SET_SURFACE_PITCH` and the matrices.
+- ~600 batches every two seconds transformed to NaN.
+
+`src/game/recomp/recomp_manual.c` now ABI-enforces both (bodies renamed
+`_gen` in `gen/recomp_0010.c`).
+After the fix: re-parse gone (6.8 MB every two seconds), undecodable words 0,
+NaN batches 0, the blend-factor registers only ever hold the three values the
+game actually programs, ~263 draws a frame, and the title phase runs at ~53
+fps in the debug build instead of ~23.
+
+Two "obvious" fixes for the same symptoms were tried first and both regressed;
+do not repeat them:
+
+- Stopping the parse on an undecodable word instead of walking past it dropped
+  83 MB every two seconds and froze the picture earlier (run 205).
+- Skipping the parse-cursor rewind for wraps whose device is not the main one
+  produced **zero draws** (run 207) -- while the device pointer was being lost,
+  that rewind was the only thing making those pushes reachable.
+
+### Guest blend state is applied
+
+`SET_BLEND_ENABLE` / `SET_BLEND_FUNC_SFACTOR` / `SET_BLEND_FUNC_DFACTOR` were
+tracked and never read: `nv_apply_draw_state` forced `ALPHABLENDENABLE` on with
+`SRCALPHA`/`INVSRCALPHA` for every draw. Measured on the title stage, the guest
+asks for blending **off on ~65%** of its batches, and uses two functions when
+it is on (`SRCALPHA`/`INVSRCALPHA` and the additive `SRCALPHA`/`ONE`); a third,
+`DESTCOLOR`/`INVSRCCOLOR`, appears in places. Forcing blending on made every
+opaque surface depend on an alpha channel it was not written for and rendered
+the additive pass as an ordinary blend.
+
+`nv2a_blend_to_d3d` now covers the whole NV2A factor set and returns 0 for a
+value that is not a blend factor at all, in which case the caller keeps the last
+pair the guest really programmed rather than mapping garbage to `ONE` (which
+turns an ordinary surface into an additive blowout).
+
+### Near-plane clipping also clips on W
+
+`nv_clip_triangle` clipped only against `Zc >= 0`. `Zc` here is the pre-divide
+depth (`o->z * W`), so for a vertex behind the eye -- `W < 0` -- a positive
+view-space depth term comes back out as a **positive** `Zc` and the vertex was
+kept, with its screen position mirrored through the origin. Those are the
+triangles that sweep across the frame. The clipper now runs Sutherland-Hodgman
+against `Wc > 0` first and `Zc >= 0` second (two planes can turn a triangle into
+a 5-gon, so the output buffer is 9 vertices per source triangle, not 6).
+
+Batches whose transform produces a non-finite vertex are dropped: D3D's
+behaviour is undefined there and what comes out is a random smear.
+
+### Mip chains are uploaded
+
+Only level 0 was ever uploaded and `D3DTSS_MIPFILTER` was pinned to `NONE`.
+The title stage declares 3 to 9 levels on most of its draws
+(`SET_TEXTURE_FORMAT` bits 19:16) and asks for minification enum **4 =
+LINEAR_MIPMAP_NEAREST** on every one of them, so every minified surface was
+aliasing -- the "blocky" textures.
+
+`get_dynamic_texture` now creates the texture with the declared level count
+(clamped to the real chain length) and uploads each level from the Xbox's
+packed chain: level *n* starts immediately after level *n-1*, dimensions
+halving with a floor of 1, DXT levels sized by block count. The whole chain is
+bounds-checked against guest RAM, not just level 0. Linear surfaces (movie
+frames, render targets) stay single-level.
+
+The D3D8 shim needed per-level support for this: `D3D8Texture` now carries
+`level_mem` / `level_pitch` / `level_w` / `level_h`, `LockRect`/`UnlockRect`
+accept any level below the level count, and `UnlockRect` unswizzles and uploads
+into that level's subresource.
+
+### Sampler-state cache
+
+`d3d8_states_apply_sampler` released and recreated an `ID3D11SamplerState` for
+all four stages on every state apply. The NV2A translator applies state per
+draw, so the title stage was making ~3500 `CreateSamplerState` calls a frame for
+a handful of distinct samplers. They are now cached by the six stage states that
+feed the descriptor, and a stage that already has the right sampler bound does
+nothing.
+
+
 ## Regeneration Contract
 
 A full pipeline regeneration can overwrite generated fixes. Run from `doa3/`:
@@ -375,19 +476,50 @@ Useful opt-in switches:
 Frame dumps are evidence, not perceptual acceptance. For visible or audible
 issues, the running game is the final validation.
 
-## Known Limitations and Next Work
+## Next Work
 
-### General movie routing
+### The two render-list walkers spin on a bad record
 
-The host presenter currently opens `ninja.sfd` directly. It should eventually
-receive the active guest movie path and reset decoder/timing state between
-movies so `mv_*.sfd` playback can use the same verified path.
+`sub_00158DE0` (flat list at `0x00A1F388`) and `sub_00159180` (block-chained
+list from `[0x0099A1F8]`) both dispatch on a record type word of 0, 1 or 2 and
+send anything else to a bound check that does not advance the cursor -- the
+guest spins at 100% CPU with the process alive. That is the hang about a minute
+into the title phase; real hardware would spin too, so the list is genuinely
+bad.
 
-## Maintenance Rules
+`[WALKCHK]` validates the whole chain at every walk entry and it has **never**
+reported a bad chain, so the corruption happens *during* the walk. Captured
+live at the stall, the record the walk stopped on held `0x001C0800` -- the
+address of the D3D device object, i.e. a push-buffer method/parameter pair
+written through the wrong cursor -- with runs of small integers around it.
+`src/game/main.c` carries an opt-in write watch (`DOA3_WATCHVA=<hex guest VA>`,
+`DOA3_WATCHLEN=<hex>`) that reports the writing RIP; it is armed post-movie and
+has not yet been pointed at the list pages.
 
-- Keep this file about the current tree, not a diary of attempted patches.
-- Record only fixes that remain applied and facts supported by source or direct
-  measurements.
-- Label user-visible behavior as accepted only after the user confirms it.
-- Put rejected experiments in commit history or issue discussions, not here.
-- Preserve unrelated user changes when modifying the working tree.
+### Character state is frozen after the movie
+
+The character position table at `0x004BB950 + 16*i` reads identical
+bit-for-bit across samples seconds apart while the camera is clearly moving,
+with both fighters at x = z = 0. The base positions at `0x004BAFD0 + 0xE8*k`
+are loaded and finite, and `sub_000910B9` (the fragment that writes the table)
+does run after the movie -- with zero movement deltas on the x87 stack and a
+base position at the origin. So the models are loaded but never stepped or
+placed, which is why no fighters appear and why the attract camera has nothing
+to follow.
+
+### The pixel pipeline is fixed-function only
+
+DOA3 drives colour through the NV2A register combiners
+(`SET_COMBINER_*`, ~330k writes every two seconds) and the translator
+substitutes a single fixed-function stage. Only texture stage 0 is ever bound,
+which matches the guest -- `[TEXCTL0]` shows stages 1 to 3 enabled zero times --
+so multi-texturing is not the gap; the combiner program is.
+
+`SET_SURFACE_ZETA_OFFSET` (0x0214) and `SET_WINDOW_CLIP_*` (0x02B4/0x02C0/
+0x02E0) are still ignored, so the render-to-texture pass shares the main depth
+buffer and no scissor is applied.
+
+Hardware vertex blending is **not** a gap: `SET_SKIN_MODE` is written with
+non-zero modes, but model-view matrices 1 to 3 (`0x04C0`, `0x0500`, `0x0540`)
+are never uploaded, so there is nothing to blend.
+

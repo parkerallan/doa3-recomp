@@ -81,9 +81,18 @@ typedef struct D3D8Texture {
     UINT                    levels;
     D3DFORMAT               d3d8_format;
     DXGI_FORMAT             dxgi_format;
-    BYTE                   *sys_mem;    /* Level 0 system memory */
-    UINT                    pitch;      /* Row pitch of level 0 */
+    BYTE                   *sys_mem;    /* == level_mem[0] */
+    UINT                    pitch;      /* == level_pitch[0] */
+    /* Per-level staging. The Xbox ships its own mip chain inside the same
+     * texture blob and the game asks for trilinear filtering on most of its
+     * surfaces, so every level has to be uploadable, not just level 0. */
+#define D3D8_MAX_LEVELS 16
+    BYTE                   *level_mem[D3D8_MAX_LEVELS];
+    UINT                    level_pitch[D3D8_MAX_LEVELS];
+    UINT                    level_w[D3D8_MAX_LEVELS];
+    UINT                    level_h[D3D8_MAX_LEVELS];
     BOOL                    locked;
+    UINT                    locked_level;
     BOOL                    dirty;
 } D3D8Texture;
 

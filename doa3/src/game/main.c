@@ -1271,10 +1271,25 @@ int main(int argc, char **argv)
         }
     }
     setvbuf(stdout, NULL, _IONBF, 0);
-#ifdef NDEBUG
-    /* Release builds have no console; keep diagnostics beside the project. */
-    freopen("doa3_log.txt", "w", stderr);
-#endif
+    /* Diagnostics go to a file whenever stderr would otherwise reach a
+     * console.
+     *
+     * This build logs heavily and stderr is unbuffered, so every line is a
+     * synchronous console write. Launched from a shell that redirects
+     * stderr that costs nothing, but double-clicked -- where the process
+     * owns a real console -- it starves the guest badly enough that boot
+     * never completes and the window just stays blank. Release builds have
+     * no console at all and already needed this.
+     *
+     * GetConsoleMode only succeeds on a console handle, so a redirected or
+     * piped stderr is left exactly as the caller set it. */
+    {
+        HANDLE herr = GetStdHandle(STD_ERROR_HANDLE);
+        DWORD cmode;
+        if (herr == NULL || herr == INVALID_HANDLE_VALUE ||
+            GetConsoleMode(herr, &cmode))
+            freopen("doa3_log.txt", "w", stderr);
+    }
     setvbuf(stderr, NULL, _IONBF, 0);
 
     atexit(doa3_atexit);

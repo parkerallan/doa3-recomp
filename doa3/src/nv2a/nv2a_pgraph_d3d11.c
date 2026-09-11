@@ -129,13 +129,28 @@ static int nv2a_draw_mode_to_d3d(uint32_t mode) {
 }
 
 /* NV2A blend factors → D3D blend */
+/* NV2A blend factor -> D3DBLEND. Returns 0 for a value that is not a blend
+ * factor at all: the push-buffer parse desyncs often enough to drop floats
+ * into these registers, and mapping those to ONE turns an ordinary surface
+ * into an additive blowout. The caller keeps its last good pair instead. */
 static uint32_t nv2a_blend_to_d3d(uint32_t nv) {
     switch (nv) {
         case 0x0000: return D3DBLEND_ZERO;
         case 0x0001: return D3DBLEND_ONE;
+        case 0x0300: return D3DBLEND_SRCCOLOR;
+        case 0x0301: return D3DBLEND_INVSRCCOLOR;
         case 0x0302: return D3DBLEND_SRCALPHA;
         case 0x0303: return D3DBLEND_INVSRCALPHA;
-        default:     return D3DBLEND_ONE;
+        case 0x0304: return D3DBLEND_DESTALPHA;
+        case 0x0305: return D3DBLEND_INVDESTALPHA;
+        case 0x0306: return D3DBLEND_DESTCOLOR;
+        case 0x0307: return D3DBLEND_INVDESTCOLOR;
+        case 0x0308: return D3DBLEND_SRCALPHASAT;
+        /* CONSTANT_COLOR/ALPHA have no fixed-function D3D8 equivalent; the
+         * constant is almost always opaque white in this title. */
+        case 0x8001: case 0x8003: return D3DBLEND_ONE;
+        case 0x8002: case 0x8004: return D3DBLEND_ZERO;
+        default:     return 0;   /* not a blend factor */
     }
 }
 
@@ -227,11 +242,12 @@ static struct {
     uint32_t dyn_src_off;   /* guest address of the last upload */
     int      dyn_src_valid; /* last upload was static (swizzled/DXT) */
     uint32_t dyn_w, dyn_h, dyn_fmt;
+    uint32_t dyn_levels;          /* mip levels of the last binding */
     /* Guest-texture cache: one D3D texture per (address, size, format). */
 #define TEXCACHE_N 192
     struct {
         IDirect3DTexture8 *tex;
-        uint32_t off, w, h, fmt;
+        uint32_t off, w, h, fmt, levels;
         int uploaded;       /* immutable source already uploaded */
         uint32_t sum;       /* checksum of the guest source when uploaded */
     } texcache[TEXCACHE_N];
@@ -417,13 +433,27 @@ static DWORD nv_d3d_address(uint32_t nvmode)
 
 /* NV2A minification filter -> D3DTEXF. 1 nearest, 2 linear, 3/4 with a
  * nearest mip, 5/6 with a linear mip; the odd values are the nearest
- * variants. Only level 0 is uploaded, so the mip term is reported NONE. */
+ * variants. */
 static DWORD nv_d3d_minfilter(uint32_t m)
 {
     switch (m & 0xFF) {
     case 1: case 3: case 5: return 1;   /* POINT  */
     case 2: case 4: case 6: return 2;   /* LINEAR */
     default: return 2;
+    }
+}
+
+/* The mip term of the same enum: NEAREST/LINEAR have no mip filter, 3 and 4
+ * select the nearest level, 5 and 6 interpolate between two. This used to be
+ * pinned to NONE because only level 0 was ever uploaded; with the guest's own
+ * mip chain uploaded it can follow the register, which is what stops distant
+ * stage textures from aliasing into noise. */
+static DWORD nv_d3d_mipfilter(uint32_t m)
+{
+    switch (m & 0xFF) {
+    case 3: case 4: return 1;   /* POINT  */
+    case 5: case 6: return 2;   /* LINEAR */
+    default: return 0;          /* NONE   */
     }
 }
 
@@ -471,7 +501,8 @@ static void nv_apply_tex_address(IDirect3DDevice8 *dev, int stage)
         }
         dev->lpVtbl->SetTextureStageState(dev, stage, 16 /*MAGFILTER*/, mg);
         dev->lpVtbl->SetTextureStageState(dev, stage, 17 /*MINFILTER*/, mn);
-        dev->lpVtbl->SetTextureStageState(dev, stage, 18 /*MIPFILTER*/, 0 /*NONE*/);
+        dev->lpVtbl->SetTextureStageState(dev, stage, 18 /*MIPFILTER*/,
+                                          g_pg.dyn_levels > 1 ? nv_d3d_mipfilter(f >> 16) : 0);
     }
     {   /* DOA3 DIAG: what the game actually asks for, per 2 s. */
         extern volatile int g_doa3_post_movie;
@@ -510,7 +541,7 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
     uint32_t fmtreg = g_pg.tex[0].format;
     uint32_t off    = g_pg.tex[0].offset;
     uint32_t nvfmt  = (fmtreg >> 8) & 0xFF;
-    uint32_t w, h, bpp, pitch;
+    uint32_t w, h, bpp, pitch, nlevels = 1;
     int swizzled, compressed;
     D3DFORMAT d3dfmt;
 
@@ -551,6 +582,22 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
         return NULL;
     }
 
+    /* Mip levels. SET_TEXTURE_FORMAT bits 19:16 hold the number of levels
+     * present in the source; the Xbox packs level 1 onward immediately after
+     * level 0 in the same blob. Measured on the title stage, the game declares
+     * 3 to 9 levels on most of its draws and asks for a linear mip filter, so
+     * uploading only level 0 left every minified surface aliasing. Linear
+     * (non-swizzled, non-DXT) surfaces are render targets and movie frames:
+     * one level only. */
+    {
+        uint32_t declared = (fmtreg >> 16) & 0xF;
+        uint32_t mx = (w > h) ? w : h, cap = 1;
+        while ((mx >> (cap - 1)) > 1) cap++;
+        nlevels = (swizzled || compressed) ? declared : 1;
+        if (nlevels < 1) nlevels = 1;
+        if (nlevels > cap) nlevels = cap;
+    }
+
     /* Source stride. control1 carries a linear pitch and is only meaningful
      * for linear formats; swizzled and DXT data are tightly packed. */
     if (compressed) {
@@ -562,11 +609,20 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
         if (pitch < w * bpp || pitch > 0x4000) pitch = w * bpp;
     }
 
-    /* Bounds-check the whole source against guest RAM before reading it. */
+    /* Bounds-check the whole source -- every level -- against guest RAM
+     * before reading it. */
     {
-        unsigned long long need = compressed
-            ? (unsigned long long)pitch * ((h + 3) / 4)
-            : (unsigned long long)pitch * h;
+        unsigned long long need = 0;
+        uint32_t l, lw = w, lh = h;
+        for (l = 0; l < nlevels; l++) {
+            uint32_t lp = compressed
+                ? ((lw + 3) / 4) * ((d3dfmt == D3DFMT_DXT1) ? 8u : 16u)
+                : (swizzled ? lw * bpp : pitch);
+            need += compressed ? (unsigned long long)lp * ((lh + 3) / 4)
+                               : (unsigned long long)lp * lh;
+            lw = (lw > 1) ? lw / 2 : 1;
+            lh = (lh > 1) ? lh / 2 : 1;
+        }
         if ((unsigned long long)off + need > 0x04000000ull) {
             extern uint32_t g_texnull[4];
             g_texnull[3]++;
@@ -601,7 +657,7 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
                 g_pg.texcache[slot].tex->lpVtbl->Release(g_pg.texcache[slot].tex);
                 g_pg.texcache[slot].tex = NULL;
             }
-            if (dev->lpVtbl->CreateTexture(dev, w, h, 1, 0, d3dfmt, 0,
+            if (dev->lpVtbl->CreateTexture(dev, w, h, nlevels, 0, d3dfmt, 0,
                                            &g_pg.texcache[slot].tex) != 0 ||
                 !g_pg.texcache[slot].tex) {
                 g_pg.texcache[slot].tex = NULL;
@@ -611,6 +667,7 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
             g_pg.texcache[slot].w = w;
             g_pg.texcache[slot].h = h;
             g_pg.texcache[slot].fmt = (uint32_t)d3dfmt;
+            g_pg.texcache[slot].levels = nlevels;
             g_pg.texcache[slot].uploaded = 0;
             {   static unsigned s_made = 0;
                 if (s_made < 64) { s_made++;
@@ -622,6 +679,7 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
         }
         g_pg.dyn_tex = g_pg.texcache[slot].tex;
         g_pg.dyn_w = w; g_pg.dyn_h = h; g_pg.dyn_fmt = (uint32_t)d3dfmt;
+        g_pg.dyn_levels = g_pg.texcache[slot].levels;
 
         /* Swizzled and DXT textures come from the immutable XPR0 bundles, so
          * once uploaded they never need redoing -- re-unswizzling them every
@@ -654,33 +712,46 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
         g_pg.texcache[slot].uploaded = (swizzled || compressed);
     }
     {
-        D3DLOCKED_RECT lr;
-        if (g_pg.dyn_tex->lpVtbl->LockRect(g_pg.dyn_tex, 0, &lr, NULL, 0) == 0 && lr.pBits) {
-            const uint8_t *srcp = (const uint8_t *)((uintptr_t)off + g_xbox_mem_offset);
-            uint8_t *dstp = (uint8_t *)lr.pBits;
-            if (compressed) {
-                /* DXT blocks are already linear; copy block-row by block-row. */
-                uint32_t rows = (h + 3) / 4;
-                for (uint32_t r = 0; r < rows; r++)
-                    memcpy(dstp + (size_t)r * lr.Pitch,
-                           srcp + (size_t)r * pitch, pitch);
-            } else if (swizzled) {
-                /* Z-order -> row-major, then copy honouring the lock pitch. */
-                uint8_t *lin = (uint8_t *)malloc((size_t)w * h * bpp);
-                if (lin) {
-                    xbox_unswizzle_rect(lin, srcp, w, h, bpp);
-                    for (uint32_t yy = 0; yy < h; yy++)
+        const uint8_t *srcp = (const uint8_t *)((uintptr_t)off + g_xbox_mem_offset);
+        uint32_t l, lw = w, lh = h;
+        for (l = 0; l < nlevels; l++) {
+            D3DLOCKED_RECT lr;
+            /* Source stride of this level. Swizzled and DXT levels are
+             * tightly packed; a linear surface only ever has level 0. */
+            uint32_t lp = compressed
+                ? ((lw + 3) / 4) * ((d3dfmt == D3DFMT_DXT1) ? 8u : 16u)
+                : (swizzled ? lw * bpp : pitch);
+            size_t lsize = compressed ? (size_t)lp * ((lh + 3) / 4)
+                                      : (size_t)lp * lh;
+            if (g_pg.dyn_tex->lpVtbl->LockRect(g_pg.dyn_tex, l, &lr, NULL, 0) == 0 &&
+                lr.pBits) {
+                uint8_t *dstp = (uint8_t *)lr.pBits;
+                if (compressed) {
+                    uint32_t rows = (lh + 3) / 4, r;
+                    for (r = 0; r < rows; r++)
+                        memcpy(dstp + (size_t)r * lr.Pitch,
+                               srcp + (size_t)r * lp, lp);
+                } else if (swizzled) {
+                    uint8_t *lin = (uint8_t *)malloc((size_t)lw * lh * bpp);
+                    if (lin) {
+                        uint32_t yy;
+                        xbox_unswizzle_rect(lin, srcp, lw, lh, bpp);
+                        for (yy = 0; yy < lh; yy++)
+                            memcpy(dstp + (size_t)yy * lr.Pitch,
+                                   lin + (size_t)yy * lw * bpp, (size_t)lw * bpp);
+                        free(lin);
+                    }
+                } else {
+                    uint32_t row_bytes = lw * bpp, yy;
+                    for (yy = 0; yy < lh; yy++)
                         memcpy(dstp + (size_t)yy * lr.Pitch,
-                               lin + (size_t)yy * w * bpp, (size_t)w * bpp);
-                    free(lin);
+                               srcp + (size_t)yy * lp, row_bytes);
                 }
-            } else {
-                uint32_t row_bytes = w * bpp;
-                for (uint32_t yy = 0; yy < h; yy++)
-                    memcpy(dstp + (size_t)yy * lr.Pitch,
-                           srcp + (size_t)yy * pitch, row_bytes);
+                g_pg.dyn_tex->lpVtbl->UnlockRect(g_pg.dyn_tex, l);
             }
-            g_pg.dyn_tex->lpVtbl->UnlockRect(g_pg.dyn_tex, 0);
+            srcp += lsize;
+            lw = (lw > 1) ? lw / 2 : 1;
+            lh = (lh > 1) ? lh / 2 : 1;
         }
     }
     return g_pg.dyn_tex;
@@ -1090,9 +1161,24 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             }
         }
     }
-    dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHABLENDENABLE, TRUE);
-    dev->lpVtbl->SetRenderState(dev, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-    dev->lpVtbl->SetRenderState(dev, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    /* Blending. This used to be forced on with SRCALPHA/INVSRCALPHA for every
+     * draw while SET_BLEND_ENABLE/SFACTOR/DFACTOR were tracked and never read.
+     * Measured on the title stage: the guest asks for blending OFF on ~65% of
+     * its batches and uses two functions when it is on (SRCALPHA/INVSRCALPHA
+     * and the additive SRCALPHA/ONE). Forcing it on made every opaque surface
+     * depend on an alpha channel it was not written for, and rendered the
+     * additive pass as an ordinary blend. */
+    {
+        static DWORD s_sf = D3DBLEND_SRCALPHA, s_df = D3DBLEND_INVSRCALPHA;
+        DWORD sf = nv2a_blend_to_d3d(g_pg.blend_sfactor);
+        DWORD df = nv2a_blend_to_d3d(g_pg.blend_dfactor);
+        if (sf) s_sf = sf;          /* a non-factor is parse garbage: keep the */
+        if (df) s_df = df;          /* last value the guest really programmed  */
+        dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHABLENDENABLE,
+                                    g_pg.blend_enable ? TRUE : FALSE);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_SRCBLEND, s_sf);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_DESTBLEND, s_df);
+    }
 
     /* Alpha test. DOA3 drives it hard -- SET_ALPHA_FUNC arrives ~785,000
      * times in a couple of minutes -- and without it the punch-through
@@ -1269,8 +1355,56 @@ static void nv_clip_lerp(const ClipVert *a, const ClipVert *b, float t, ClipVert
         fo[i] = fa[i] + (fb[i] - fa[i]) * t;
 }
 
-/* Clip one triangle against Zc >= 0; writes up to 2 triangles (6 verts). */
+/* Clip one convex polygon against one half-space. `sel` picks the clip
+ * coordinate (0 = W, 1 = Z); the kept side is coord >= eps. */
+static int nv_clip_plane(const ClipVert *in, int n_in, int sel, float eps,
+                         ClipVert *out)
+{
+    int n = 0, i;
+    for (i = 0; i < n_in; i++) {
+        const ClipVert *a = &in[i], *b = &in[(i + 1) % n_in];
+        float da = (sel ? a->Z : a->W) - eps;
+        float db = (sel ? b->Z : b->W) - eps;
+        int ina = (da >= 0.0f), inb = (db >= 0.0f);
+        if (ina) out[n++] = *a;
+        if (ina != inb) {
+            float t = da / (da - db);
+            nv_clip_lerp(a, b, t, &out[n++]);
+        }
+    }
+    return n;
+}
+
+/* Clip one triangle against Wc > 0 and Zc >= 0; writes up to 3 triangles.
+ *
+ * Clipping on Zc alone was not enough. Zc here is the pre-divide depth
+ * (o->z * W), so for a vertex behind the eye -- W < 0 -- a positive
+ * view-space depth term comes back out as a POSITIVE Zc and the vertex was
+ * kept, with its screen position mirrored through the origin. Those are the
+ * triangles that sweep across the frame. Wc > 0 is the plane that actually
+ * separates in front of the eye from behind it, and XYZRHW cannot represent
+ * the far side of it at all. */
+#define NV_CLIP_MAXTRI 3
 static int nv_clip_triangle(const ClipVert in[3], OutputVertex *dst)
+{
+    ClipVert a[8], b[8];
+    int n;
+    n = nv_clip_plane(in, 3, 0, 1e-6f, a);         /* W > 0 */
+    if (n < 3) return 0;
+    n = nv_clip_plane(a, n, 1, 0.0f, b);           /* Z >= 0 */
+    if (n < 3) return 0;
+    {   int i, t = 0;
+        for (i = 2; i < n; i++) {                  /* fan the result */
+            nv_clip_to_out(&b[0], &dst[t * 3 + 0]);
+            nv_clip_to_out(&b[i - 1], &dst[t * 3 + 1]);
+            nv_clip_to_out(&b[i], &dst[t * 3 + 2]);
+            t++;
+        }
+        return t;
+    }
+}
+
+static int nv_clip_triangle_old(const ClipVert in[3], OutputVertex *dst)
 {
     ClipVert poly[4]; int n = 0, i;
     for (i = 0; i < 3; i++) {
@@ -1465,12 +1599,23 @@ static void submit_array_draw(void)
             fflush(stderr); }
     }
 
+    {   /* A non-finite transform output cannot be rasterised into anything
+         * meaningful -- D3D's behaviour there is undefined and what comes out
+         * is a random smear across the frame. Drop the batch. */
+        uint32_t k;
+        for (k = 0; k < out_n; k++) {
+            float X = out[k].x, Y = out[k].y, W = out[k].rhw;
+            if (!(X == X) || !(Y == Y) || !(W == W)) { g_pg.idx_count = 0; return; }
+        }
+    }
+
     nv_apply_draw_state(dev, out, out_n);
 
     if ((prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
         nv_batch_needs_clip(out, out_n)) {
         uint32_t ntri = (prim == D3DPT_TRIANGLELIST) ? out_n / 3 : out_n - 2;
-        OutputVertex *cl = (OutputVertex *)_alloca(ntri * 6 * sizeof(OutputVertex));
+        /* Two clip planes can turn one triangle into a 5-gon -> 3 triangles. */
+        OutputVertex *cl = (OutputVertex *)_alloca(ntri * 9 * sizeof(OutputVertex));
         uint32_t cn = nv_clip_batch(out, out_n, prim, cl);
         {   /* DOA3 DIAG: clip statistics, one line every ~2 s. */
             static DWORD s_next = 0; static uint32_t s_b = 0, s_ti = 0, s_to = 0, s_empty = 0;

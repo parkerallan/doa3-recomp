@@ -83671,7 +83671,7 @@ loc_001BC254: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001BC260(void)
+void sub_001BC260_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -85643,7 +85643,7 @@ loc_001BCBF1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001BCC00(void)
+void sub_001BCC00_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

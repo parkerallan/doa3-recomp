@@ -374,6 +374,17 @@ static HRESULT __stdcall tex_QueryInterface(IDirect3DTexture8 *self, const IID *
     return E_NOINTERFACE;
 }
 
+/* Free the per-level staging buffers of a texture. */
+static void d3d8_tex_free_levels(D3D8Texture *tex)
+{
+    UINT l;
+    for (l = 0; l < D3D8_MAX_LEVELS; l++) {
+        free(tex->level_mem[l]);
+        tex->level_mem[l] = NULL;
+    }
+    tex->sys_mem = NULL;
+}
+
 static ULONG __stdcall tex_AddRef(IDirect3DTexture8 *self)
 {
     return (ULONG)InterlockedIncrement(&tex_from_iface(self)->ref_count);
@@ -386,7 +397,7 @@ static ULONG __stdcall tex_Release(IDirect3DTexture8 *self)
     if (ref <= 0) {
         if (tex->srv) ID3D11ShaderResourceView_Release(tex->srv);
         if (tex->d3d11_texture) ID3D11Texture2D_Release(tex->d3d11_texture);
-        free(tex->sys_mem);
+        d3d8_tex_free_levels(tex);
         free(tex);
     }
     return (ULONG)ref;
@@ -433,55 +444,58 @@ static HRESULT __stdcall tex_LockRect(IDirect3DTexture8 *self, UINT Level, D3DLO
     D3D8Texture *tex = tex_from_iface(self);
     (void)pRect; (void)Flags;
 
-    if (!pLockedRect || Level != 0) return E_INVALIDARG;
+    if (!pLockedRect || Level >= tex->levels || Level >= D3D8_MAX_LEVELS)
+        return E_INVALIDARG;
     if (tex->locked) return E_FAIL;
+    if (!tex->level_mem[Level]) return E_FAIL;
 
-    pLockedRect->Pitch = (INT)tex->pitch;
-    pLockedRect->pBits = tex->sys_mem;
+    pLockedRect->Pitch = (INT)tex->level_pitch[Level];
+    pLockedRect->pBits = tex->level_mem[Level];
     tex->locked = TRUE;
+    tex->locked_level = Level;
     return S_OK;
 }
 
 static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT Level)
 {
     D3D8Texture *tex = tex_from_iface(self);
-    if (Level != 0 || !tex->locked) return E_FAIL;
+    if (!tex->locked || Level != tex->locked_level) return E_FAIL;
+    if (Level >= tex->levels || Level >= D3D8_MAX_LEVELS) return E_FAIL;
 
     tex->locked = FALSE;
     tex->dirty = TRUE;
 
-    /* Upload level 0 to GPU */
-    ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
-    if (ctx && tex->d3d11_texture) {
-        UINT rows;
-        BYTE *upload_data = tex->sys_mem;
-        BYTE *unswizzled = NULL;
+    /* Upload this level to its own subresource. */
+    {
+        ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
+        if (ctx && tex->d3d11_texture) {
+            UINT lw = tex->level_w[Level], lh = tex->level_h[Level];
+            UINT lp = tex->level_pitch[Level];
+            UINT rows = d3d8_format_is_compressed(tex->d3d8_format)
+                      ? (lh + 3) / 4 : lh;
+            BYTE *upload_data = tex->level_mem[Level];
+            BYTE *unswizzled = NULL;
 
-        if (d3d8_format_is_compressed(tex->d3d8_format))
-            rows = (tex->height + 3) / 4;
-        else
-            rows = tex->height;
-
-        /* Unswizzle if the format is a swizzled Xbox format */
-        if (!d3d8_format_is_compressed(tex->d3d8_format) &&
-            d3d8_format_is_swizzled(tex->d3d8_format))
-        {
-            UINT bpp = d3d8_format_bpp(tex->d3d8_format) / 8;
-            UINT linear_size = tex->width * tex->height * bpp;
-            unswizzled = (BYTE *)malloc(linear_size);
-            if (unswizzled) {
-                xbox_unswizzle_rect(unswizzled, tex->sys_mem,
-                                     tex->width, tex->height, bpp);
-                upload_data = unswizzled;
+            /* Unswizzle if the format is a swizzled Xbox format */
+            if (!d3d8_format_is_compressed(tex->d3d8_format) &&
+                d3d8_format_is_swizzled(tex->d3d8_format))
+            {
+                UINT bpp = d3d8_format_bpp(tex->d3d8_format) / 8;
+                unswizzled = (BYTE *)malloc((size_t)lw * lh * bpp);
+                if (unswizzled) {
+                    xbox_unswizzle_rect(unswizzled, tex->level_mem[Level],
+                                        lw, lh, bpp);
+                    upload_data = unswizzled;
+                }
             }
+
+            ID3D11DeviceContext_UpdateSubresource(ctx,
+                (ID3D11Resource *)tex->d3d11_texture,
+                Level, NULL, upload_data, lp, lp * rows);
+            tex->dirty = FALSE;
+
+            if (unswizzled) free(unswizzled);
         }
-
-        ID3D11DeviceContext_UpdateSubresource(ctx,
-            (ID3D11Resource *)tex->d3d11_texture,
-            0, NULL, upload_data, tex->pitch, tex->pitch * rows);
-        tex->dirty = FALSE;
-
-        if (unswizzled) free(unswizzled);
     }
     return S_OK;
 }
@@ -512,16 +526,38 @@ HRESULT d3d8_CreateTextureImpl(UINT Width, UINT Height, UINT Levels, DWORD Usage
     tex->width = Width;
     tex->height = Height;
     tex->levels = Levels ? Levels : 1;
+    if (tex->levels > D3D8_MAX_LEVELS) tex->levels = D3D8_MAX_LEVELS;
+    {   /* One full mip chain cannot be longer than log2(max dim) + 1. */
+        UINT mx = (Width > Height) ? Width : Height, cap = 1;
+        while ((mx >> (cap - 1)) > 1) cap++;
+        if (tex->levels > cap) tex->levels = cap;
+    }
     tex->pitch = d3d8_row_pitch(Format, Width);
 
-    /* Allocate system memory for level 0 */
-    if (d3d8_format_is_compressed(Format))
-        data_size = tex->pitch * ((Height + 3) / 4);
-    else
-        data_size = tex->pitch * Height;
-
-    tex->sys_mem = (BYTE *)calloc(1, data_size);
-    if (!tex->sys_mem) { free(tex); return E_OUTOFMEMORY; }
+    /* Staging memory for every level. */
+    {
+        UINT l, lw = Width, lh = Height;
+        for (l = 0; l < tex->levels; l++) {
+            UINT lp = d3d8_row_pitch(Format, lw);
+            UINT sz = d3d8_format_is_compressed(Format)
+                    ? lp * ((lh + 3) / 4) : lp * lh;
+            tex->level_w[l] = lw;
+            tex->level_h[l] = lh;
+            tex->level_pitch[l] = lp;
+            tex->level_mem[l] = (BYTE *)calloc(1, sz ? sz : 1);
+            if (!tex->level_mem[l]) {
+                UINT k;
+                for (k = 0; k < l; k++) free(tex->level_mem[k]);
+                free(tex);
+                return E_OUTOFMEMORY;
+            }
+            lw = (lw > 1) ? lw / 2 : 1;
+            lh = (lh > 1) ? lh / 2 : 1;
+        }
+    }
+    tex->sys_mem = tex->level_mem[0];
+    data_size = tex->level_pitch[0];
+    (void)data_size;
 
     /* Create D3D11 texture */
     memset(&td, 0, sizeof(td));
@@ -537,7 +573,7 @@ HRESULT d3d8_CreateTextureImpl(UINT Width, UINT Height, UINT Levels, DWORD Usage
     hr = ID3D11Device_CreateTexture2D(d3d8_GetD3D11Device(), &td, NULL, &tex->d3d11_texture);
     if (FAILED(hr)) {
         fprintf(stderr, "D3D8: CreateTexture2D failed: 0x%08lX (fmt=%d %ux%u)\n", hr, Format, Width, Height);
-        free(tex->sys_mem);
+        d3d8_tex_free_levels(tex);
         free(tex);
         return hr;
     }
@@ -552,7 +588,7 @@ HRESULT d3d8_CreateTextureImpl(UINT Width, UINT Height, UINT Levels, DWORD Usage
         (ID3D11Resource *)tex->d3d11_texture, &srvd, &tex->srv);
     if (FAILED(hr)) {
         ID3D11Texture2D_Release(tex->d3d11_texture);
-        free(tex->sys_mem);
+        d3d8_tex_free_levels(tex);
         free(tex);
         return hr;
     }

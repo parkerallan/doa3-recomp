@@ -4465,6 +4465,50 @@ DRIFT_PROBE(sub_001B69F0)
 DRIFT_PROBE(sub_001B74A0)
 DRIFT_PROBE(sub_001B6810)
 DRIFT_PROBE(sub_001B6290)
+/* sub_001BCC00 and sub_001BC260 -- the two callees that destroy the device
+ * pointer inside the texture-stage applier sub_001B6410.
+ *
+ * The generated bodies are split and their pops live in successor fragments
+ * that the taken path never reaches, so on some paths they return with
+ * ebx/esi/edi clobbered and the guest stack low. The checker the pipeline
+ * already emits around these call sites recorded it directly ([CSCHK3]):
+ *
+ *   sub_001BCC00: esi 001C0800 -> 00000000, edi 00000000 -> 001C0800,
+ *                 ebx 000007FF -> 00000000, esp d=-84  (correct d=+12)
+ *   sub_001BC260: ebx 00000003 -> 001C0800, edi 001C0800 -> 00000000,
+ *                 esp d=-72                            (correct d=+16)
+ *
+ * sub_001B6410 holds the device in esi across both calls and pushes it to
+ * XMETAL_StartPush at 0x001B6496; its second StartPush site at 0x001B6790
+ * reads the device from [esp+0x30]. With esi zeroed and esp 156 bytes low,
+ * StartPush was called with a null device -- 106 of every 127 push-buffer
+ * wraps -- and each of those rewound the translator to the ring base, so the
+ * whole 1 MB push buffer was re-translated on every kick (~81 MB every two
+ * seconds), replaying every draw and clear of the frames still in
+ * the buffer over the live one.
+ *
+ * Both are __stdcall: 3 args (ret 0xC) and 4 args (ret 0x10) respectively,
+ * matching the pushes at 0x001B6441 and 0x001B644B. Enforce the ABI. */
+void sub_001BCC00_gen(void);
+void sub_001BCC00(void)
+{
+    uint32_t ei = esp;
+    uint32_t s_di = edi, s_si = esi, s_bx = ebx;
+    sub_001BCC00_gen();
+    edi = s_di; esi = s_si; ebx = s_bx;
+    esp = ei + 4 + 0xCu;
+}
+
+void sub_001BC260_gen(void);
+void sub_001BC260(void)
+{
+    uint32_t ei = esp;
+    uint32_t s_di = edi, s_si = esi, s_bx = ebx;
+    sub_001BC260_gen();
+    edi = s_di; esi = s_si; ebx = s_bx;
+    esp = ei + 4 + 0x10u;
+}
+
 /* sub_001B6410 (texture-stage dirty applier, ret 4): leaks -176 bytes via its
  * fragmented callee chain (sub_001BC260 -> _2CF/_45A fragments, bug class #7),
  * which sank every esp-relative local in the lazy vertex apply above it —

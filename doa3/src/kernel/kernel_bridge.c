@@ -308,6 +308,12 @@ static void bridge_NtClose(void)
         fflush(stderr);
     }
 
+    /* A published file handle retires its table slot; the id is never
+     * reissued, so a later read with it fails instead of aliasing. */
+    if (xbox_fh_release(raw_handle)) {
+        g_eax = 0;
+        return;
+    }
     /* Close real handles but skip fake/synthetic ones */
     if (raw_handle && raw_handle != 0xDEAD0001u &&
         raw_handle != 0xBEEF0010u && h != INVALID_HANDLE_VALUE) {
@@ -1067,6 +1073,95 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
 
 /* Write a Win32 HANDLE into a 32-bit Xbox memory slot.
  * Win32 handles fit in 32 bits even on Win64. */
+/* Guest file handles are opaque and never reused.
+ *
+ * Handing the guest raw Win32 HANDLE values lets Windows recycle a value the
+ * guest still holds: a double-clicked boot issued 0x7F4 for d:\\voice.afs,
+ * closed it, and Windows then gave the same 0x7F4 to the z:\\ directory
+ * handle. The guest kept reading with its cached 0x7F4 and got
+ * ERROR_INVALID_HANDLE from a directory forever -- 482,000 failed reads and a
+ * boot that never finished. Which values get recycled depends on open/close
+ * ordering, which is why it reproduced on a double-click but not on a
+ * shell launch with redirected output.
+ *
+ * Publish a tagged, monotonically increasing id instead and keep the real
+ * HANDLE in a table. A stale guest handle then resolves to a dead slot and
+ * fails cleanly rather than aliasing a different live object. Values outside
+ * the tagged range pass through untouched, so event/thread/synthetic handles
+ * are unaffected. */
+#define XFH_TAG   0x66000000u
+#define XFH_MAX   4096
+static HANDLE s_fh[XFH_MAX];
+static WCHAR  s_fh_path[XFH_MAX][MAX_PATH];
+static unsigned s_fh_next;
+
+static uint32_t xbox_fh_publish(HANDLE h, const WCHAR *win_path)
+{
+    if (s_fh_next >= XFH_MAX) {
+        static int told = 0;
+        if (!told) { told = 1;
+            fprintf(stderr, "  [FILE] handle table full (%u); using raw handles\n", XFH_MAX);
+            fflush(stderr); }
+        return (uint32_t)(uintptr_t)h;
+    }
+    s_fh[s_fh_next] = h;
+    s_fh_path[s_fh_next][0] = 0;
+    if (win_path)
+        wcsncpy_s(s_fh_path[s_fh_next], MAX_PATH, win_path, MAX_PATH - 1);
+    return XFH_TAG | (uint32_t)(s_fh_next++ * 4u);
+}
+
+static HANDLE xbox_fh_resolve(uint32_t gh)
+{
+    if ((gh & 0xFF000000u) == XFH_TAG) {
+        unsigned i = (gh & 0x00FFFFFFu) / 4u;
+        if (i < XFH_MAX && s_fh[i])
+            return s_fh[i];
+        /* Retired id. The CRI partition setup closes its d: handles and
+         * opens the z: cache equivalents, but one partition keeps reading
+         * through its old d: handle -- a use-after-close in the guest that
+         * raw Win32 handles used to hide, because Windows had recycled the
+         * value to some other live file and the read returned that file's
+         * bytes instead. Re-open the file this id actually named, so the
+         * read gets the right data and boot proceeds. */
+        if (i < XFH_MAX && s_fh_path[i][0]) {
+            HANDLE r = CreateFileW(s_fh_path[i], GENERIC_READ,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   NULL, OPEN_EXISTING,
+                                   FILE_ATTRIBUTE_NORMAL, NULL);
+            if (r != INVALID_HANDLE_VALUE) {
+                static int told = 0;
+                s_fh[i] = r;
+                if (told < 8) { told++;
+                    fprintf(stderr, "  [FILE] reopened retired handle 0x%08X (%S)\n",
+                            gh, s_fh_path[i]);
+                    fflush(stderr); }
+                return r;
+            }
+        }
+        return INVALID_HANDLE_VALUE;
+    }
+    return (HANDLE)(uintptr_t)gh;               /* not ours: unchanged */
+}
+
+static int xbox_fh_release(uint32_t gh)
+{
+    if ((gh & 0xFF000000u) == XFH_TAG) {
+        unsigned i = (gh & 0x00FFFFFFu) / 4u;
+        if (i < XFH_MAX && s_fh[i]) {
+            { static int nrel = 0;
+              if (nrel < 64) { nrel++;
+                  fprintf(stderr, "  [FILE] release handle=0x%08X\n", gh);
+                  fflush(stderr); } }
+            CloseHandle(s_fh[i]);
+            s_fh[i] = NULL;   /* id never reissued; path kept for reopen */
+        }
+        return 1;
+    }
+    return 0;
+}
+
+
 static void bridge_write_handle(uint32_t handle_va, HANDLE h)
 {
     if (handle_va)
@@ -1206,11 +1301,13 @@ static NTSTATUS bridge_create_file_impl(
         }
     }
 
-    bridge_write_handle(handle_va, h);
-    bridge_write_iostatus(iostatus_va, STATUS_SUCCESS,
-                          (disposition == 2) ? 2 /* FILE_CREATED */ : 1 /* FILE_OPENED */);
-
-    fprintf(stderr, "  [FILE] open: %s -> handle=0x%08X\n", xbox_path, (uint32_t)(uintptr_t)h);
+    {
+        uint32_t gh = xbox_fh_publish(h, win_path);
+        if (handle_va) BRIDGE_MEM32(handle_va) = gh;
+        bridge_write_iostatus(iostatus_va, STATUS_SUCCESS,
+                              (disposition == 2) ? 2 /* FILE_CREATED */ : 1 /* FILE_OPENED */);
+        fprintf(stderr, "  [FILE] open: %s -> handle=0x%08X\n", xbox_path, gh);
+    }
     fflush(stderr);
     return STATUS_SUCCESS;
 }
@@ -1312,7 +1409,7 @@ int g_kernel_trace_reads = 0;
 extern void (*g_kernel_ptinfo_hook)(const char *where);
 static void bridge_NtReadFile(void)
 {
-    HANDLE   handle     = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
+    HANDLE   handle     = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
     /* arg1: Event handle - ignored for sync I/O */
     uint32_t apc_va     = STACK_ARG(2);  /* ApcRoutine (kernel NtUserIoApcDispatcher thunk) */
     uint32_t apc_ctx    = STACK_ARG(3);  /* ApcContext = XAPI user completion routine VA */
@@ -1387,6 +1484,30 @@ static void bridge_NtReadFile(void)
         return;
     }
 
+    /* Mapping every ReadFile failure to STATUS_UNSUCCESSFUL loses the only
+     * information that says why, and the CRI loader retries such a read
+     * forever -- a boot that fails here just spins. Report the Win32 error
+     * and the request once per distinct error, and translate the ones the
+     * guest knows how to handle. */
+    {
+        DWORD err = GetLastError();
+        static DWORD seen[8]; static int nseen = 0;
+        int known = 0, i;
+        for (i = 0; i < nseen; i++) if (seen[i] == err) { known = 1; break; }
+        if (!known && nseen < 8) {
+            seen[nseen++] = err;
+            fprintf(stderr, "  [FILE] NtReadFile FAILED err=%lu gh=0x%08X handle=%p "
+                            "buf=0x%08X len=%u off=%s\n",
+                    (unsigned long)err, STACK_ARG(0), handle, buffer_va, length,
+                    offset_va ? "explicit" : "current");
+            fflush(stderr);
+        }
+        if (err == ERROR_HANDLE_EOF) {
+            bridge_write_iostatus(iostatus, 0xC0000011u, 0); /* END_OF_FILE */
+            g_eax = 0xC0000011u;
+            return;
+        }
+    }
     bridge_write_iostatus(iostatus, 0xC0000001u, 0); /* STATUS_UNSUCCESSFUL */
     g_eax = 0xC0000001u;
 }
@@ -1394,7 +1515,7 @@ static void bridge_NtReadFile(void)
 /* ── NtWriteFile (ordinal 236, 8 args = 32 bytes) ─────── */
 static void bridge_NtWriteFile(void)
 {
-    HANDLE   handle     = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
+    HANDLE   handle     = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
     uint32_t iostatus   = STACK_ARG(4);
     uint32_t buffer_va  = STACK_ARG(5);
     uint32_t length     = STACK_ARG(6);
@@ -1436,7 +1557,7 @@ static void bridge_NtWriteFile(void)
 /* ── NtQueryInformationFile (ordinal 211, 5 args = 20 bytes) */
 static void bridge_NtQueryInformationFile(void)
 {
-    HANDLE   handle  = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
+    HANDLE   handle  = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
     uint32_t ios_va  = STACK_ARG(1);
     uint32_t info_va = STACK_ARG(2);
     uint32_t length  = STACK_ARG(3);
@@ -1527,7 +1648,7 @@ static void bridge_NtQueryInformationFile(void)
 /* ── NtSetInformationFile (ordinal 226, 5 args = 20 bytes) ─ */
 static void bridge_NtSetInformationFile(void)
 {
-    HANDLE   handle    = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
+    HANDLE   handle    = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
     uint32_t ios_va    = STACK_ARG(1);
     uint32_t info_va   = STACK_ARG(2);
     /* uint32_t length = STACK_ARG(3); */
@@ -1661,7 +1782,7 @@ static void bridge_NtQueryFullAttributesFile(void)
 /* ── NtFlushBuffersFile (ordinal 198, 2 args = 8 bytes) ─── */
 static void bridge_NtFlushBuffersFile(void)
 {
-    HANDLE handle = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
+    HANDLE handle = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
     uint32_t ios_va = STACK_ARG(1);
     FlushFileBuffers(handle);
     bridge_write_iostatus(ios_va, STATUS_SUCCESS, 0);
@@ -1708,7 +1829,7 @@ static int qdir_is_dot_entry(const WCHAR *n)
 
 static void bridge_NtQueryDirectoryFile(void)
 {
-    HANDLE   handle      = (HANDLE)(uintptr_t)STACK_ARG(0); /* NT: handle VALUE, not pointer */
+    HANDLE   handle      = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
     /* arg1: Event, arg2: ApcRoutine, arg3: ApcContext - ignored */
     uint32_t ios_va      = STACK_ARG(4);
     uint32_t info_va     = STACK_ARG(5);

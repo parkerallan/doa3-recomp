@@ -264,21 +264,66 @@ static D3D11_FILTER d3d8_to_d3d11_filter(DWORD mag, DWORD min, DWORD mip)
     return D3D11_FILTER_MIN_MAG_MIP_POINT;
 }
 
+/* Sampler cache.
+ *
+ * This used to release and recreate a sampler state for all four stages on
+ * every state apply -- and the NV2A translator applies state per draw, so on
+ * the title stage that was ~3500 CreateSamplerState calls a frame for what is
+ * in practice a handful of distinct samplers. Keep them keyed by the six
+ * stage states that feed the descriptor. */
+#define D3D8_SAMPCACHE_N 32
+static struct {
+    DWORD key;
+    ID3D11SamplerState *state;
+} g_sampcache[D3D8_SAMPCACHE_N];
+static unsigned g_sampcache_n;
+static DWORD g_sampler_key[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
+
+void d3d8_states_release_samplers(void)
+{
+    unsigned i;
+    for (i = 0; i < D3D8_SAMPCACHE_N; i++) {
+        if (g_sampcache[i].state) ID3D11SamplerState_Release(g_sampcache[i].state);
+        g_sampcache[i].state = NULL;
+        g_sampcache[i].key = 0;
+    }
+    g_sampcache_n = 0;
+    for (i = 0; i < 4; i++) {
+        g_sampler_states[i] = NULL;
+        g_sampler_key[i] = 0xFFFFFFFFu;
+    }
+}
+
 void d3d8_states_apply_sampler(DWORD stage)
 {
     const DWORD *tss;
     D3D11_SAMPLER_DESC sd;
     HRESULT hr;
+    DWORD key;
+    unsigned i;
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
 
     if (stage >= 4) return;
     tss = d3d8_GetTSS(stage);
     if (!tss) return;
 
-    /* Release old sampler */
-    if (g_sampler_states[stage]) {
-        ID3D11SamplerState_Release(g_sampler_states[stage]);
-        g_sampler_states[stage] = NULL;
+    key = (DWORD)((tss[D3DTSS_MAGFILTER] & 7u)
+        | ((tss[D3DTSS_MINFILTER] & 7u) << 3)
+        | ((tss[D3DTSS_MIPFILTER] & 7u) << 6)
+        | ((tss[D3DTSS_ADDRESSU] & 7u) << 9)
+        | ((tss[D3DTSS_ADDRESSV] & 7u) << 12)
+        | ((tss[D3DTSS_MAXANISOTROPY] & 0xFFu) << 15));
+
+    if (key == g_sampler_key[stage] && g_sampler_states[stage])
+        return;                                  /* already bound on this stage */
+
+    for (i = 0; i < g_sampcache_n; i++) {
+        if (g_sampcache[i].key == key && g_sampcache[i].state) {
+            g_sampler_states[stage] = g_sampcache[i].state;
+            g_sampler_key[stage] = key;
+            ID3D11DeviceContext_PSSetSamplers(ctx, stage, 1, &g_sampler_states[stage]);
+            return;
+        }
     }
 
     memset(&sd, 0, sizeof(sd));
@@ -293,9 +338,25 @@ void d3d8_states_apply_sampler(DWORD stage)
     sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
     sd.MaxLOD = D3D11_FLOAT32_MAX;
 
-    hr = ID3D11Device_CreateSamplerState(d3d8_GetD3D11Device(), &sd, &g_sampler_states[stage]);
-    if (SUCCEEDED(hr)) {
-        ID3D11DeviceContext_PSSetSamplers(ctx, stage, 1, &g_sampler_states[stage]);
+    {
+        ID3D11SamplerState *ss = NULL;
+        hr = ID3D11Device_CreateSamplerState(d3d8_GetD3D11Device(), &sd, &ss);
+        if (FAILED(hr) || !ss) return;
+        if (g_sampcache_n < D3D8_SAMPCACHE_N) {
+            g_sampcache[g_sampcache_n].key = key;
+            g_sampcache[g_sampcache_n].state = ss;
+            g_sampcache_n++;
+        } else {
+            /* Cache full: replace slot 0 rather than leaking. */
+            if (g_sampcache[0].state) ID3D11SamplerState_Release(g_sampcache[0].state);
+            g_sampcache[0].key = key;
+            g_sampcache[0].state = ss;
+            {   unsigned k;
+                for (k = 0; k < 4; k++) g_sampler_key[k] = 0xFFFFFFFFu; }
+        }
+        g_sampler_states[stage] = ss;
+        g_sampler_key[stage] = key;
+        ID3D11DeviceContext_PSSetSamplers(ctx, stage, 1, &ss);
     }
 }
 
@@ -317,7 +378,7 @@ void d3d8_states_shutdown(void)
     if (g_raster_state) { ID3D11RasterizerState_Release(g_raster_state); g_raster_state = NULL; }
     for (i = 0; i < 4; i++) {
         if (g_sampler_states[i]) {
-            ID3D11SamplerState_Release(g_sampler_states[i]);
+            g_sampler_states[i] = NULL;   /* owned by the sampler cache */
             g_sampler_states[i] = NULL;
         }
     }
