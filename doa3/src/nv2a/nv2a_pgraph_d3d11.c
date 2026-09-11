@@ -78,14 +78,28 @@ static IDirect3DTexture8 *create_dxt5_texture(IDirect3DDevice8 *dev,
 #define NV097_SET_CLEAR_RECT_HORIZONTAL 0x1D98
 #define NV097_SET_CLEAR_RECT_VERTICAL   0x1D9C
 
-#define NV097_SET_DEPTH_TEST_ENABLE     0x0354
+#define NV097_SET_DEPTH_TEST_ENABLE     0x030C
+#define NV097_SET_DEPTH_FUNC            0x0354
+#define NV097_SET_DEPTH_MASK            0x035C
 #define NV097_SET_BLEND_ENABLE          0x0304
 #define NV097_SET_BLEND_FUNC_SFACTOR    0x0344
 #define NV097_SET_BLEND_FUNC_DFACTOR    0x0348
-#define NV097_SET_CULL_FACE_ENABLE      0x039C
+#define NV097_SET_CULL_FACE_ENABLE      0x0308
+#define NV097_SET_CULL_FACE             0x039C
+#define NV097_SET_FRONT_FACE            0x03A0
+#define NV097_SET_STENCIL_TEST_ENABLE   0x032C
+#define NV097_SET_STENCIL_MASK          0x0360
+#define NV097_SET_STENCIL_FUNC          0x0364
+#define NV097_SET_STENCIL_FUNC_REF      0x0368
+#define NV097_SET_STENCIL_FUNC_MASK     0x036C
+#define NV097_SET_STENCIL_OP_FAIL       0x0370
+#define NV097_SET_STENCIL_OP_ZFAIL      0x0374
+#define NV097_SET_STENCIL_OP_ZPASS      0x0378
 #define NV097_SET_ALPHA_TEST_ENABLE     0x0300
+#define NV097_SET_ALPHA_FUNC            0x033C
+#define NV097_SET_ALPHA_REF             0x0340
 #define NV097_SET_COLOR_MASK            0x0358
-#define NV097_SET_SHADE_MODE            0x0368
+#define NV097_SET_SHADE_MODE            0x037C
 
 #define NV097_SET_VIEWPORT_OFFSET       0x0A20
 #define NV097_SET_VIEWPORT_SCALE        0x0AF0
@@ -94,7 +108,10 @@ static IDirect3DTexture8 *create_dxt5_texture(IDirect3DDevice8 *dev,
 
 #define NV097_SET_TEXTURE_OFFSET        0x1B00  /* +0x40 per stage */
 #define NV097_SET_TEXTURE_FORMAT        0x1B04  /* +0x40 per stage */
-#define NV097_SET_TEXTURE_CONTROL0      0x1B08  /* +0x40 per stage */
+#define NV097_SET_TEXTURE_ADDRESS       0x1B08  /* +0x40 per stage */
+#define NV097_SET_TEXTURE_CONTROL0      0x1B0C  /* +0x40 per stage */
+#define NV097_SET_TEXTURE_CONTROL1      0x1B10  /* +0x40 per stage */
+#define NV097_SET_TEXTURE_FILTER        0x1B14  /* +0x40 per stage */
 
 /* NV2A draw modes → D3D primitive types */
 static int nv2a_draw_mode_to_d3d(uint32_t mode) {
@@ -163,11 +180,20 @@ static struct {
 
     /* Render state cache */
     int depth_test;
+    int depth_mask;        /* NV097_SET_DEPTH_MASK: depth writes enabled */
+    uint32_t depth_func;   /* NV097_SET_DEPTH_FUNC, GL constant 0x200..0x207 */
     int blend_enable;
     uint32_t blend_sfactor;
     uint32_t blend_dfactor;
     int cull_enable;
+    uint32_t cull_face;      /* 0x404 FRONT, 0x405 BACK, 0x408 BOTH */
+    uint32_t front_face;     /* 0x900 CW, 0x901 CCW */
+    int stencil_enable;
+    uint32_t stencil_mask, stencil_func, stencil_ref, stencil_func_mask;
+    uint32_t stencil_fail, stencil_zfail, stencil_zpass;
     int alpha_test;
+    uint32_t alpha_func;   /* NV097_SET_ALPHA_FUNC, GL constant 0x200..0x207 */
+    uint32_t alpha_ref;    /* NV097_SET_ALPHA_REF, 0..255 */
     uint32_t color_mask;
 
     /* Viewport */
@@ -175,13 +201,21 @@ static struct {
     float vp_scale[4];
     uint32_t surface_clip_h;
     uint32_t surface_clip_v;
+    /* DOA3: depth range the fixed-function output is normalised with.
+     * SET_CLIP_MIN/MAX (0x0394/0x0398) are what the hardware clips z
+     * against; the zeta format (SET_SURFACE_FORMAT bits 7:4) gives the
+     * z-buffer range: Z16 = 65535, Z24S8 = 16777215. */
+    float    clip_min, clip_max;
+    uint32_t surface_fmt;
 
     /* Texture state per stage (4 stages) */
     struct {
         uint32_t offset;     /* NV2A VRAM offset (method 0x1B00) */
         uint32_t format;     /* Format register (method 0x1B04) */
-        uint32_t control0;   /* Control0 register (method 0x1B08) */
-        uint32_t control1;   /* Control1: linear pitch in hi16 (method 0x1B0C) */
+        uint32_t address;    /* Address modes: U bits 0-3, V bits 8-11 (0x1B08) */
+        uint32_t control0;   /* Control0 register (method 0x1B0C) */
+        uint32_t control1;   /* Control1: linear pitch in hi16 (method 0x1B10) */
+        uint32_t filter;     /* MIN bits 16-23, MAG bits 24-27 (method 0x1B14) */
         uint32_t image_rect; /* Linear size: (width<<16)|height (method 0x1B1C) */
         int enabled;         /* Decoded from control0 bit 30 */
     } tex[4];
@@ -199,6 +233,7 @@ static struct {
         IDirect3DTexture8 *tex;
         uint32_t off, w, h, fmt;
         int uploaded;       /* immutable source already uploaded */
+        uint32_t sum;       /* checksum of the guest source when uploaded */
     } texcache[TEXCACHE_N];
     uint32_t texcache_next;
 
@@ -264,6 +299,15 @@ void pgraph_d3d11_init(void)
     g_pg.layout_uv_off = 2;
     g_pg.layout_color_off = 4;
     g_pg.clear_color = 0xFF000000;
+    g_pg.depth_test = 1;            /* hardware defaults: test and write on, */
+    g_pg.depth_mask = 1;            /* comparing LESS, until the game says   */
+    g_pg.depth_func = 0x201;        /* otherwise                             */
+    g_pg.cull_face = 0x405;         /* BACK, CCW front: the GL defaults      */
+    g_pg.front_face = 0x901;
+    g_pg.stencil_func = 0x207;      /* ALWAYS                                */
+    g_pg.stencil_mask = 0xFF;
+    g_pg.stencil_func_mask = 0xFF;
+    g_pg.stencil_fail = g_pg.stencil_zfail = g_pg.stencil_zpass = 0x1E00; /* KEEP */
     g_pg.color_mask = 0x01010101;
     g_pg.initialized = 1;
 
@@ -337,6 +381,128 @@ static int nv_texture_format(uint32_t nvfmt, D3DFORMAT *out_fmt,
     *out_compressed = comp;
     *out_swizzled = !comp && d3d8_format_is_swizzled(nvfmt);
     return 1;
+}
+
+/* NV2A texture address mode -> D3DTEXTUREADDRESS. The two enums agree for
+ * wrap/mirror/clamp/border; the OGL clamp variant has no D3D8 equivalent and
+ * maps to clamp. An unprogrammed register means wrap, the hardware default --
+ * not clamp, which smears the edge texel over every tiled surface. */
+/* GL stencil op enum -> D3DSTENCILOP (KEEP 1 .. DECR 8). */
+static DWORD nv_d3d_stencil_op(uint32_t op)
+{
+    switch (op) {
+    case 0x1E00: return 1;   /* KEEP    */
+    case 0x0000: return 2;   /* ZERO    */
+    case 0x1E01: return 3;   /* REPLACE */
+    case 0x1E02: return 4;   /* INCRSAT */
+    case 0x1E03: return 5;   /* DECRSAT */
+    case 0x150A: return 6;   /* INVERT  */
+    case 0x8507: return 7;   /* INCR    */
+    case 0x8508: return 8;   /* DECR    */
+    default:     return 1;
+    }
+}
+
+static DWORD nv_d3d_address(uint32_t nvmode)
+{
+    switch (nvmode & 0xF) {
+    case 1:  return 1;   /* WRAP   */
+    case 2:  return 2;   /* MIRROR */
+    case 3:  return 3;   /* CLAMP_TO_EDGE */
+    case 4:  return 4;   /* BORDER */
+    case 5:  return 3;   /* CLAMP_TO_EDGE_OGL */
+    default: return 1;
+    }
+}
+
+/* NV2A minification filter -> D3DTEXF. 1 nearest, 2 linear, 3/4 with a
+ * nearest mip, 5/6 with a linear mip; the odd values are the nearest
+ * variants. Only level 0 is uploaded, so the mip term is reported NONE. */
+static DWORD nv_d3d_minfilter(uint32_t m)
+{
+    switch (m & 0xFF) {
+    case 1: case 3: case 5: return 1;   /* POINT  */
+    case 2: case 4: case 6: return 2;   /* LINEAR */
+    default: return 2;
+    }
+}
+
+static DWORD nv_d3d_magfilter(uint32_t m)
+{
+    return ((m & 0xF) == 1) ? 1u : 2u;  /* 1 nearest, else linear */
+}
+
+static void nv_apply_tex_address(IDirect3DDevice8 *dev, int stage)
+{
+    uint32_t a = g_pg.tex[stage].address;
+    {   uint32_t f = g_pg.tex[stage].filter;
+        DWORD mn = nv_d3d_minfilter(f >> 16), mg = nv_d3d_magfilter(f >> 24);
+        {   /* DOA3 DIAG: what the game asks for, and what we were doing
+             * before this (the stage states were never written at all, so the
+             * shim's mapper fell through to MIN_MAG_MIP_POINT). */
+            extern volatile int g_doa3_post_movie;
+            static DWORD s_next = 0; static uint32_t s_n[3][4];
+            s_n[0][mn & 3]++; s_n[1][mg & 3]++; s_n[2][(f == 0) ? 0 : 1]++;
+            if (g_doa3_post_movie && GetTickCount() >= s_next) {
+                s_next = GetTickCount() + 2000;
+                fprintf(stderr, "  [TEXFILT] min point=%u linear=%u | mag point=%u linear=%u | filter reg unset=%u set=%u\n",
+                        s_n[0][1], s_n[0][2], s_n[1][1], s_n[1][2], s_n[2][0], s_n[2][1]);
+                fflush(stderr); memset(s_n, 0, sizeof s_n);
+            }
+        }
+        {   /* DOA3 DIAG: mip levels the source declares, and how many stages
+             * the game actually enables -- the two texture features this
+             * translator still does not implement. */
+            extern volatile int g_doa3_post_movie;
+            static DWORD s_nx = 0; static uint32_t s_mip[16], s_stg[5];
+            int k, n = 0;
+            s_mip[(g_pg.tex[stage].format >> 16) & 0xF]++;
+            for (k = 0; k < 4; k++) if (g_pg.tex[k].enabled) n++;
+            s_stg[n & 4]++;
+            if (g_doa3_post_movie && GetTickCount() >= s_nx) {
+                s_nx = GetTickCount() + 2000;
+                fprintf(stderr, "  [TEXMIP] levels:");
+                for (k = 0; k < 16; k++) if (s_mip[k]) fprintf(stderr, " %d=%u", k, s_mip[k]);
+                fprintf(stderr, " | stages enabled:");
+                for (k = 0; k < 5; k++) if (s_stg[k]) fprintf(stderr, " %d=%u", k, s_stg[k]);
+                fprintf(stderr, "\n"); fflush(stderr);
+                memset(s_mip, 0, sizeof s_mip); memset(s_stg, 0, sizeof s_stg);
+            }
+        }
+        dev->lpVtbl->SetTextureStageState(dev, stage, 16 /*MAGFILTER*/, mg);
+        dev->lpVtbl->SetTextureStageState(dev, stage, 17 /*MINFILTER*/, mn);
+        dev->lpVtbl->SetTextureStageState(dev, stage, 18 /*MIPFILTER*/, 0 /*NONE*/);
+    }
+    {   /* DOA3 DIAG: what the game actually asks for, per 2 s. */
+        extern volatile int g_doa3_post_movie;
+        static DWORD s_next = 0; static uint32_t s_u[16], s_v[16];
+        s_u[a & 0xF]++; s_v[(a >> 8) & 0xF]++;
+        if (g_doa3_post_movie && GetTickCount() >= s_next) {
+            int i; s_next = GetTickCount() + 2000;
+            fprintf(stderr, "  [TEXADDR] u:");
+            for (i = 0; i < 16; i++) if (s_u[i]) fprintf(stderr, " %d=%u", i, s_u[i]);
+            fprintf(stderr, "  v:");
+            for (i = 0; i < 16; i++) if (s_v[i]) fprintf(stderr, " %d=%u", i, s_v[i]);
+            fprintf(stderr, "\n"); fflush(stderr);
+            memset(s_u, 0, sizeof s_u); memset(s_v, 0, sizeof s_v);
+        }
+    }
+    dev->lpVtbl->SetTextureStageState(dev, stage, 13 /*ADDRESSU*/, nv_d3d_address(a));
+    dev->lpVtbl->SetTextureStageState(dev, stage, 14 /*ADDRESSV*/, nv_d3d_address(a >> 8));
+}
+
+/* Cheap checksum of a guest texture source: 64 samples spread over the data.
+ * Used only to detect the cache serving an image the game has since replaced. */
+static uint32_t nv_tex_checksum(const uint8_t *src, size_t bytes)
+{
+    uint32_t h = 2166136261u;
+    size_t step = (bytes > 256) ? bytes / 64 : 4;
+    size_t i;
+    for (i = 0; i + 4 <= bytes; i += step) {
+        uint32_t v; memcpy(&v, src + i, 4);
+        h = (h ^ v) * 16777619u;
+    }
+    return h ^ (uint32_t)bytes;
 }
 
 static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
@@ -462,6 +628,27 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
          * draw costs far more than the whole rest of the frame. Linear
          * surfaces (the movie frame, render targets) do change in place, so
          * those are always re-uploaded. */
+        {   /* DOA3 DIAG: is the cached image still what the guest holds? */
+            extern volatile int g_doa3_post_movie;
+            static DWORD s_next = 0; static uint32_t s_hit, s_stale, s_miss;
+            size_t bytes = compressed ? (size_t)pitch * ((h + 3) / 4)
+                                      : (size_t)pitch * h;
+            uint32_t now = nv_tex_checksum(
+                (const uint8_t *)((uintptr_t)off + g_xbox_mem_offset), bytes);
+            if (g_pg.texcache[slot].uploaded) {
+                s_hit++;
+                if (now != g_pg.texcache[slot].sum) s_stale++;
+            } else {
+                s_miss++;
+            }
+            g_pg.texcache[slot].sum = now;
+            if (g_doa3_post_movie && GetTickCount() >= s_next) {
+                s_next = GetTickCount() + 2000;
+                fprintf(stderr, "  [TEXSTALE] cache hits=%u of which stale=%u, uploads=%u\n",
+                        s_hit, s_stale, s_miss);
+                fflush(stderr); s_hit = s_stale = s_miss = 0;
+            }
+        }
         if ((swizzled || compressed) && g_pg.texcache[slot].uploaded)
             return g_pg.dyn_tex;
         g_pg.texcache[slot].uploaded = (swizzled || compressed);
@@ -642,6 +829,29 @@ static void nv_transform_clip(const float in[4], OutputVertex *v,
     w = c[3];
     inv = (w != 0.0f) ? (1.0f / w) : 1.0f;
 
+    if (apply_composite) {
+        /* Fixed-function path. The Xbox D3D runtime folds the viewport
+         * (w/2, -h/2, x0+w/2, y0+h/2 and the z-buffer range) into the
+         * composite matrix itself -- DOA3's [MATMUL] shows proj x viewport
+         * being multiplied before upload -- so c.xy/w is already the pixel
+         * position and c.z/w is already in z-buffer units. Only z needs
+         * normalising to D3D's [0,1], by the zeta format's range.
+         *
+         * SET_VIEWPORT_SCALE/OFFSET are deliberately NOT consulted here.
+         * They are the transform constants c[58]/c[59], which the fixed
+         * pipeline never reads, and DOA3 overwrites them mid-scene (zeros,
+         * then unit vectors). Dividing z by scale.z = 0 made every vertex
+         * z = inf, and the "no viewport" fallback below rescaled pixel
+         * coordinates as NDC (x ~ 340,000): that was the black screen after
+         * the title showcase reload. */
+        float zrange = (((g_pg.surface_fmt >> 4) & 0xF) == 1) ? 65535.0f : 16777215.0f;
+        v->x   = c[0] * inv;
+        v->y   = c[1] * inv;
+        v->z   = (c[2] * inv) / zrange;
+        v->rhw = inv;
+        return;
+    }
+
     sx = g_pg.vp_scale[0]; sy = g_pg.vp_scale[1]; sz = g_pg.vp_scale[2];
     ox = g_pg.vp_offset[0]; oy = g_pg.vp_offset[1]; oz = g_pg.vp_offset[2];
     if (sx == 0.0f && sy == 0.0f) {
@@ -813,12 +1023,98 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
      * frame went black seconds after the title appeared. The XYZRHW z is the
      * transformed z/w in [0,1], so the compat layer's depth buffer works. */
     dev->lpVtbl->SetRenderState(dev, D3DRS_ZENABLE, g_pg.depth_test ? TRUE : FALSE);
-    dev->lpVtbl->SetRenderState(dev, D3DRS_ZWRITEENABLE, g_pg.depth_test ? TRUE : FALSE);
+    dev->lpVtbl->SetRenderState(dev, D3DRS_ZWRITEENABLE, g_pg.depth_mask ? TRUE : FALSE);
+    {
+        DWORD zf = (g_pg.depth_func >= 0x200 && g_pg.depth_func <= 0x207)
+                 ? (g_pg.depth_func - 0x200) + 1 : 4 /*LESSEQUAL*/;
+        dev->lpVtbl->SetRenderState(dev, D3DRS_ZFUNC, zf);
+        {   extern volatile int g_doa3_post_movie;
+            static DWORD s_nx = 0; static uint32_t s_t, s_nt, s_m, s_nm;
+            if (g_pg.depth_test) s_t++; else s_nt++;
+            if (g_pg.depth_mask) s_m++; else s_nm++;
+            if (g_doa3_post_movie && GetTickCount() >= s_nx) {
+                s_nx = GetTickCount() + 2000;
+                fprintf(stderr, "  [DEPTH] test on=%u off=%u | write on=%u off=%u | func=0x%X(d3d %u)\n",
+                        s_t, s_nt, s_m, s_nm, g_pg.depth_func, zf);
+                fflush(stderr); s_t = s_nt = s_m = s_nm = 0;
+            }
+        }
+    }
     dev->lpVtbl->SetRenderState(dev, D3DRS_LIGHTING, FALSE);
-    dev->lpVtbl->SetRenderState(dev, D3DRS_CULLMODE, D3DCULL_NONE);
+    /* Face culling. D3DCULL names the screen winding to discard, so the
+     * mapping depends on which winding the game calls front-facing. Culling
+     * both faces has no D3D equivalent, so that degenerates to no culling
+     * rather than to guessing. */
+    {
+        DWORD cm = 1 /*NONE*/;
+        if (g_pg.cull_enable && g_pg.cull_face != 0x408) {
+            int front_cw = (g_pg.front_face == 0x900);
+            int cull_front = (g_pg.cull_face == 0x404);
+            /* front CW: front faces are CW, so culling front discards CW */
+            cm = (front_cw == cull_front) ? 2 /*CW*/ : 3 /*CCW*/;
+        }
+        dev->lpVtbl->SetRenderState(dev, D3DRS_CULLMODE, cm);
+        {   extern volatile int g_doa3_post_movie;
+            static DWORD s_nx = 0; static uint32_t s_on, s_off;
+            if (cm != 1) s_on++; else s_off++;
+            if (g_doa3_post_movie && GetTickCount() >= s_nx) {
+                s_nx = GetTickCount() + 2000;
+                fprintf(stderr, "  [CULL] culling=%u none=%u face=0x%X front=0x%X -> d3dcull %u\n",
+                        s_on, s_off, g_pg.cull_face, g_pg.front_face, cm);
+                fflush(stderr); s_on = s_off = 0;
+            }
+        }
+    }
+
+    /* Stencil. */
+    {
+        DWORD sf = (g_pg.stencil_func >= 0x200 && g_pg.stencil_func <= 0x207)
+                 ? (g_pg.stencil_func - 0x200) + 1 : 8 /*ALWAYS*/;
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILENABLE, g_pg.stencil_enable ? TRUE : FALSE);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILFUNC, sf);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILREF, g_pg.stencil_ref & 0xFF);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILMASK, g_pg.stencil_func_mask & 0xFF);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILWRITEMASK, g_pg.stencil_mask & 0xFF);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILFAIL, nv_d3d_stencil_op(g_pg.stencil_fail));
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILZFAIL, nv_d3d_stencil_op(g_pg.stencil_zfail));
+        dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILPASS, nv_d3d_stencil_op(g_pg.stencil_zpass));
+        {   extern volatile int g_doa3_post_movie;
+            static DWORD s_nx = 0; static uint32_t s_on, s_off;
+            if (g_pg.stencil_enable) s_on++; else s_off++;
+            if (g_doa3_post_movie && GetTickCount() >= s_nx) {
+                s_nx = GetTickCount() + 2000;
+                fprintf(stderr, "  [STENCIL] on=%u off=%u func=0x%X ref=%u ops=%X/%X/%X\n",
+                        s_on, s_off, g_pg.stencil_func, g_pg.stencil_ref & 0xFF,
+                        g_pg.stencil_fail, g_pg.stencil_zfail, g_pg.stencil_zpass);
+                fflush(stderr); s_on = s_off = 0;
+            }
+        }
+    }
     dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHABLENDENABLE, TRUE);
     dev->lpVtbl->SetRenderState(dev, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
     dev->lpVtbl->SetRenderState(dev, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+
+    /* Alpha test. DOA3 drives it hard -- SET_ALPHA_FUNC arrives ~785,000
+     * times in a couple of minutes -- and without it the punch-through
+     * texels of a DXT1 decal or foliage quad are drawn as opaque black
+     * instead of being discarded. */
+    {
+        DWORD func = (g_pg.alpha_func >= 0x200 && g_pg.alpha_func <= 0x207)
+                   ? (g_pg.alpha_func - 0x200) + 1 : 8 /*ALWAYS*/;
+        dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHATESTENABLE, g_pg.alpha_test ? TRUE : FALSE);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHAFUNC, func);
+        dev->lpVtbl->SetRenderState(dev, D3DRS_ALPHAREF, g_pg.alpha_ref & 0xFF);
+        {   extern volatile int g_doa3_post_movie;
+            static DWORD s_nx = 0; static uint32_t s_on, s_off;
+            if (g_pg.alpha_test) s_on++; else s_off++;
+            if (g_doa3_post_movie && GetTickCount() >= s_nx) {
+                s_nx = GetTickCount() + 2000;
+                fprintf(stderr, "  [ALPHA] test on=%u off=%u func=0x%X(d3d %u) ref=%u\n",
+                        s_on, s_off, g_pg.alpha_func, func, g_pg.alpha_ref & 0xFF);
+                fflush(stderr); s_on = s_off = 0;
+            }
+        }
+    }
 
     /* Set FVF for pre-transformed 2D with texture */
     dev->lpVtbl->SetVertexShader(dev, D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
@@ -886,8 +1182,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 4 /*MODULATE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, 2 /*TEXTURE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 6 /*ALPHAARG2*/, 0 /*DIFFUSE*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 13 /*ADDRESSU*/, 3 /*CLAMP*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 14 /*ADDRESSV*/, 3 /*CLAMP*/);
+            nv_apply_tex_address(dev, 0);
         } else {
             /* No texture — use vertex color only */
             dev->lpVtbl->SetTexture(dev, 0, NULL);
@@ -920,8 +1215,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 2 /*SELECTARG1*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/,
                                               use_diffuse ? 0 /*DIFFUSE*/ : 2 /*TEXTURE*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 13 /*ADDRESSU*/, 3 /*CLAMP*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 14 /*ADDRESSV*/, 3 /*CLAMP*/);
+            nv_apply_tex_address(dev, 0);
         } else {
             dev->lpVtbl->SetTexture(dev, 0, NULL);
             dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, 2 /*SELECTARG1*/);
@@ -1040,11 +1334,11 @@ static uint32_t nv_clip_batch(const OutputVertex *out, uint32_t n, int prim, Out
  * learning offsets both misclassified one of the two frame buffers at some
  * point, which routed the scene offscreen and froze the picture. */
 static uint32_t g_pg_surf_coff, g_pg_surf_pitch;
+extern int  d3d8_OffscreenTargetActive(void);
 static void nv_sync_render_target(void)
 {
     extern int  d3d8_SetOffscreenTarget(unsigned w, unsigned h);
     extern void d3d8_RestoreDefaultTarget(void);
-    extern int  d3d8_OffscreenTargetActive(void);
     /* Frame buffers are 720 px wide (pitch 0xC00); the reflection texture is
      * 256. A learned "widest seen" bound was poisoned once by a wider
      * surface and then classed the frame buffer itself as offscreen. */
@@ -1753,9 +2047,15 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
             dev->lpVtbl->Clear(dev, 0, NULL, flags, g_pg.clear_color, 1.0f, 0);
             {   /* DOA3 DIAG: clear trace alongside [RTT] SETRT lines. */
                 extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
-                static int s_t = 0;
-                if (g_doa3_post_movie && s_t < 400) { s_t++;
-                    fprintf(stderr, "[RTT] p=%ld CLEAR flags=%X color=%08X draws=%u\n", (long)g_doa3_heartbeat, flags, g_pg.clear_color, g_pg.stats.draw_calls); fflush(stderr); }
+                static int s_t = 0; static uint32_t s_lp, s_lc, s_k;
+                int changed = (s_lp != g_pg_surf_pitch || s_lc != g_pg_surf_coff);
+                s_k++;
+                if (g_doa3_post_movie && s_t < 1500 && (changed || (s_k & 31) == 0)) { s_t++;
+                    s_lp = g_pg_surf_pitch; s_lc = g_pg_surf_coff;
+                    fprintf(stderr, "[RTT] p=%ld CLEAR flags=%X color=%08X draws=%u pitch=%08X coff=%08X clip=%08X/%08X fmt=%08X off=%d\n",
+                            (long)g_doa3_heartbeat, flags, g_pg.clear_color, g_pg.stats.draw_calls,
+                            g_pg_surf_pitch, g_pg_surf_coff, g_pg.surface_clip_h, g_pg.surface_clip_v,
+                            g_pg.surface_fmt, d3d8_OffscreenTargetActive()); fflush(stderr); }
             }
         }
         g_pg.stats.clears++;
@@ -1765,6 +2065,14 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     /* ── Render State ── */
     case NV097_SET_DEPTH_TEST_ENABLE:
         g_pg.depth_test = param ? 1 : 0;
+        return 1;
+
+    case NV097_SET_DEPTH_FUNC:
+        g_pg.depth_func = param;
+        return 1;
+
+    case NV097_SET_DEPTH_MASK:
+        g_pg.depth_mask = param ? 1 : 0;
         return 1;
 
     case NV097_SET_BLEND_ENABLE:
@@ -1783,8 +2091,56 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         g_pg.cull_enable = param ? 1 : 0;
         return 1;
 
+    case NV097_SET_CULL_FACE:
+        g_pg.cull_face = param;
+        return 1;
+
+    case NV097_SET_FRONT_FACE:
+        g_pg.front_face = param;
+        return 1;
+
+    case NV097_SET_STENCIL_TEST_ENABLE:
+        g_pg.stencil_enable = param ? 1 : 0;
+        return 1;
+
+    case NV097_SET_STENCIL_MASK:
+        g_pg.stencil_mask = param;
+        return 1;
+
+    case NV097_SET_STENCIL_FUNC:
+        g_pg.stencil_func = param;
+        return 1;
+
+    case NV097_SET_STENCIL_FUNC_REF:
+        g_pg.stencil_ref = param;
+        return 1;
+
+    case NV097_SET_STENCIL_FUNC_MASK:
+        g_pg.stencil_func_mask = param;
+        return 1;
+
+    case NV097_SET_STENCIL_OP_FAIL:
+        g_pg.stencil_fail = param;
+        return 1;
+
+    case NV097_SET_STENCIL_OP_ZFAIL:
+        g_pg.stencil_zfail = param;
+        return 1;
+
+    case NV097_SET_STENCIL_OP_ZPASS:
+        g_pg.stencil_zpass = param;
+        return 1;
+
     case NV097_SET_ALPHA_TEST_ENABLE:
         g_pg.alpha_test = param ? 1 : 0;
+        return 1;
+
+    case NV097_SET_ALPHA_FUNC:
+        g_pg.alpha_func = param;
+        return 1;
+
+    case NV097_SET_ALPHA_REF:
+        g_pg.alpha_ref = param;
         return 1;
 
     case NV097_SET_COLOR_MASK:
@@ -1822,6 +2178,39 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     {
         int idx = (method - NV097_SET_VIEWPORT_SCALE) / 4;
         g_pg.vp_scale[idx] = u2f(param);
+        {   /* DOA3 DIAG: the game rewrites this register mid-scene; log each
+             * change so the sequence can be read against the draws. */
+            extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
+            static float s_last[4]; static int s_n = 0;
+            if (g_doa3_post_movie && idx == 3 && s_n < 60 &&
+                memcmp(s_last, g_pg.vp_scale, sizeof s_last) != 0) { s_n++;
+                memcpy(s_last, g_pg.vp_scale, sizeof s_last);
+                fprintf(stderr, "[PG-M] p=%ld vp_scale=(%g %g %g %g) vp_offset=(%g %g %g %g) xform=%X draws=%u\n",
+                        (long)g_doa3_heartbeat,
+                        g_pg.vp_scale[0], g_pg.vp_scale[1], g_pg.vp_scale[2], g_pg.vp_scale[3],
+                        g_pg.vp_offset[0], g_pg.vp_offset[1], g_pg.vp_offset[2], g_pg.vp_offset[3],
+                        g_pg.xform_mode, g_pg.stats.draw_calls);
+                fflush(stderr); }
+        }
+        return 1;
+    }
+
+    /* -- Depth clip range (SET_CLIP_MIN / SET_CLIP_MAX) -- */
+    case NV097_SET_CLIP_MIN:
+    case NV097_SET_CLIP_MAX:
+    {
+        if (method == NV097_SET_CLIP_MIN) g_pg.clip_min = u2f(param);
+        else                              g_pg.clip_max = u2f(param);
+        {   extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
+            static float s_last[2]; static int s_n = 0;
+            if (g_doa3_post_movie && method == NV097_SET_CLIP_MAX && s_n < 40 &&
+                (s_last[0] != g_pg.clip_min || s_last[1] != g_pg.clip_max)) { s_n++;
+                s_last[0] = g_pg.clip_min; s_last[1] = g_pg.clip_max;
+                fprintf(stderr, "[PG-M] p=%ld clip_min=%g clip_max=%g surf_fmt=%08X draws=%u\n",
+                        (long)g_doa3_heartbeat, g_pg.clip_min, g_pg.clip_max,
+                        g_pg.surface_fmt, g_pg.stats.draw_calls);
+                fflush(stderr); }
+        }
         return 1;
     }
 
@@ -1874,6 +2263,7 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
                     g_pg.surface_clip_h, g_pg.surface_clip_v, g_pg.stats.draw_calls, 10);
             fflush(stderr); }
         s_last[k] = param;
+        if (k == 0) g_pg.surface_fmt = param;
         if (k == 1) g_pg_surf_pitch = param;
         if (k == 2) g_pg_surf_coff = param;
         return 1;
@@ -1898,6 +2288,16 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         g_pg.tex[stage].format = param;
         return 1;
     }
+    case NV097_SET_TEXTURE_ADDRESS:
+    case NV097_SET_TEXTURE_ADDRESS + 0x40:
+    case NV097_SET_TEXTURE_ADDRESS + 0x80:
+    case NV097_SET_TEXTURE_ADDRESS + 0xC0:
+    {
+        int stage = (method - NV097_SET_TEXTURE_ADDRESS) / 0x40;
+        g_pg.tex[stage].address = param;
+        return 1;
+    }
+
     case NV097_SET_TEXTURE_CONTROL0:
     case NV097_SET_TEXTURE_CONTROL0 + 0x40:
     case NV097_SET_TEXTURE_CONTROL0 + 0x80:
@@ -1906,13 +2306,38 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         int stage = (method - NV097_SET_TEXTURE_CONTROL0) / 0x40;
         g_pg.tex[stage].control0 = param;
         g_pg.tex[stage].enabled = (param >> 30) & 1;
+        {   extern volatile int g_doa3_post_movie;
+            static DWORD s_nx = 0; static uint32_t s_w[4], s_en[4], s_last[4];
+            s_w[stage & 3]++; if ((param >> 30) & 1) s_en[stage & 3]++;
+            s_last[stage & 3] = param;
+            if (g_doa3_post_movie && GetTickCount() >= s_nx) {
+                s_nx = GetTickCount() + 2000;
+                fprintf(stderr, "  [TEXCTL0] writes/enabled per stage: %u/%u %u/%u %u/%u %u/%u last=%08X %08X\n",
+                        s_w[0], s_en[0], s_w[1], s_en[1], s_w[2], s_en[2], s_w[3], s_en[3],
+                        s_last[0], s_last[1]);
+                fflush(stderr); memset(s_w, 0, sizeof s_w); memset(s_en, 0, sizeof s_en);
+            }
+        }
         return 1;
     }
 
-    case 0x1B0C: case 0x1B0C + 0x40: case 0x1B0C + 0x80: case 0x1B0C + 0xC0:
+    case NV097_SET_TEXTURE_CONTROL1:
+    case NV097_SET_TEXTURE_CONTROL1 + 0x40:
+    case NV097_SET_TEXTURE_CONTROL1 + 0x80:
+    case NV097_SET_TEXTURE_CONTROL1 + 0xC0:
     {
-        int stage = (method - 0x1B0C) / 0x40;
+        int stage = (method - NV097_SET_TEXTURE_CONTROL1) / 0x40;
         g_pg.tex[stage].control1 = param;
+        return 1;
+    }
+
+    case NV097_SET_TEXTURE_FILTER:
+    case NV097_SET_TEXTURE_FILTER + 0x40:
+    case NV097_SET_TEXTURE_FILTER + 0x80:
+    case NV097_SET_TEXTURE_FILTER + 0xC0:
+    {
+        int stage = (method - NV097_SET_TEXTURE_FILTER) / 0x40;
+        g_pg.tex[stage].filter = param;
         return 1;
     }
     case 0x1B1C: case 0x1B1C + 0x40: case 0x1B1C + 0x80: case 0x1B1C + 0xC0:

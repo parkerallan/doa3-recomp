@@ -193,6 +193,31 @@ static void doa3_watchdog_start(void)
 void doa3_present_frame(void)
 {
     InterlockedIncrement(&g_doa3_heartbeat);
+    {   /* DOA3 DIAG: render command list occupancy.
+         * list 1 = 0x00A1F388 .. write ptr [0x00B1F390]  (1 MB)
+         * list 2 = 0x0099F378 .. write ptr [0x00A1F378]  (1 MB)
+         * Both write-pointer globals sit immediately above their buffer, so
+         * an overflow destroys the pointer itself and everything above it.
+         * sub_00158BE0 appends without any bound check; the only reset is
+         * sub_00158B60, once per frame from sub_000B8855. */
+        extern volatile int g_doa3_post_movie;
+        static DWORD s_next = 0;
+        static uint32_t s_hi1 = 0, s_hi2 = 0, s_over = 0, s_frames = 0;
+        uint32_t w1 = MEM32(0x00B1F390u), w2 = MEM32(0x00A1F378u);
+        uint32_t u1 = (w1 >= 0x00A1F388u && w1 <= 0x00B1F388u) ? w1 - 0x00A1F388u : 0xFFFFFFFFu;
+        uint32_t u2 = (w2 >= 0x0099F378u && w2 <= 0x00A1F378u) ? w2 - 0x0099F378u : 0xFFFFFFFFu;
+        s_frames++;
+        if (u1 == 0xFFFFFFFFu || u2 == 0xFFFFFFFFu) s_over++;
+        else { if (u1 > s_hi1) s_hi1 = u1; if (u2 > s_hi2) s_hi2 = u2; }
+        if (g_doa3_post_movie && GetTickCount() >= s_next) {
+            s_next = GetTickCount() + 2000;
+            fprintf(stderr, "  [LIST] frames=%u list1=%u/1048576 (hi %u) list2=%u/1048576 (hi %u) bad_ptr_frames=%u w1=%08X w2=%08X\n",
+                    s_frames, (u1 == 0xFFFFFFFFu) ? 0 : u1, s_hi1,
+                    (u2 == 0xFFFFFFFFu) ? 0 : u2, s_hi2, s_over, w1, w2);
+            fflush(stderr);
+            s_frames = 0;
+        }
+    }
     {   /* DOA3 DIAG: which surface the guest device is rendering into at
          * present time (device+0x40C), sampled every ~2 s post-movie. */
         extern volatile int g_doa3_post_movie;

@@ -3602,7 +3602,51 @@ void sub_001B3940(void) {
         fflush(stderr);
         draw_probe_count++;
     }
-    sub_001B3940_gen();
+    {   /* DOA3 DIAG: the list is valid when the walk starts (rt168) but the
+         * walk still lands on a non-record word, so watch it change from
+         * inside.  ebx is the walker's record cursor at this call site. */
+        extern uint32_t g_walk_start, g_walk_end, g_walk_canary;
+        extern int g_walk_active;
+        extern volatile int g_doa3_post_movie;
+        extern volatile LONG g_doa3_heartbeat;
+        static int s_n = 0;
+        if (g_doa3_post_movie && g_walk_active && s_n < 10 &&
+            ebx >= g_walk_start && ebx < g_walk_end) {
+            uint32_t wp  = MEM32(0x00B1F390u);
+            uint32_t can = (g_walk_end > g_walk_start + 0x14u) ? MEM32(g_walk_end - 0x14u) : g_walk_canary;
+            uint32_t nxt = MEM32(ebx + 0x14u);
+            const char *why = (wp < g_walk_end)      ? "write-ptr moved back" :
+                              (can != g_walk_canary) ? "canary changed" :
+                              (nxt > 2 && ebx + 0x14u < g_walk_end) ? "next record type bad" : NULL;
+            if (why) {
+                void *bt[14]; USHORT nf = CaptureStackBackTrace(1, 14, bt, NULL); USHORT k;
+                s_n++;
+                fprintf(stderr, "[WALKRACE] p=%ld %s | ebx=+%u of %u wp=%08X (end=%08X) canary %08X->%08X next=%08X bt:",
+                        (long)g_doa3_heartbeat, why, ebx - g_walk_start,
+                        g_walk_end - g_walk_start, wp, g_walk_end, g_walk_canary, can, nxt);
+                for (k = 0; k < nf; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+                fprintf(stderr, "\n"); fflush(stderr);
+            }
+        }
+    }
+    {   /* DOA3 DIAG: this routine reserves push-buffer space and rep-movsd's
+         * into it.  The render list goes bad during this call (canary), so
+         * report whenever the destination is not inside our RAM push buffer. */
+        extern uint32_t g_doa3_pb_base, g_doa3_pb_end;
+        extern volatile int g_doa3_post_movie;
+        extern volatile LONG g_doa3_heartbeat;
+        static int told = 0;
+        uint32_t cur = MEM32(0x001C0800u);
+        uint32_t lim = MEM32(0x001C0804u);
+        sub_001B3940_gen();
+        if (g_doa3_post_movie && told < 10 && g_doa3_pb_base &&
+            (cur < g_doa3_pb_base || cur >= g_doa3_pb_end)) { told++;
+            fprintf(stderr, "[PBDEST] p=%ld sub_001B3940 dst=%08X lim=%08X (buffer %08X..%08X) mode=%X count=%X src=%08X ebx=%08X after=%08X\n",
+                    (long)g_doa3_heartbeat, cur, lim, g_doa3_pb_base, g_doa3_pb_end,
+                    MEM32(esp + 4), MEM32(esp + 8), MEM32(esp + 12), s_ebx,
+                    MEM32(0x001C0800u));
+            fflush(stderr); }
+    }
     edi = s_edi; esi = s_esi; ebx = s_ebx;
 }
 
@@ -4304,6 +4348,7 @@ void sub_001B45F0(void)
  *
  * Apply the same wrap the other two use and do the append directly, so there
  * is no retry to recurse on. */
+static void doa3_pb_wrap(uint32_t dev, const char *who);
 void sub_001B2390(void)
 {
     extern uint32_t g_doa3_pb_base, g_doa3_pb_end;
@@ -4324,8 +4369,8 @@ void sub_001B2390(void)
     }
     if (g_doa3_pb_base &&
         (cursor < g_doa3_pb_base || cursor + 0x1000 >= g_doa3_pb_end)) {
+        doa3_pb_wrap(dev, "Append");
         cursor = g_doa3_pb_base;
-        MEM32(dev + 0x04) = g_doa3_pb_end;
     }
     MEM32(cursor)     = ecx;
     MEM32(cursor + 4) = edx;
@@ -5004,6 +5049,13 @@ static void doa3_translate_pb(uint32_t from, uint32_t to)
 
     (void)drew_since_present;
     uint32_t pos = from;
+    /* DOA3 DIAG: words the parser cannot read as a method header, and
+     * headers whose parameters run past the write cursor. Either one means
+     * the parse is out of step with the guest's stream. */
+    extern volatile int g_doa3_post_movie;
+    static uint32_t s_skip = 0, s_over = 0, s_hdrs = 0; static int s_log = 0;
+    static DWORD s_next = 0;
+    uint32_t last_hdr = 0, last_pos = 0;
     while (pos + 4 <= to) {
         uint32_t word = MEM32(pos); pos += 4;
         if (word == 0) continue;                       /* NOP / padding */
@@ -5012,15 +5064,118 @@ static void doa3_translate_pb(uint32_t from, uint32_t to)
             uint32_t count   = (word >> 18) & 0x7FF;
             uint32_t method  = word & 0x1FFC;
             uint32_t subchan = (word >> 13) & 7;
-            if (count == 0 || pos + count * 4 > to) continue;
+            s_hdrs++;
+            if (count == 0 || pos + count * 4 > to) {
+                s_over++;
+                if (g_doa3_post_movie && s_log < 40) { s_log++;
+                    fprintf(stderr, "[PBPARSE] overrun hdr=%08X (m=%04X n=%u) at +%u of %u, prev hdr=%08X at +%u\n",
+                            word, method, count, pos - 4 - from, to - from, last_hdr, last_pos);
+                    fflush(stderr); }
+                continue;
+            }
+            last_hdr = word; last_pos = pos - 4 - from;
             for (uint32_t i = 0; i < count; i++) {
                 uint32_t param = MEM32(pos); pos += 4;
                 uint32_t m = (kind == 0) ? method + i * 4 : method;
                 pgraph_d3d11_method((int)subchan, m, param);   /* translate to D3D11 */
             }
         }
+        else {
+            s_skip++;
+            {   static uint32_t s_ctx = 0; static uint32_t s_ctx_from = 0;
+                if (g_doa3_post_movie && s_ctx < 8 && s_ctx_from != from) { s_ctx++; s_ctx_from = from;
+                    uint32_t k, b = (pos - 4 - from >= 48) ? pos - 4 - 48 : from;
+                    fprintf(stderr, "[PBPARSE] context before skip at +%u:", pos - 4 - from);
+                    for (k = b; k < pos; k += 4) fprintf(stderr, " %08X", MEM32(k));
+                    fprintf(stderr, "\n"); fflush(stderr); }
+            }
+            if (g_doa3_post_movie && s_log < 40) { s_log++;
+                fprintf(stderr, "[PBPARSE] skip word=%08X at +%u of %u, prev hdr=%08X at +%u\n",
+                        word, pos - 4 - from, to - from, last_hdr, last_pos);
+                fflush(stderr); }
+        }
         /* jump/call/return (low bits 1/2) carry no params we translate — skip */
     }
+    if (g_doa3_post_movie && GetTickCount() >= s_next) {
+        s_next = GetTickCount() + 2000;
+        fprintf(stderr, "  [PBPARSE] hdrs=%u skipped=%u overrun=%u\n", s_hdrs, s_skip, s_over);
+        fflush(stderr);
+    }
+}
+
+/* Wrap the write cursor back to the base of our RAM push buffer.
+ *
+ * Burnout's sub_00351770 parses [base, write_ptr) BEFORE it resets the
+ * cursor. The DOA3 wrap sites below used to reset the cursor and leave
+ * g_pb_parsed where it was, relying on the next KickOff to notice
+ * g_pb_parsed > cursor and restart from the base. That only works if the
+ * next kick is shorter than the old parsed offset: a frame that needs more
+ * than the 1 MB buffer wraps mid-frame ([PBFULL] shows single kicks at
+ * 786 KB), and the following kick then translated from an arbitrary point
+ * inside the new stream -- index and vertex data read as method headers,
+ * which put packed shorts into SET_SURFACE_PITCH/OFFSET, SET_VIEWPORT_SCALE
+ * and SET_CLIP_MIN/MAX and routed the whole scene offscreen (the freeze
+ * after the title stage). Everything written since the last kick was also
+ * dropped. Translate the pending range, then reset both together. */
+/* Recording mode. The XDK sets bit 2 of [dev+0xC] while the device records
+ * into a scratch buffer (state-block / push-buffer-object recording): [dev]
+ * then points at that scratch area (seen at 0x00E00244, in the guest stack
+ * region), the live ring cursor is parked at [dev+0x400], and the original
+ * MakeSpace (0x001B8B00, flag-4 branch) rewinds the scratch cursor to the
+ * chunk base [[dev+0x3F4]+4] and adds the bytes written to [dev+0x3F8].
+ * The overrides below used to treat that scratch cursor as "outside our
+ * push buffer" and drag it to the ring base, so recorded commands were
+ * written over the live stream and the parser was restarted on them:
+ * 33 of the 40 logged wraps in rt163 were this case. */
+static int doa3_pb_recording(uint32_t dev)
+{
+    return (MEM8(dev + 0xC) & 4) != 0;
+}
+static uint32_t doa3_pb_makespace_recording(uint32_t dev)
+{
+    uint32_t cursor = MEM32(dev);
+    uint32_t desc   = MEM32(dev + 0x3F4);
+    uint32_t chunk  = MEM32(desc + 4);
+    extern volatile int g_doa3_post_movie;
+    static int s_n = 0;
+    MEM32(dev + 0x3F8) = MEM32(dev + 0x3F8) + (cursor - chunk);
+    MEM32(dev) = chunk;
+    if (g_doa3_post_movie && s_n < 12) { s_n++;
+        fprintf(stderr, "[PBREC] MakeSpace(recording) dev=%08X cursor=%08X chunk=%08X total=%u real=%08X\n",
+                dev, cursor, chunk, MEM32(dev + 0x3F8), MEM32(dev + 0x400));
+        fflush(stderr); }
+    return chunk;
+}
+
+static void doa3_pb_wrap(uint32_t dev, const char *who)
+{
+    uint32_t cursor = MEM32(dev);
+    extern volatile int g_doa3_post_movie;
+    static int s_n = 0;
+    if (cursor > g_pb_parsed && g_pb_parsed >= g_doa3_pb_base && cursor <= g_doa3_pb_end)
+        doa3_translate_pb(g_pb_parsed, cursor);
+    if (g_doa3_post_movie && s_n < 40) { s_n++;
+        fprintf(stderr, "[PBWRAP] %s cursor=+%u parsed=+%u -> base\n", who,
+                cursor - g_doa3_pb_base, g_pb_parsed - g_doa3_pb_base);
+        fflush(stderr); }
+    {   /* DOA3 DIAG: a cursor outside our buffer altogether was not put
+         * there by any of our overrides; name the guest routine that did. */
+        static int s_odd = 0;
+        if (g_doa3_post_movie && s_odd < 8 &&
+            (cursor < g_doa3_pb_base || cursor > g_doa3_pb_end)) {
+            void *bt[14]; USHORT nf = CaptureStackBackTrace(1, 14, bt, NULL); USHORT k;
+            s_odd++;
+            fprintf(stderr, "[PBWRAP] odd cursor %08X dev=%08X g_dev=%08X hdr=[%08X %08X %08X %08X %08X %08X %08X] +18=%08X +400=%08X +3F4=%08X +3F8=%08X bt:",
+                    cursor, dev, MEM32(0x1C3390u), MEM32(dev), MEM32(dev + 4), MEM32(dev + 8), MEM32(dev + 0xC),
+                    MEM32(dev + 0x10), MEM32(dev + 0x14), MEM32(dev + 0x18),
+                    MEM32(dev + 0x18), MEM32(dev + 0x400), MEM32(dev + 0x3F4), MEM32(dev + 0x3F8));
+            for (k = 0; k < nf; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]);
+            fprintf(stderr, "\n"); fflush(stderr);
+        }
+    }
+    MEM32(dev + 0x00) = g_doa3_pb_base;              /* write cursor = base */
+    MEM32(dev + 0x04) = g_doa3_pb_end;               /* segment limit = end */
+    g_pb_parsed = g_doa3_pb_base;
 }
 
 /* CDevice_KickOff (0x1B88C0) — burnout sub_003518E0 analogue. fastcall (ecx=this),
@@ -5031,11 +5186,25 @@ void sub_001B88C0(void)
     { extern void doa3_ptinfo_check(const char *); doa3_ptinfo_check("kickoff-in"); }
     uint32_t ctx = ecx;                              /* this-pointer (device/context) */
     if (ctx && ctx < 0x04000000u) {
-        uint32_t cursor = MEM32(ctx);                /* device[0] = current write cursor */
+        /* device[0] = current write cursor; while recording (flag 4) the
+         * original reads the parked ring cursor from device+0x400 instead. */
+        uint32_t cursor = doa3_pb_recording(ctx) ? MEM32(ctx + 0x400) : MEM32(ctx);
         uint32_t notifier = MEM32(ctx + 0x2304);
         if ((++g_kick_count % 10000) == 0) {
             fprintf(stderr, "[KICK] count=%u (frame loop alive)\n", g_kick_count);
             fflush(stderr);
+        }
+        {   /* DOA3 DIAG: a cursor outside our buffer means the guest wrote
+             * commands somewhere we never translate (and, past the end,
+             * onto guest VA 0 through its 26-bit address mask). */
+            extern volatile int g_doa3_post_movie;
+            static int s_n = 0;
+            if (g_doa3_post_movie && s_n < 12 && g_doa3_pb_base &&
+                (cursor < g_doa3_pb_base || cursor > g_doa3_pb_end)) { s_n++;
+                fprintf(stderr, "[KICK] cursor %08X outside buffer (limit=%08X g_dev=%08X parsed=+%u rec=%d)\n",
+                        cursor, MEM32(ctx + 4), MEM32(0x1C3390u), g_pb_parsed - g_doa3_pb_base,
+                        doa3_pb_recording(ctx));
+                fflush(stderr); }
         }
         /* Translate the push-buffer commands written since the last kick to D3D11
          * (only for the main device's RAM push buffer). */
@@ -5088,15 +5257,162 @@ void sub_001B88C0(void)
     esp += 4;   /* ret 0 */
 }
 
+/* Render command-list walker (0x00158DE0) — cdecl(end, start), ret 0.
+ *
+ * The list is built by sub_00158BE0 as a flat run of records: type 0 is a
+ * 0x290-byte state block, type 1 is 0xC bytes, type 2 is 0x14 bytes, and
+ * every builder call appends at least the type-2 record.  The walker reads
+ * the type word, dispatches, and adds the matching size.  A type word that
+ * is not 0/1/2 sends it to loc_00158FC5, which only re-tests the bound —
+ * ebx never advances, so the guest spins at 100% CPU with the process
+ * alive.  That is the post-title hang: every [WDOG] report has the same
+ * rip inside sub_00158DE0 and an unchanging ebx.
+ *
+ * The list does not overflow (watermark: 60 KB peak of 1 MB), so the chain
+ * itself is breaking.  Replay it here before the walk, read-only, and say
+ * where and on what.  The walk itself is unchanged. */
+uint32_t g_walk_start, g_walk_end, g_walk_canary;
+void doa3_walk_canary(const char *callee)
+{
+    /* Canary for the wild write that repaints the render list mid-walk.
+     * [0x00B1F388] and [0x00B1F38C] are the two per-frame indirect-call slots
+     * the list reset sub_00158B60 sets to 0x0017EC00 once a frame; nothing
+     * else in the frame writes them, yet the stall dump finds them holding
+     * the same junk as the list.  Check them after every call the walker
+     * makes and name the callee that returned with them broken. */
+    extern volatile int g_doa3_post_movie;
+    extern volatile LONG g_doa3_heartbeat;
+    static int told = 0;
+    if (!g_doa3_post_movie || told >= 6) return;
+    if (MEM32(0x00B1F388u) == 0x0017EC00u) return;   /* B1F38C carries a real game callback, not the init value */
+    told++;
+    fprintf(stderr, "[WALKCANARY] p=%ld broken after %s: B1F388=%08X B1F38C=%08X A1F378=%08X B1F390=%08X 99A1FC=%08X ebx=%08X\n",
+            (long)g_doa3_heartbeat, callee, MEM32(0x00B1F388u), MEM32(0x00B1F38Cu),
+            MEM32(0x00A1F378u), MEM32(0x00B1F390u), MEM32(0x0099A1FCu), g_ebx);
+    fflush(stderr);
+}
+
+/* Per-record trace of the walk itself (called at loc_00158E20, once per
+ * record).  The list validates clean at every entry and ebx survives every
+ * callee, yet the walk still lands on a word that is not a record type, so
+ * record what the walk actually visits and dump the tail when it breaks. */
+void doa3_walk_step(uint32_t rec)
+{
+    extern volatile int g_doa3_post_movie;
+    extern volatile LONG g_doa3_heartbeat;
+    static uint32_t ring[12]; static unsigned n = 0; static int reported = 0;
+    uint32_t t = MEM32(rec);
+    ring[n % 12] = rec; n++;
+    {   /* Who else touches this buffer while the walk is reading it?
+         * sub_00158B20 repoints the RECORDING write pointer [0x99A1FC] at
+         * 0xA1F388 -- the same 1 MB buffer the walk is reading -- and sets
+         * the recording flag [0xA1F384]; the append path sub_00158D60 then
+         * writes state-block records over it from the base.  Nothing moves
+         * [0xB1F390], so the earlier write-pointer and canary checks could
+         * not see it.  Latch the frame state at the first record of a walk
+         * and report the first thing that changes under it. */
+        extern int xbox_fiber_current(void);
+        static uint32_t w0, f0, rp0, wp0; static int fib0, armed = 0, told = 0;
+        if (w0 != g_walk_start || wp0 != g_walk_end) {
+            w0 = g_walk_start; wp0 = g_walk_end;
+            f0 = MEM32(0x00A1F384u); rp0 = MEM32(0x0099A1FCu);
+            fib0 = xbox_fiber_current(); armed = 1;
+        } else if (armed && g_doa3_post_movie && told < 6) {
+            uint32_t f = MEM32(0x00A1F384u), rp = MEM32(0x0099A1FCu);
+            int fib = xbox_fiber_current();
+            if (f != f0 || rp != rp0 || fib != fib0) { told++; armed = 0;
+                fprintf(stderr, "[WALKOWN] p=%ld at record %08X (+%u): recflag %u->%u recptr %08X->%08X fiber %d->%d\n",
+                        (long)g_doa3_heartbeat, rec, rec - g_walk_start,
+                        f0, f, rp0, rp, fib0, fib);
+                fflush(stderr); }
+        }
+    }
+    if (t <= 2 || !g_doa3_post_movie || reported >= 4) return;
+    reported++;
+    {
+        unsigned i, first = (n > 12) ? n - 12 : 0;
+        uint32_t p, good = 0; unsigned gi = 0;
+        fprintf(stderr, "[WALKSTEP] p=%ld BROKE at %08X (+%u of %u, type=%08X) after %u records; walk visited:",
+                (long)g_doa3_heartbeat, rec, rec - g_walk_start,
+                g_walk_end - g_walk_start, t, n - 1);
+        for (i = first; i < n; i++) {
+            uint32_t r = ring[i % 12];
+            fprintf(stderr, " %08X(t=%u)", r, MEM32(r));
+        }
+        for (p = g_walk_start; p < g_walk_end; ) {
+            uint32_t ct = MEM32(p);
+            if (ct > 2) break;
+            if (p <= rec) { good = p; gi++; } else break;
+            p += (ct == 0) ? 0x290u : (ct == 1) ? 0xCu : 0x14u;
+        }
+        fprintf(stderr, " | true chain record %u at %08X (+%u), next true start %08X\n",
+                gi, good, good - g_walk_start, p);
+        fflush(stderr);
+    }
+}
+int      g_walk_active;
+void sub_00158DE0_gen(void);
+void sub_00158DE0(void)
+{
+    extern volatile int g_doa3_post_movie;
+    extern volatile LONG g_doa3_heartbeat;
+    static int s_bad = 0, s_ok = 0;
+    uint32_t end   = MEM32(esp + 4);
+    uint32_t start = MEM32(esp + 8);
+
+    if (g_doa3_post_movie && s_bad < 8 && end > start && end - start < 0x200000u) {
+        uint32_t p = start, prev[4] = { 0, 0, 0, 0 }, n = 0;
+        while (p < end) {
+            uint32_t t = MEM32(p);
+            if (t > 2) {
+                int k;
+                s_bad++;
+                fprintf(stderr, "[WALKCHK] p=%ld BAD type=%08X at +%u of %u (start=%08X end=%08X) "
+                                "after %u records; last starts:",
+                        (long)g_doa3_heartbeat, t, p - start, end - start, start, end, n);
+                for (k = 0; k < 4; k++)
+                    if (prev[k]) fprintf(stderr, " +%u(t=%u)", prev[k] - start, MEM32(prev[k]));
+                fprintf(stderr, " | words at bad:");
+                for (k = -4; k < 8; k++)
+                    fprintf(stderr, " %08X", MEM32(p + (uint32_t)(k * 4)));
+                fprintf(stderr, "\n");
+                fflush(stderr);
+                break;
+            }
+            prev[0] = prev[1]; prev[1] = prev[2]; prev[2] = prev[3]; prev[3] = p;
+            p += (t == 0) ? 0x290u : (t == 1) ? 0xCu : 0x14u;
+            n++;
+        }
+        if (p == end && s_ok < 3) { s_ok++;
+            fprintf(stderr, "[WALKCHK] p=%ld chain OK: %u records, %u bytes\n",
+                    (long)g_doa3_heartbeat, n, end - start);
+            fflush(stderr); }
+        else if (p > end && s_bad < 8) { s_bad++;
+            fprintf(stderr, "[WALKCHK] p=%ld OVERSHOT end by %u after %u records (start=%08X end=%08X)\n",
+                    (long)g_doa3_heartbeat, p - end, n, start, end);
+            fflush(stderr); }
+    }
+
+    g_walk_start  = start;
+    g_walk_end    = end;
+    g_walk_canary = (end > start + 0x14u) ? MEM32(end - 0x14u) : 0;
+    g_walk_active++;
+    sub_00158DE0_gen();
+    g_walk_active--;
+}
+
 /* CDevice_MakeSpace (0x1B8B00) — burnout sub_00351770 analogue. fastcall (ecx=this),
  * ret 0. GPU consumed everything -> reset the write cursor to our RAM buffer. */
 void sub_001B8B00(void)
 {
     uint32_t ctx = ecx;
-    if (ctx && ctx < 0x04000000u && g_doa3_pb_base) {
-        MEM32(ctx + 0x00) = g_doa3_pb_base;          /* write cursor = base */
-        MEM32(ctx + 0x04) = g_doa3_pb_end;           /* segment limit = end */
+    if (ctx && ctx < 0x04000000u && doa3_pb_recording(ctx)) {
+        eax = doa3_pb_makespace_recording(ctx);
+        esp += 4;   /* ret 0 */
+        return;
     }
+    if (ctx && ctx < 0x04000000u && g_doa3_pb_base)
+        doa3_pb_wrap(ctx, "MakeSpace");
     esp += 4;   /* ret 0 */
 }
 
@@ -6397,12 +6713,18 @@ void sub_001B8DC0(void)
     uint32_t dev    = MEM32(esp + 4);
     uint32_t dwords = MEM32(esp + 8);
     uint32_t cursor = MEM32(dev);
+    if (doa3_pb_recording(dev)) {                    /* original: scratch buffer */
+        if (cursor + dwords * 4 >= MEM32(dev + 4) + 0x200)
+            cursor = doa3_pb_makespace_recording(dev);
+        eax = cursor;
+        esp += 12;  /* ret 8 */
+        return;
+    }
     if (g_doa3_pb_base &&
         (cursor < g_doa3_pb_base ||
          cursor + dwords * 4 + 0x1000 >= g_doa3_pb_end)) {
-        cursor = g_doa3_pb_base;                     /* wrap before the end */
-        MEM32(dev + 0x00) = cursor;
-        MEM32(dev + 0x04) = g_doa3_pb_end;
+        doa3_pb_wrap(dev, "Reserve");                /* wrap before the end */
+        cursor = g_doa3_pb_base;
     }
     eax = cursor;
     esp += 12;  /* ret 8 */
@@ -6415,11 +6737,17 @@ void sub_001B8DA0(void)
 {
     uint32_t dev = MEM32(esp + 4);
     uint32_t cursor = MEM32(dev);
+    if (doa3_pb_recording(dev)) {                    /* original: scratch buffer */
+        if (cursor >= MEM32(dev + 4))
+            cursor = doa3_pb_makespace_recording(dev);
+        eax = cursor;
+        esp += 8;   /* ret 4 */
+        return;
+    }
     if (g_doa3_pb_base &&
         (cursor < g_doa3_pb_base || cursor + 0x1000 >= g_doa3_pb_end)) {
-        cursor = g_doa3_pb_base;                     /* (re)start at base / wrap before end */
-        MEM32(dev + 0x00) = cursor;
-        MEM32(dev + 0x04) = g_doa3_pb_end;
+        doa3_pb_wrap(dev, "StartPush");              /* (re)start at base / wrap before end */
+        cursor = g_doa3_pb_base;
     }
     eax = cursor;
     esp += 8;   /* ret 4 */

@@ -194740,7 +194740,7 @@ loc_001585F1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00158DE0(void)
+void sub_00158DE0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -194760,7 +194760,7 @@ loc_00158DE0: ;
     edx = 1;
     ecx = 0x40304;
     MEM32(ebp + -4) = eax;
-    PUSH32(esp, 0); sub_001B2390(); /* call 0x001B2390 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2390(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2390", 0x001B2390, _cb, _cs, _ci, _cd); } /* call 0x001B2390 */
 
 loc_00158DFE: ;
     ebx = MEM32(ebp + 0xC);
@@ -194792,12 +194792,12 @@ loc_00158E2E: ;
 loc_00158E35: ;
     edx = MEM32(ebx + 4);
     ecx = MEM32(ebp + -4);
-    PUSH32(esp, 0); sub_001568B0(); /* call 0x001568B0 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001568B0(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001568B0", 0x001568B0, _cb, _cs, _ci, _cd); } /* call 0x001568B0 */
 
 loc_00158E40: ;
     ecx = MEM32(ebx + 0x10);
     PUSH32(esp, ecx);
-    PUSH32(esp, 0); sub_001B2520(); /* call 0x001B2520 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2520(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2520", 0x001B2520, _cb, _cs, _ci, _cd); } /* call 0x001B2520 */
 
 loc_00158E49: ;
     edx = MEM32(ebx + 8);
@@ -194808,7 +194808,7 @@ loc_00158E49: ;
     edx = edx + 2;
     PUSH32(esp, edx);
     PUSH32(esp, 6);
-    PUSH32(esp, 0); sub_001B3940(); /* call 0x001B3940 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B3940(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B3940", 0x001B3940, _cb, _cs, _ci, _cd); } /* call 0x001B3940 */
 
 loc_00158E63: ;
     ebx = ebx + 0x14;
@@ -194826,7 +194826,7 @@ loc_00158E6B: ;
 
 loc_00158E84: ;
     edx = 0; /* xor self */
-    PUSH32(esp, 0); sub_001B2390(); /* call 0x001B2390 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2390(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2390", 0x001B2390, _cb, _cs, _ci, _cd); } /* call 0x001B2390 */
 
 loc_00158E8B: ;
     MEM32(0x1C0480) = 0;
@@ -194834,7 +194834,7 @@ loc_00158E8B: ;
 
 loc_00158E97: ;
     edx = 1;
-    PUSH32(esp, 0); sub_001B2390(); /* call 0x001B2390 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2390(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2390", 0x001B2390, _cb, _cs, _ci, _cd); } /* call 0x001B2390 */
 
 loc_00158EA1: ;
     MEM32(0x1C0480) = 1;
@@ -194842,7 +194842,7 @@ loc_00158EA1: ;
 loc_00158EAB: ;
     ecx = MEM32(ebp + -4);
     edx = ebp + -112;
-    PUSH32(esp, 0); sub_00156810(); /* call 0x00156810 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_00156810(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_00156810", 0x00156810, _cb, _cs, _ci, _cd); } /* call 0x00156810 */
 
 loc_00158EB6: ;
     fp_push(MEMF(0x484C14)); /* fld float */
@@ -194862,7 +194862,7 @@ loc_00158ED3: ;
 loc_00158ED5: ;
     eax = ebp + -76;
     PUSH32(esp, eax);
-    PUSH32(esp, 0); sub_001B1000(); /* call 0x001B1000 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B1000(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B1000", 0x001B1000, _cb, _cs, _ci, _cd); } /* call 0x001B1000 */
 
 loc_00158EDE: ;
     edx = MEM32(ebp + -8);
@@ -194877,7 +194877,7 @@ loc_00158EF0: ;
     ecx = MEM32(ebp + -4);
     PUSH32(esp, esi);
     edx = edi;
-    PUSH32(esp, 0); sub_00156300(); /* call 0x00156300 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_00156300(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_00156300", 0x00156300, _cb, _cs, _ci, _cd); } /* call 0x00156300 */
 
 loc_00158EFB: ;
     edx = MEM32(ebp + -8);
@@ -194887,7 +194887,7 @@ loc_00158EFB: ;
 
 loc_00158F06: ;
     ecx = MEM32(ebp + -4);
-    PUSH32(esp, 0); sub_001567B0(); /* call 0x001567B0 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001567B0(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001567B0", 0x001567B0, _cb, _cs, _ci, _cd); } /* call 0x001567B0 */
 
 loc_00158F0E: ;
     ebx = ebx + 0xC;
@@ -194895,18 +194895,18 @@ loc_00158F0E: ;
 
 loc_00158F16: ;
     ecx = ebx + 4;
-    PUSH32(esp, 0); sub_00154680(); /* call 0x00154680 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_00154680(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_00154680", 0x00154680, _cb, _cs, _ci, _cd); } /* call 0x00154680 */
 
 loc_00158F1E: ;
     ecx = ebx + 0x7C;
     PUSH32(esp, ecx);
-    PUSH32(esp, 0); sub_00158A20(); /* call 0x00158A20 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_00158A20(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_00158A20", 0x00158A20, _cb, _cs, _ci, _cd); } /* call 0x00158A20 */
 
 loc_00158F27: ;
     esp = esp + 4;
     PUSH32(esp, 0x90FAA0);
     PUSH32(esp, 6);
-    PUSH32(esp, 0); sub_001B0EC0(); /* call 0x001B0EC0 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B0EC0(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B0EC0", 0x001B0EC0, _cb, _cs, _ci, _cd); } /* call 0x001B0EC0 */
 
 loc_00158F36: ;
     edx = MEM32(ebx + 0x48);
@@ -194945,7 +194945,7 @@ loc_00158FAA: ;
     PUSH32(esp, 0);
 
 loc_00158FAC: ;
-    PUSH32(esp, 0); sub_0004EDC0(); /* call 0x0004EDC0 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_0004EDC0(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_0004EDC0", 0x0004EDC0, _cb, _cs, _ci, _cd); } /* call 0x0004EDC0 */
 
 loc_00158FB1: ;
     esp = esp + 4;
@@ -194953,7 +194953,7 @@ loc_00158FB1: ;
 loc_00158FB4: ;
     edx = MEM32(ebx + 0x78);
     ecx = MEM32(ebx + 0x74);
-    PUSH32(esp, 0); sub_00155E10(); /* call 0x00155E10 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_00155E10(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_00155E10", 0x00155E10, _cb, _cs, _ci, _cd); } /* call 0x00155E10 */
 
 loc_00158FBF: ;
     ebx = ebx + 0x290;
@@ -194974,17 +194974,17 @@ loc_00158FCE: ;
 loc_00158FD0: ;
     edx = 1;
     ecx = 0x4035C;
-    PUSH32(esp, 0); sub_001B2390(); /* call 0x001B2390 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2390(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2390", 0x001B2390, _cb, _cs, _ci, _cd); } /* call 0x001B2390 */
 
 loc_00158FDF: ;
     PUSH32(esp, 0);
     MEM32(0x1C0480) = 1;
-    PUSH32(esp, 0); sub_001B2520(); /* call 0x001B2520 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2520(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2520", 0x001B2520, _cb, _cs, _ci, _cd); } /* call 0x001B2520 */
 
 loc_00158FF0: ;
     edx = 0; /* xor self */
     ecx = 0x40304;
-    PUSH32(esp, 0); sub_001B2390(); /* call 0x001B2390 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001B2390(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_00158DE0_gen", "sub_001B2390", 0x001B2390, _cb, _cs, _ci, _cd); } /* call 0x001B2390 */
 
 loc_00158FFC: ;
     MEM32(0x1C046C) = 0;

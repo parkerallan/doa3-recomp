@@ -70762,7 +70762,7 @@ loc_001B6441: ;
     PUSH32(esp, ebp);
     PUSH32(esp, edi);
     PUSH32(esp, esi);
-    PUSH32(esp, 0); sub_001BCC00(); /* call 0x001BCC00 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001BCC00(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_001B6410_gen", "sub_001BCC00", 0x001BCC00, _cb, _cs, _ci, _cd); } /* call 0x001BCC00 */
 
 loc_001B6449: ;
     ebx = eax;
@@ -70770,7 +70770,7 @@ loc_001B6449: ;
     PUSH32(esp, ebp);
     PUSH32(esp, edi);
     PUSH32(esp, esi);
-    PUSH32(esp, 0); sub_001BC260(); /* call 0x001BC260 */
+    { uint32_t _cb = ebx, _cs = esp, _ci = esi, _cd = edi; PUSH32(esp, 0); sub_001BC260(); if (ebx != _cb || esp != _cs || esi != _ci || edi != _cd) doa3_cs_report3("sub_001B6410_gen", "sub_001BC260", 0x001BC260, _cb, _cs, _ci, _cd); } /* call 0x001BC260 */
 
 loc_001B6454: ;
     edx = 0; /* xor self */
