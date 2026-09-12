@@ -605,15 +605,36 @@ void sub_00055760(void)
  * the host (src/input xbox_InputGetState; falls back to a neutral pad +
  * keyboard: Enter = START, arrows = d-pad, Z/X = A/B) so the boot flow takes
  * the pad-present path to the intro movie. Gen bodies renamed _gen. */
+/* Guest-memory peek for the overlay Debug tab. The overlay is C++ and has no
+ * MEM32; these keep the address arithmetic on this side. */
+uint32_t doa3_dbg_read32(uint32_t va) { return MEM32(va); }
+uint32_t doa3_dbg_read8(uint32_t va)  { return MEM8(va); }
+
 void sub_001E6958(void)   /* XGetDevices(type) -> connected mask, stdcall ret 4 */
 {
     static int s_n = 0;
-    if (s_n < 4) { s_n++; fprintf(stderr, "[XPP] XGetDevices(type=0x%08X) -> 1\n", MEM32(esp + 4)); fflush(stderr); }
-    /* Pad 0 present (device emulation — the boot's controller-check screen
-     * requires a connected pad, exactly like the cxbx oracle's emulated pads;
-     * with no input the press-START screen times out into the attract intro
-     * movie, which is the rendering path we're bringing up). */
-    eax = 1;
+    if (s_n < 4) { s_n++; fprintf(stderr, "[XPP] XGetDevices(type=0x%08X)\n", MEM32(esp + 4)); fflush(stderr); }
+    /* Report the controllers the host actually has.
+     *
+     * This used to hardcode a single connected pad, because the boot flow
+     * needed one. That fake pad is what stopped the attract screen working:
+     * with a pad present and screen mode 2, sub_000821B0 writes 1 to
+     * [0x004B8228], sub_0004FFC0 reads that as input activity and starts the
+     * attract watchdog [0x0048E638], which counts 40 frames down and tears
+     * the whole screen script down -- 38 opcodes in, two commands before the
+     * one at script address 0x0031CFA8 that arms the corner logo.
+     *
+     * cxbx settles it in both directions: the real game with no pad keeps the
+     * watchdog parked at 40 and draws the logo, and forcing [0x005E5CC8] to 1
+     * inside cxbx reproduces this port's teardown exactly. */
+    {
+        extern DWORD xbox_InputGetState(DWORD, void *);
+        unsigned char raw[32];
+        uint32_t mask = 0, i;
+        for (i = 0; i < 4; i++)
+            if (xbox_InputGetState(i, raw) == 0) mask |= (1u << i);
+        eax = mask;
+    }
     esp += 8;
 }
 void sub_001E697A(void)   /* XGetDeviceChanges(type, &ins, &rem), stdcall ret 12 */
@@ -4146,29 +4167,21 @@ void sub_0006C480(void)
                 MEM32(0x49A950), MEM32(0x49A954));
         fflush(stderr);
     }
-    /* Skip the walk when the D3DX sprite it draws through does not exist.
+    /* This walk used to be skipped whenever [0x49A954] was zero, on the
+     * theory that it was the D3DX sprite every command here draws through.
+     * It is not. 0x49A954 belongs to sub_00069B88, the BOOT WARNING SCREEN's
+     * sprite, and that screen is deliberately never run (see sub_000566D0),
+     * so the global stays zero for the whole session. This walker creates its
+     * own sprite locally with sub_001C35C0 (D3DXCreateSprite) into its
+     * [esp+0x10] slot and draws through that one.
      *
-     * Every command this walks ends in sub_001C408A, whose first act is to
-     * return D3DERR_INVALIDCALL when its sprite argument is NULL -- so with
-     * no sprite the walk cannot put a pixel on screen no matter how long it
-     * runs. It does not merely waste time: the renderer loops waiting for a
-     * draw that can never succeed, 365 million failed quads deep, and that
-     * starves the cooperative fibers the movie decode runs on, which is what
-     * froze the intro movie. Observed 0x49A954 == 0 for whole runs, so this
-     * skips exactly the case that cannot work; once the sprite is created
-     * the walk runs normally again.
-     *
-     * Returns eax = 1 and a plain `ret` (0x0006C858/0x0006C861), the same as
-     * the real body's success exit. */
-    if (MEM32(0x49A954) == 0) {
-        static int s_skip = 0;
-        if (s_skip < 2) { s_skip++;
-            fprintf(stderr, "[RWALK] skipped: no D3DX sprite (0x49A954 == 0)\n");
-            fflush(stderr); }
-        eax = 1;
-        esp += 4;   /* ret */
-        return;
-    }
+     * cxbx settles it: at the attract screen the real game also has
+     * 0x49A950 == 0 and 0x49A954 == 0, and it still draws the corner
+     * "DEAD OR ALIVE 3" quad -- DrawVerticesUP(prim 7, 4 verts, stride 28)
+     * over (340.5,426.5)-(750.1,452.1) -- reached through exactly this walk
+     * (sub_00065F70 -> sub_00065500 -> here -> sub_0006C560 ->
+     * sub_001C3FDF -> sub_001C408A). The skip was removing the game's whole
+     * 2D overlay layer. */
     sub_0006C480_gen();
 }
 
@@ -4608,6 +4621,15 @@ void sub_001B3760(void)
             }
             pgraph_d3d11_set_vertex_layout((uint32_t)(MEM32(esp + 0x10) / 4),
                                            pos_dw, uv_off, color_off);
+            {   /* DOA3: hand the pgraph the guest's vertex count and the
+                 * declared dword total as well. The API stride is the stride
+                 * of the SOURCE array, not of what gets pushed -- the D3DX
+                 * sprite quad declares 5 dwords, has a 7-dword API stride and
+                 * pushes 11 (position + diffuse + three texcoord sets), so
+                 * inline_count / vertex-count is the only exact answer. */
+                extern void pgraph_d3d11_set_inline_hint(uint32_t, uint32_t);
+                pgraph_d3d11_set_inline_hint(MEM32(esp + 8), (uint32_t)off);
+            }
         }
     }
     sub_001B3760_gen();
@@ -4930,6 +4952,27 @@ ESP_FIX(sub_00153EF0, 0)  /* game sound-command flusher: leaked 628 B/frame —
                            * 0xD00000 into the game BSS after ~2 min, wiping
                            * the CRI device tables at 0xB2xxxx) */
 
+
+/* ── sub_0006D7F0 ABI-enforcement wrapper ───────────────────────────────────
+ * The 2D-overlay sprite submitter. Its callee chain does not preserve esi:
+ * it enters with esi = the overlay entry (0x00491B78) and returns with esi
+ * pointing at the command record it just filled (0x0049A9C4). x86 cdecl makes
+ * edi/esi/ebx callee-saved, and sub_00065090 relies on that -- immediately
+ * after this call it does
+ *      edx = [esi+4]; edx++; [esi+4] = edx
+ * to advance the corner logo's fade counter. With esi clobbered the counter
+ * at 0x00491B7C never leaves 0, so the alpha ramp never starts: the logo quad
+ * is submitted every frame with colour 0x00FFFFFF (alpha 0) and blends away to
+ * nothing. The stray write also lands inside the sprite command records.
+ * Enforce the contract here until the inner culprit is root-caused, the same
+ * way sub_001BE60A is handled above. */
+void sub_0006D7F0_gen(void);
+void sub_0006D7F0(void)
+{
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_0006D7F0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
 
 /* DIAG+contract: the D3DX 2D quad DRAW (vtbl slot 6 @0x1C408A, emitted
  * 2026-07-02). Called from sub_001C3F50's icall [vtbl+0x18]; this is where

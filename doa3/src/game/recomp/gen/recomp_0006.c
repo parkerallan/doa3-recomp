@@ -51437,6 +51437,15 @@ loc_001200BC: ;
  */
 void sub_001200C1(void)
 {
+    /* DOA3: snapshot the inherited frame pointer.
+     * This fragment runs inside sub_0011FF70's frame, whose epilogue in
+     * sub_001200E8 restores the stack with `esp = ebp` -- and the recompiler
+     * carries that inherited ebp in the GLOBAL g_seh_ebp. On x86 ebp is
+     * callee-saved, so the six calls below leave it untouched; here each of
+     * them overwrites g_seh_ebp for its own frame and never puts it back, so
+     * sub_001200E8 restored esp from a stale value and lost ~224 bytes per
+     * call. Snapshot on entry and restore before the hand-off. */
+    uint32_t ebp = g_seh_ebp;
 
 loc_001200C1: ;
     PUSH32(esp, ebx);
@@ -51465,6 +51474,7 @@ loc_001200DF: ;
 loc_001200E5: ;
     esp = esp + 0x18;
 
+    g_seh_ebp = ebp;   /* DOA3: see the note at the top of this fragment */
     sub_001200E8(); return; /* DOA3: restored dropped fall-through to sub_001200E8 */
 }
 

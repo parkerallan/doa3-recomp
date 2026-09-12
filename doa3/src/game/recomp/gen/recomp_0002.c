@@ -3802,6 +3802,12 @@ loc_0006CAD6: ;
     eax = MEM32(esi + 0xC);
     eax = eax - edi;
     eax = (uint32_t)((int32_t)eax >> 2);
+    /* DOA3: restored dropped fall-through to sub_0006CADE.
+     * mov eax,[esi+0Ch]; sub eax,edi; sar eax,2 occupy 0x0006CAD6..0x0006CADD
+     * and end exactly at 0x0006CADE. fix_fallthroughs.py missed this (and
+     * sub_0006CD4F) because its terminator test asks `'int3' in last`, which
+     * the (int32_t) cast of a sign-extending shift matches. */
+    sub_0006CADE(); return;
 
 }
 
@@ -4178,6 +4184,15 @@ loc_0006CD4F: ;
     ecx = MEM32(esi + 8);
     ecx = ecx - edx;
     ecx = (uint32_t)((int32_t)ecx >> 2);
+    /* DOA3: restored dropped fall-through to sub_0006CD57.
+     * The three instructions above (mov ecx,[esi+8]; sub ecx,edx; sar ecx,2)
+     * occupy 0x0006CD4F..0x0006CD56 and end exactly at 0x0006CD57, so control
+     * continues into that fragment. Without this the fragment returned without
+     * popping the esi/edi its parent sub_0006CD40 pushed and without the
+     * parent's ret 4, leaking 16 bytes of guest stack per call. That leak ran
+     * the attract task's 32 KB stack off its base and eventually over the
+     * loaded texture bundle below it. */
+    sub_0006CD57(); return;
 
 }
 
@@ -5358,7 +5373,7 @@ loc_0006D7E1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0006D7F0(void)
+void sub_0006D7F0_gen(void)
 {
 
 loc_0006D7F0: ;
@@ -53751,6 +53766,7 @@ loc_00082432: ;
     if (CMP_NE(LO8(ecx), 2)) goto loc_00082524; /* jne: not equal / not zero */
 
 loc_0008243B: ;
+
     if (CMP_EQ(LO8(edx), 1)) goto loc_0008245A; /* je: equal / zero */
 
 loc_00082440: ;
@@ -53907,7 +53923,6 @@ loc_000825AF: ;
 void sub_000825C0(void)
 {
     int _flags = 0; /* fallback flag var */
-
 loc_000825C0: ;
     PUSH32(esp, ecx);
     SET_LO8(eax, MEM8(0x48A3E4));

@@ -47345,7 +47345,17 @@ loc_0004FFD2: ;
 loc_0004FFDC: ;
     ecx = MEM32(0x4B822C);
     ecx = ecx | MEM32(0x4B8228);
-    goto loc_00050004;
+    /* DOA3: the `je` at 0x00050004 has two predecessors that set ZF from
+     * DIFFERENT registers -- `or ecx,[4B8228]` here (0x0004FFE2, then a
+     * flags-preserving jmp) and `or edx,[4B8228]` on the two-pad path
+     * (0x0004FFFE). The lift materialised both as `edx == 0`, so on this
+     * path it tested a stale edx and reported a button press on frames
+     * where nothing was held. That fake press runs the attract-abort
+     * (sub_0004FBC0), which tears the screen script down long before it
+     * reaches the command that arms the corner logo. Test ecx here, which
+     * is what the hardware flags actually came from. */
+    if ((ecx == 0)) goto loc_00050028;
+    goto loc_00050006;
 
 loc_0004FFEA: ;
     ecx = MEM32(0x4B8238);

@@ -13,7 +13,9 @@
  */
 
 #include "xinput_xbox.h"
+#include "pad_mapping.h"
 #include <xinput.h>
+#include <stdlib.h>
 #include <string.h>
 
 #pragma comment(lib, "xinput.lib")
@@ -44,44 +46,31 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
     result = XInputGetState(dwPort, &xi_state);
     if (result != ERROR_SUCCESS) {
         g_controller_connected[dwPort] = FALSE;
-        return result;
+        /* No physical pad in this slot. Port 0 can still be driven from the
+         * keyboard, but ONLY once the user has actually bound a key: reporting
+         * a pad that is not there is what the XGetDevices mask feeds, and the
+         * attract screen behaves differently when it believes one is plugged
+         * in. With nothing bound we stay honest and report the slot empty. */
+        if (dwPort != 0 || !pad_mapping_has_key_binding())
+            return result;
+
+        memset(pState, 0, sizeof(XBOX_INPUT_STATE));
+        pState->dwPacketNumber = ++g_last_packet[dwPort];
+        pad_mapping_apply(NULL, &pState->Gamepad);
+        return ERROR_SUCCESS;
     }
 
     g_controller_connected[dwPort] = TRUE;
     g_last_packet[dwPort] = xi_state.dwPacketNumber;
 
-    /* Translate XInput state to Xbox format */
+    /* Translate XInput state to Xbox format.
+     *
+     * The fixed translation this function used to perform now lives in
+     * pad_mapping.c as the DEFAULT mapping, so behaviour is unchanged until
+     * the user rebinds something in the Esc menu. */
     memset(pState, 0, sizeof(XBOX_INPUT_STATE));
     pState->dwPacketNumber = xi_state.dwPacketNumber;
-
-    /* Digital buttons map directly (same bit positions for d-pad, start, back, thumbs) */
-    pState->Gamepad.wButtons = xi_state.Gamepad.wButtons & 0x00FF;
-
-    /* Analog buttons: XInput has digital A/B/X/Y, we map to 0 or 255 */
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A] =
-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_A) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B] =
-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_B) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X] =
-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_X) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_Y) ? 255 : 0;
-
-    /* Black/White → Left/Right shoulder */
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
-        (xi_state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) ? 255 : 0;
-
-    /* Triggers: XInput gives 0-255, matches Xbox analog button range */
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = xi_state.Gamepad.bLeftTrigger;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = xi_state.Gamepad.bRightTrigger;
-
-    /* Thumbsticks: same range (-32768 to 32767) */
-    pState->Gamepad.sThumbLX = xi_state.Gamepad.sThumbLX;
-    pState->Gamepad.sThumbLY = xi_state.Gamepad.sThumbLY;
-    pState->Gamepad.sThumbRX = xi_state.Gamepad.sThumbRX;
-    pState->Gamepad.sThumbRY = xi_state.Gamepad.sThumbRY;
+    pad_mapping_apply(&xi_state, &pState->Gamepad);
 
     return ERROR_SUCCESS;
 }

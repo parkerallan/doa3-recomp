@@ -78494,6 +78494,15 @@ void sub_001BA0FD(void)
 
 loc_001BA0FD: ;
     MEM32(esi + 0x10) = 0x11;
+    /* DOA3: restored dropped fall-through to sub_001BA104. The XBE has
+     * `mov dword ptr [esi+10h], 11h` (C7 46 10 11 00 00 00) at 0x001BA0FD
+     * immediately followed by `lea eax,[esp+18h]` at 0x001BA104; without the
+     * fall-through D3DTexture_GetLevelDesc returned after writing only
+     * MultiSampleType, leaving Size/Width/Height as caller stack garbage
+     * (w = 0x80000003, h = 0) and skipping its `ret 12`. sub_001C408A
+     * validates the sprite source rect against that width, so every 2D
+     * overlay quad was rejected with D3DERR_INVALIDCALL. */
+    sub_001BA104(); return;
 
 }
 

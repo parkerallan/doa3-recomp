@@ -12,6 +12,7 @@ add_library(d3d8_compat STATIC
 
 target_include_directories(d3d8_compat PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
 )
 
 # D3D11 and DXGI libraries

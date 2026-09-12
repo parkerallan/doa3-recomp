@@ -2,6 +2,7 @@
 
 add_library(input_compat STATIC
     xinput_device.c
+    pad_mapping.c
 )
 
 target_include_directories(input_compat PUBLIC

@@ -112,6 +112,7 @@ static IDirect3DTexture8 *create_dxt5_texture(IDirect3DDevice8 *dev,
 #define NV097_SET_TEXTURE_CONTROL0      0x1B0C  /* +0x40 per stage */
 #define NV097_SET_TEXTURE_CONTROL1      0x1B10  /* +0x40 per stage */
 #define NV097_SET_TEXTURE_FILTER        0x1B14  /* +0x40 per stage */
+#define NV097_SET_TEXTURE_PALETTE       0x1B20  /* +0x40 per stage */
 
 /* NV2A draw modes → D3D primitive types */
 static int nv2a_draw_mode_to_d3d(uint32_t mode) {
@@ -184,6 +185,14 @@ static struct {
      * SET_VERTEX_DATA_ARRAY_FORMAT on this path, so the pgraph can't derive
      * it from methods; the CPU-side FVF object holds the truth. Offsets are
      * DWORD indices within a vertex; -1 = attribute absent. */
+    /* DOA3: the vertex count the guest passed to DrawVerticesUP, plus the
+     * dword count its shader object declares. The push buffer carries the
+     * attributes the DEVICE is set up to copy, which for the D3DX sprite path
+     * is neither the API stride nor what the shader object lists (position +
+     * diffuse + up to four texcoord sets). inline_count / this count is the
+     * only exact per-vertex stride available. 0 = no hint for this draw. */
+    uint32_t hint_verts;
+    uint32_t hint_declared_dw;
     int layout_pos_dw;     /* dwords of position (2=XY, 3=XYZ, 4=XYZRHW) */
     int layout_uv_off;     /* dword offset of texcoord0, or -1 */
     int layout_color_off;  /* dword offset of diffuse (D3DCOLOR), or -1 */
@@ -232,6 +241,10 @@ static struct {
         uint32_t control1;   /* Control1: linear pitch in hi16 (method 0x1B10) */
         uint32_t filter;     /* MIN bits 16-23, MAG bits 24-27 (method 0x1B14) */
         uint32_t image_rect; /* Linear size: (width<<16)|height (method 0x1B1C) */
+        /* Palette for the indexed formats (method 0x1B20): bit 0 selects the
+         * context DMA, bits 3:2 the entry count (0=256, 1=128, 2=64, 3=32)
+         * and bits 31:6 the 64-byte-aligned offset of an A8R8G8B8 table. */
+        uint32_t palette;
         int enabled;         /* Decoded from control0 bit 30 */
     } tex[4];
 
@@ -248,6 +261,7 @@ static struct {
     struct {
         IDirect3DTexture8 *tex;
         uint32_t off, w, h, fmt, levels;
+        uint32_t pal;       /* palette register this upload was expanded with */
         int uploaded;       /* immutable source already uploaded */
         uint32_t sum;       /* checksum of the guest source when uploaded */
     } texcache[TEXCACHE_N];
@@ -363,11 +377,11 @@ extern ptrdiff_t g_xbox_mem_offset;
 
 static int nv_texture_format(uint32_t nvfmt, D3DFORMAT *out_fmt,
                              uint32_t *out_bpp, int *out_swizzled,
-                             int *out_compressed)
+                             int *out_compressed, int *out_palettised)
 {
     D3DFORMAT f;
     uint32_t bpp;
-    int comp = 0;
+    int comp = 0, pal = 0;
     switch (nvfmt) {
     case 0x00: f = D3DFMT_L8;           bpp = 1; break;  /* SZ_Y8       */
     case 0x01: f = D3DFMT_L8;           bpp = 1; break;  /* SZ_AY8      */
@@ -377,6 +391,14 @@ static int nv_texture_format(uint32_t nvfmt, D3DFORMAT *out_fmt,
     case 0x05: f = D3DFMT_R5G6B5;       bpp = 2; break;
     case 0x06: f = D3DFMT_A8R8G8B8;     bpp = 4; break;
     case 0x07: f = D3DFMT_X8R8G8B8;     bpp = 4; break;
+    /* Indexed (palettised) textures. The source is one byte per texel; the
+     * palette named by SET_TEXTURE_PALETTE holds A8R8G8B8 entries, so the
+     * upload expands to a 32-bit surface. bpp stays 1 here because every
+     * source-side calculation (pitch, level sizes, bounds) is in source
+     * bytes; the destination width is handled at upload time. DOA3's corner
+     * "DEAD OR ALIVE 3" logo is 0x0B, and with no case here the whole draw
+     * was silently dropped. */
+    case 0x0B: f = D3DFMT_A8R8G8B8;     bpp = 1; pal = 1; break;  /* SZ_I8_A8R8G8B8 */
     case 0x0C: f = D3DFMT_DXT1;         bpp = 0; comp = 1; break;
     case 0x0E: f = D3DFMT_DXT3;         bpp = 0; comp = 1; break;
     case 0x0F: f = D3DFMT_DXT5;         bpp = 0; comp = 1; break;
@@ -395,6 +417,7 @@ static int nv_texture_format(uint32_t nvfmt, D3DFORMAT *out_fmt,
     *out_fmt = f;
     *out_bpp = bpp;
     *out_compressed = comp;
+    *out_palettised = pal;
     *out_swizzled = !comp && d3d8_format_is_swizzled(nvfmt);
     return 1;
 }
@@ -542,7 +565,8 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
     uint32_t off    = g_pg.tex[0].offset;
     uint32_t nvfmt  = (fmtreg >> 8) & 0xFF;
     uint32_t w, h, bpp, pitch, nlevels = 1;
-    int swizzled, compressed;
+    int swizzled, compressed, palettised;
+    uint32_t palreg = g_pg.tex[0].palette;
     D3DFORMAT d3dfmt;
 
     if (!off || off >= 0x04000000u) return NULL;
@@ -551,7 +575,8 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
         g_texfmt[nvfmt & 63]++;
         if (!off || off >= 0x04000000u) g_texnull[0]++;
     }
-    if (!nv_texture_format(nvfmt, &d3dfmt, &bpp, &swizzled, &compressed)) {
+    if (!nv_texture_format(nvfmt, &d3dfmt, &bpp, &swizzled, &compressed,
+                           &palettised)) {
         extern uint32_t g_texnull[4];
         g_texnull[1]++;
         return NULL;
@@ -644,7 +669,8 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
         for (i = 0; i < TEXCACHE_N; i++) {
             if (g_pg.texcache[i].tex && g_pg.texcache[i].off == off &&
                 g_pg.texcache[i].w == w && g_pg.texcache[i].h == h &&
-                g_pg.texcache[i].fmt == (uint32_t)d3dfmt) {
+                g_pg.texcache[i].fmt == (uint32_t)d3dfmt &&
+                g_pg.texcache[i].pal == (palettised ? palreg : 0u)) {
                 slot = i;
                 break;
             }
@@ -663,11 +689,21 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
                 g_pg.texcache[slot].tex = NULL;
                 return NULL;
             }
+            /* Everything uploaded below is row-major: swizzled sources are
+             * unswizzled here (they have to be, so palettised ones can be
+             * expanded), and linear ones are copied straight through. Say so,
+             * or the D3D8 layer unswizzles the data a SECOND time in
+             * tex_UnlockRect because the format still names the swizzled
+             * Xbox layout -- which scrambled every swizzled texture in the
+             * game, the corner logo included. */
+            {   extern void d3d8_TextureSetLinearData(IDirect3DTexture8 *, BOOL);
+                d3d8_TextureSetLinearData(g_pg.texcache[slot].tex, TRUE); }
             g_pg.texcache[slot].off = off;
             g_pg.texcache[slot].w = w;
             g_pg.texcache[slot].h = h;
             g_pg.texcache[slot].fmt = (uint32_t)d3dfmt;
             g_pg.texcache[slot].levels = nlevels;
+            g_pg.texcache[slot].pal = palettised ? palreg : 0u;
             g_pg.texcache[slot].uploaded = 0;
             {   static unsigned s_made = 0;
                 if (s_made < 64) { s_made++;
@@ -714,6 +750,29 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
     {
         const uint8_t *srcp = (const uint8_t *)((uintptr_t)off + g_xbox_mem_offset);
         uint32_t l, lw = w, lh = h;
+        uint32_t pal[256];
+        if (palettised) {
+            /* SET_TEXTURE_PALETTE: 64-byte-aligned offset of an A8R8G8B8
+             * table, with bits 3:2 giving 256/128/64/32 entries. Xbox palette
+             * entries are already A8R8G8B8, so they drop straight into the
+             * D3DFMT_A8R8G8B8 destination. Short tables are clamped rather
+             * than left as zeros, which would punch transparent holes. */
+            uint32_t paloff = palreg & 0xFFFFFFC0u;
+            uint32_t pcount = 256u >> ((palreg >> 2) & 3u);
+            uint32_t i;
+            if (paloff &&
+                (unsigned long long)paloff + 4ull * pcount <= 0x04000000ull) {
+                const uint32_t *ps =
+                    (const uint32_t *)((uintptr_t)paloff + g_xbox_mem_offset);
+                for (i = 0; i < pcount; i++) pal[i] = ps[i];
+                for (; i < 256; i++) pal[i] = pal[pcount - 1];
+            } else {
+                /* No usable palette: opaque greyscale, so a mis-set register
+                 * shows as a readable image instead of an invisible draw. */
+                for (i = 0; i < 256; i++)
+                    pal[i] = 0xFF000000u | (i * 0x00010101u);
+            }
+        }
         for (l = 0; l < nlevels; l++) {
             D3DLOCKED_RECT lr;
             /* Source stride of this level. Swizzled and DXT levels are
@@ -736,10 +795,30 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
                     if (lin) {
                         uint32_t yy;
                         xbox_unswizzle_rect(lin, srcp, lw, lh, bpp);
-                        for (yy = 0; yy < lh; yy++)
-                            memcpy(dstp + (size_t)yy * lr.Pitch,
-                                   lin + (size_t)yy * lw * bpp, (size_t)lw * bpp);
+                        if (palettised) {
+                            for (yy = 0; yy < lh; yy++) {
+                                uint32_t *drow =
+                                    (uint32_t *)(dstp + (size_t)yy * lr.Pitch);
+                                const uint8_t *srow = lin + (size_t)yy * lw;
+                                uint32_t xx;
+                                for (xx = 0; xx < lw; xx++)
+                                    drow[xx] = pal[srow[xx]];
+                            }
+                        } else {
+                            for (yy = 0; yy < lh; yy++)
+                                memcpy(dstp + (size_t)yy * lr.Pitch,
+                                       lin + (size_t)yy * lw * bpp,
+                                       (size_t)lw * bpp);
+                        }
                         free(lin);
+                    }
+                } else if (palettised) {
+                    uint32_t yy;
+                    for (yy = 0; yy < lh; yy++) {
+                        uint32_t *drow = (uint32_t *)(dstp + (size_t)yy * lr.Pitch);
+                        const uint8_t *srow = srcp + (size_t)yy * lp;
+                        uint32_t xx;
+                        for (xx = 0; xx < lw; xx++) drow[xx] = pal[srow[xx]];
                     }
                 } else {
                     uint32_t row_bytes = lw * bpp, yy;
@@ -758,6 +837,12 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
 }
 
 /* Called by the recompiled D3D draw wrapper before each inline draw. */
+void pgraph_d3d11_set_inline_hint(uint32_t nverts, uint32_t declared_dw)
+{
+    g_pg.hint_verts = nverts;
+    g_pg.hint_declared_dw = declared_dw;
+}
+
 void pgraph_d3d11_set_vertex_layout(uint32_t stride_dw, int pos_dw,
                                     int uv_off, int color_off)
 {
@@ -1293,14 +1378,37 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
              * When the diffuse register is degenerate, take the texture
              * directly rather than multiplying the image away. */
             int use_diffuse = !diffuse_all_zero;
+            /* Does the bound image carry an alpha channel worth sampling? */
+            int tex_has_alpha =
+                (g_pg.dyn_fmt == (uint32_t)D3DFMT_LIN_A8R8G8B8 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_LIN_A1R5G5B5 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_LIN_A4R4G4B4 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_A8R8G8B8 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_A1R5G5B5 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_A4R4G4B4 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_A8 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_A8L8 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT3 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT5);
             dev->lpVtbl->SetTexture(dev, 0, (IDirect3DBaseTexture8 *)dtex);
             dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/,
                                               use_diffuse ? 4 /*MODULATE*/ : 2 /*SELECTARG1*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 2 /*SELECTARG1*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/,
-                                              use_diffuse ? 0 /*DIFFUSE*/ : 2 /*TEXTURE*/);
+            if (use_diffuse && tex_has_alpha && g_pg.blend_enable) {
+                /* A blended draw whose image has its own alpha wants
+                 * texture * diffuse, the Xbox default. Selecting the diffuse
+                 * alpha alone made the 2D overlay's transparent surround
+                 * opaque, so the corner logo drew as a black box with the
+                 * lettering inside it. */
+                dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 4 /*MODULATE*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, 2 /*TEXTURE*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 6 /*ALPHAARG2*/, 0 /*DIFFUSE*/);
+            } else {
+                dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 2 /*SELECTARG1*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/,
+                                                  use_diffuse ? 0 /*DIFFUSE*/ : 2 /*TEXTURE*/);
+            }
             nv_apply_tex_address(dev, 0);
         } else {
             dev->lpVtbl->SetTexture(dev, 0, NULL);
@@ -1469,6 +1577,34 @@ static uint32_t nv_clip_batch(const OutputVertex *out, uint32_t n, int prim, Out
  * point, which routed the scene offscreen and froze the picture. */
 static uint32_t g_pg_surf_coff, g_pg_surf_pitch;
 extern int  d3d8_OffscreenTargetActive(void);
+/* Map guest screen coordinates onto the host backbuffer.
+ *
+ * Everything this module emits is in the guest's framebuffer space, which
+ * DOA3 sets to 720x480 through SET_SURFACE_CLIP. The D3D8 layer's
+ * pre-transformed path divides by the HOST backbuffer size, so with a 640-wide
+ * window every guest x was scaled by 720/640 and the right 11% of the picture
+ * fell off the screen -- which is why the "3" of the corner logo was missing.
+ * Scale here, where the guest surface size is known, rather than changing what
+ * XYZRHW means to the D3D8 layer. */
+static void nv_fit_to_backbuffer(OutputVertex *out, uint32_t n)
+{
+    unsigned gw = (g_pg.surface_clip_h >> 16) & 0xFFFF;
+    unsigned gh = (g_pg.surface_clip_v >> 16) & 0xFFFF;
+    unsigned bw = d3d8_GetBackbufferWidth();
+    unsigned bh = d3d8_GetBackbufferHeight();
+    float sx, sy;
+    uint32_t i;
+
+    if (!gw || !gh || !bw || !bh) return;
+    if (gw == bw && gh == bh) return;
+    sx = (float)bw / (float)gw;
+    sy = (float)bh / (float)gh;
+    for (i = 0; i < n; i++) {
+        out[i].x *= sx;
+        out[i].y *= sy;
+    }
+}
+
 static void nv_sync_render_target(void)
 {
     extern int  d3d8_SetOffscreenTarget(unsigned w, unsigned h);
@@ -1610,6 +1746,7 @@ static void submit_array_draw(void)
     }
 
     nv_apply_draw_state(dev, out, out_n);
+    nv_fit_to_backbuffer(out, out_n);
 
     if ((prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
         nv_batch_needs_clip(out, out_n)) {
@@ -1682,6 +1819,24 @@ static void submit_draw(void)
             g_dbail[5]++;
             g_pg.inline_count = 0;
             return;
+        }
+    }
+
+    {   /* DOA3: correct the per-vertex stride from the guest's own vertex
+         * count. The 2D overlay quad pushes 11 dwords per vertex while the
+         * API stride says 7, so the parser read 6 vertices of scrambled data
+         * and the corner logo never rasterised. Only ever narrows the guess
+         * when the count divides the payload exactly. */
+        uint32_t hv = g_pg.hint_verts;
+        g_pg.hint_verts = 0;
+        if (hv && g_pg.inline_count && (g_pg.inline_count % hv) == 0) {
+            uint32_t hs = g_pg.inline_count / hv;
+            if (hs >= 2 && hs <= 16 && hs != g_pg.vert_stride) {
+                if (g_pg.layout_uv_off < 0 && g_pg.hint_declared_dw > 0 &&
+                    hs > g_pg.hint_declared_dw)
+                    g_pg.layout_uv_off = (int)g_pg.hint_declared_dw;
+                g_pg.vert_stride = hs;
+            }
         }
     }
 
@@ -1903,7 +2058,7 @@ static void submit_draw(void)
     if (!dev) return;
 
     nv_apply_draw_state(dev, out, out_vert_count);
-
+    nv_fit_to_backbuffer(out, out_vert_count);
     /* Begin scene if needed */
     dev->lpVtbl->BeginScene(dev);
 
@@ -2489,6 +2644,16 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     {
         int stage = (method - 0x1B1C) / 0x40;
         g_pg.tex[stage].image_rect = param;
+        return 1;
+    }
+
+    case NV097_SET_TEXTURE_PALETTE:
+    case NV097_SET_TEXTURE_PALETTE + 0x40:
+    case NV097_SET_TEXTURE_PALETTE + 0x80:
+    case NV097_SET_TEXTURE_PALETTE + 0xC0:
+    {
+        int stage = (method - NV097_SET_TEXTURE_PALETTE) / 0x40;
+        g_pg.tex[stage].palette = param;
         return 1;
     }
 

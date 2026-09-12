@@ -42,6 +42,7 @@ target_link_libraries(doa3 PRIVATE
     dsound_compat
     input_compat
     apu_emu
+    doa3_ui
 )
 
 # System libraries (mirrors burnout3)

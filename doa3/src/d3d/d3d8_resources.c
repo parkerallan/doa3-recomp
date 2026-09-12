@@ -368,6 +368,14 @@ static D3D8Texture *tex_from_iface(IDirect3DTexture8 *iface)
     return (D3D8Texture *)iface;
 }
 
+/* Mark a texture as already-linear: its LockRect data is row-major and
+ * UnlockRect must upload it verbatim. */
+void d3d8_TextureSetLinearData(IDirect3DTexture8 *tex, BOOL linear)
+{
+    if (tex) tex_from_iface(tex)->linear_data = linear;
+}
+
+
 static HRESULT __stdcall tex_QueryInterface(IDirect3DTexture8 *self, const IID *riid, void **ppv)
 {
     (void)self; (void)riid; (void)ppv;
@@ -476,8 +484,10 @@ static HRESULT __stdcall tex_UnlockRect(IDirect3DTexture8 *self, UINT Level)
             BYTE *upload_data = tex->level_mem[Level];
             BYTE *unswizzled = NULL;
 
-            /* Unswizzle if the format is a swizzled Xbox format */
-            if (!d3d8_format_is_compressed(tex->d3d8_format) &&
+            /* Unswizzle if the format is a swizzled Xbox format, unless the
+             * caller already handed us linear rows (see linear_data). */
+            if (!tex->linear_data &&
+                !d3d8_format_is_compressed(tex->d3d8_format) &&
                 d3d8_format_is_swizzled(tex->d3d8_format))
             {
                 UINT bpp = d3d8_format_bpp(tex->d3d8_format) / 8;

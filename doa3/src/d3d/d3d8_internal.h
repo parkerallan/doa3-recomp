@@ -94,6 +94,12 @@ typedef struct D3D8Texture {
     BOOL                    locked;
     UINT                    locked_level;
     BOOL                    dirty;
+    /* The caller already supplied linear rows, so UnlockRect must not
+     * unswizzle again. The NV2A translator unswizzles guest textures
+     * itself (it has to, to expand palettised ones), then names the
+     * SWIZZLED Xbox format for the surface -- which is accurate about
+     * the source but made this layer undo the work a second time. */
+    BOOL                    linear_data;
 } D3D8Texture;
 
 typedef struct D3D8Surface {
@@ -113,6 +119,7 @@ typedef struct D3D8Surface {
 
 DXGI_FORMAT d3d8_to_dxgi_format(D3DFORMAT fmt);
 UINT        d3d8_format_bpp(D3DFORMAT fmt);
+void        d3d8_TextureSetLinearData(IDirect3DTexture8 *tex, BOOL linear);
 BOOL        d3d8_format_is_compressed(D3DFORMAT fmt);
 UINT        d3d8_row_pitch(D3DFORMAT fmt, UINT width);
 

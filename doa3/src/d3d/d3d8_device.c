@@ -16,6 +16,7 @@
  */
 
 #include "d3d8_internal.h"
+#include "ui/doa3_ui.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -369,6 +370,29 @@ static void d3d8_init_default_states(D3D8DeviceState *state)
     state->render_states[D3DRS_STENCILENABLE]     = FALSE;
     state->render_states[D3DRS_COLORWRITEENABLE]  = 0x0F;
 
+    /* Texture-stage defaults.
+     *
+     * These have to be seeded rather than left at zero. D3DTA_DIFFUSE is 0,
+     * so code that treats a zero argument as "never set" cannot tell it
+     * apart from a deliberate DIFFUSE and substitutes D3DTA_TEXTURE. That
+     * is what turned the untextured 2D overlay quad black: it asks for
+     * COLOROP=SELECTARG1 with COLORARG1=DIFFUSE, and the shader was handed
+     * TEXTURE instead, sampling an unbound stage. */
+    {
+        DWORD s;
+        memset(state->tss, 0, sizeof(state->tss));
+        for (s = 0; s < MAX_TEXTURE_STAGES; s++) {
+            state->tss[s][D3DTSS_COLOROP]   = (s == 0) ? D3DTOP_MODULATE
+                                                       : D3DTOP_DISABLE;
+            state->tss[s][D3DTSS_COLORARG1] = D3DTA_TEXTURE;
+            state->tss[s][D3DTSS_COLORARG2] = D3DTA_CURRENT;
+            state->tss[s][D3DTSS_ALPHAOP]   = (s == 0) ? D3DTOP_SELECTARG1
+                                                       : D3DTOP_DISABLE;
+            state->tss[s][D3DTSS_ALPHAARG1] = D3DTA_TEXTURE;
+            state->tss[s][D3DTSS_ALPHAARG2] = D3DTA_CURRENT;
+        }
+    }
+
     /* Default viewport */
     state->viewport.X = 0;
     state->viewport.Y = 0;
@@ -566,6 +590,9 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
         }
     }
     g_flip_guest++;
+    /* Overlay last, onto the finished frame. It draws nothing at all unless
+     * the user has opened it, so a normal frame costs one predicate. */
+    doa3_ui_render();
     return IDXGISwapChain_Present(g_device_state.swap_chain, 0, 0);
 }
 

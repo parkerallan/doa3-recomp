@@ -25,6 +25,7 @@
 #include "../audio/dsound_xbox.h"
 #include "recomp/gen/recomp_funcs.h"
 #include "recomp/recomp_dispatch.h"   /* recomp_lookup for the CRT initializers */
+#include "ui/doa3_ui.h"
 
 #define DOA3_ENTRY_POINT   0x001651A5
 #define DOA3_XBE_PATH      "../doa3gamefiles/default.xbe"
@@ -43,6 +44,9 @@ static LRESULT CALLBACK doa3_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_CLOSE)   { DestroyWindow(h); return 0; }
     if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    /* The Esc overlay gets first refusal on input: it opens/closes itself and,
+     * while visible, keeps keyboard and mouse out of the game. */
+    if (doa3_ui_wndproc(h, m, w, l)) return 0;
     return DefWindowProcA(h, m, w, l);
 }
 
