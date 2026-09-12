@@ -1555,6 +1555,17 @@ static void bridge_NtWriteFile(void)
 }
 
 /* ── NtQueryInformationFile (ordinal 211, 5 args = 20 bytes) */
+/* File times handed to the guest are ALL the host LastWriteTime.
+ *
+ * DOA3's CRI cache validator (sub_00162F85 -> sub_0009D9B8) compares the
+ * times of d:\<file> against its z:\ cache copy with a 60 s tolerance and
+ * re-installs the cache on a mismatch. Reporting the host CreationTime and
+ * LastAccessTime made that decision depend on the launch: NTFS last-access
+ * updates are "system managed" and drift between runs, so one boot passed the
+ * check and the next started a multi-hundred-MB background copy whose reads
+ * then collided with the post-movie loads (black screen after the movie).
+ * Only LastWriteTime is stable for identical copies, so it stands in for
+ * every time field. */
 static void bridge_NtQueryInformationFile(void)
 {
     HANDLE   handle  = xbox_fh_resolve(STACK_ARG(0)); /* opaque guest handle */
@@ -1570,10 +1581,10 @@ static void bridge_NtQueryInformationFile(void)
     switch (infoclass) {
     case 4: { /* FileBasicInformation (36 bytes) */
         if (!GetFileInformationByHandle(handle, &fi)) { g_eax = 0xC0000001u; return; }
-        BRIDGE_MEM32(info_va +  0) = fi.ftCreationTime.dwLowDateTime;
-        BRIDGE_MEM32(info_va +  4) = fi.ftCreationTime.dwHighDateTime;
-        BRIDGE_MEM32(info_va +  8) = fi.ftLastAccessTime.dwLowDateTime;
-        BRIDGE_MEM32(info_va + 12) = fi.ftLastAccessTime.dwHighDateTime;
+        BRIDGE_MEM32(info_va +  0) = fi.ftLastWriteTime.dwLowDateTime;
+        BRIDGE_MEM32(info_va +  4) = fi.ftLastWriteTime.dwHighDateTime;
+        BRIDGE_MEM32(info_va +  8) = fi.ftLastWriteTime.dwLowDateTime;
+        BRIDGE_MEM32(info_va + 12) = fi.ftLastWriteTime.dwHighDateTime;
         BRIDGE_MEM32(info_va + 16) = fi.ftLastWriteTime.dwLowDateTime;
         BRIDGE_MEM32(info_va + 20) = fi.ftLastWriteTime.dwHighDateTime;
         BRIDGE_MEM32(info_va + 24) = fi.ftLastWriteTime.dwLowDateTime; /* ChangeTime */
@@ -1621,10 +1632,10 @@ static void bridge_NtQueryInformationFile(void)
         LONGLONG size;
         if (!GetFileInformationByHandle(handle, &fi)) { g_eax = 0xC0000001u; return; }
         size = ((LONGLONG)fi.nFileSizeHigh << 32) | fi.nFileSizeLow;
-        BRIDGE_MEM32(info_va +  0) = fi.ftCreationTime.dwLowDateTime;
-        BRIDGE_MEM32(info_va +  4) = fi.ftCreationTime.dwHighDateTime;
-        BRIDGE_MEM32(info_va +  8) = fi.ftLastAccessTime.dwLowDateTime;
-        BRIDGE_MEM32(info_va + 12) = fi.ftLastAccessTime.dwHighDateTime;
+        BRIDGE_MEM32(info_va +  0) = fi.ftLastWriteTime.dwLowDateTime;
+        BRIDGE_MEM32(info_va +  4) = fi.ftLastWriteTime.dwHighDateTime;
+        BRIDGE_MEM32(info_va +  8) = fi.ftLastWriteTime.dwLowDateTime;
+        BRIDGE_MEM32(info_va + 12) = fi.ftLastWriteTime.dwHighDateTime;
         BRIDGE_MEM32(info_va + 16) = fi.ftLastWriteTime.dwLowDateTime;
         BRIDGE_MEM32(info_va + 20) = fi.ftLastWriteTime.dwHighDateTime;
         BRIDGE_MEM32(info_va + 24) = fi.ftLastWriteTime.dwLowDateTime;
@@ -1763,10 +1774,10 @@ static void bridge_NtQueryFullAttributesFile(void)
     }
 
     size = ((LONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
-    BRIDGE_MEM32(info_va +  0) = fad.ftCreationTime.dwLowDateTime;
-    BRIDGE_MEM32(info_va +  4) = fad.ftCreationTime.dwHighDateTime;
-    BRIDGE_MEM32(info_va +  8) = fad.ftLastAccessTime.dwLowDateTime;
-    BRIDGE_MEM32(info_va + 12) = fad.ftLastAccessTime.dwHighDateTime;
+    BRIDGE_MEM32(info_va +  0) = fad.ftLastWriteTime.dwLowDateTime;
+    BRIDGE_MEM32(info_va +  4) = fad.ftLastWriteTime.dwHighDateTime;
+    BRIDGE_MEM32(info_va +  8) = fad.ftLastWriteTime.dwLowDateTime;
+    BRIDGE_MEM32(info_va + 12) = fad.ftLastWriteTime.dwHighDateTime;
     BRIDGE_MEM32(info_va + 16) = fad.ftLastWriteTime.dwLowDateTime;
     BRIDGE_MEM32(info_va + 20) = fad.ftLastWriteTime.dwHighDateTime;
     BRIDGE_MEM32(info_va + 24) = fad.ftLastWriteTime.dwLowDateTime;
@@ -1978,10 +1989,10 @@ static void bridge_NtQueryDirectoryFile(void)
 
     BRIDGE_MEM32(info_va +  0) = 0; /* NextEntryOffset */
     BRIDGE_MEM32(info_va +  4) = 0; /* FileIndex */
-    BRIDGE_MEM32(info_va +  8) = fd.ftCreationTime.dwLowDateTime;
-    BRIDGE_MEM32(info_va + 12) = fd.ftCreationTime.dwHighDateTime;
-    BRIDGE_MEM32(info_va + 16) = fd.ftLastAccessTime.dwLowDateTime;
-    BRIDGE_MEM32(info_va + 20) = fd.ftLastAccessTime.dwHighDateTime;
+    BRIDGE_MEM32(info_va +  8) = fd.ftLastWriteTime.dwLowDateTime;
+    BRIDGE_MEM32(info_va + 12) = fd.ftLastWriteTime.dwHighDateTime;
+    BRIDGE_MEM32(info_va + 16) = fd.ftLastWriteTime.dwLowDateTime;
+    BRIDGE_MEM32(info_va + 20) = fd.ftLastWriteTime.dwHighDateTime;
     BRIDGE_MEM32(info_va + 24) = fd.ftLastWriteTime.dwLowDateTime;
     BRIDGE_MEM32(info_va + 28) = fd.ftLastWriteTime.dwHighDateTime;
     BRIDGE_MEM32(info_va + 32) = fd.ftLastWriteTime.dwLowDateTime;

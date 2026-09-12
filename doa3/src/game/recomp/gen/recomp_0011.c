@@ -30068,7 +30068,7 @@ loc_001E6EA9: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001E6EAF(void)
+void sub_001E6EAF_xppgen(void)
 {
 
 loc_001E6EAF: ;

@@ -1299,6 +1299,19 @@ int main(int argc, char **argv)
     atexit(doa3_atexit);
     SetUnhandledExceptionFilter(doa3_unhandled);
 
+    {   /* Pad mapping saved from the Esc menu (doa3_input.ini next to the
+         * exe). Without this the file was written but never read back, so
+         * every launch ran on the built-in defaults. */
+        extern int pad_mapping_load(const char *);
+        extern const char *pad_mapping_default_path(void);
+        extern int pad_mapping_has_key_binding(void);
+        int ok = pad_mapping_load(NULL);
+        fprintf(stderr, "[PADMAP] %s %s (keyboard bound: %s)\n",
+                ok ? "loaded" : "no file, defaults:",
+                pad_mapping_default_path(),
+                pad_mapping_has_key_binding() ? "yes" : "no");
+    }
+
     printf("=== Dead or Alive 3 - Static Recompilation (boot bring-up) ===\n");
     AddVectoredExceptionHandler(1, crash_veh);
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),

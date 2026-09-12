@@ -610,6 +610,7 @@ void sub_00055760(void)
 uint32_t doa3_dbg_read32(uint32_t va) { return MEM32(va); }
 uint32_t doa3_dbg_read8(uint32_t va)  { return MEM8(va); }
 
+static uint32_t s_xpp_prev_mask;   /* XGetDeviceChanges baseline (real XAPI PreviousConnected) */
 void sub_001E6958(void)   /* XGetDevices(type) -> connected mask, stdcall ret 4 */
 {
     static int s_n = 0;
@@ -628,42 +629,61 @@ void sub_001E6958(void)   /* XGetDevices(type) -> connected mask, stdcall ret 4 
      * watchdog parked at 40 and draws the logo, and forcing [0x005E5CC8] to 1
      * inside cxbx reproduces this port's teardown exactly. */
     {
-        extern DWORD xbox_InputGetState(DWORD, void *);
-        unsigned char raw[32];
-        uint32_t mask = 0, i;
-        for (i = 0; i < 4; i++)
-            if (xbox_InputGetState(i, raw) == 0) mask |= (1u << i);
+        extern DWORD xbox_InputHostMask(void);
+        uint32_t mask = xbox_InputHostMask();
+        /* Real XAPI semantics (cxbx Xapi.cpp, XGetDevices): reporting the
+         * connected set also resets the change baseline, so the next
+         * XGetDeviceChanges does NOT re-report these pads as insertions. */
+        s_xpp_prev_mask = mask;
+        if (s_n <= 4) { fprintf(stderr, "[XPP]   -> mask=%08X\n", mask); fflush(stderr); }
         eax = mask;
     }
     esp += 8;
 }
 void sub_001E697A(void)   /* XGetDeviceChanges(type, &ins, &rem), stdcall ret 12 */
 {
-    /* MUST NOT touch the output words when nothing changed.
+    /* Real XAPI semantics (cxbx Xapi.cpp, XGetDeviceChanges): BOTH output
+     * words are written on EVERY call -- zero when nothing changed -- and
+     * only the pads that appeared/vanished since the previous call (or since
+     * XGetDevices) are reported.
      *
-     * The real XAPI returns FALSE and leaves *pdwInsertions / *pdwRemovals
-     * alone; it only writes them when a device was actually plugged or
-     * unplugged. DOA3 relies on that: sub_0009EA60 seeds its connected-pad
-     * mask at 0x005E5CC8 from XGetDevices at boot, and then hands that SAME
-     * word to XGetDeviceChanges as the insertions pointer every frame
-     * (sub_0009EAF0). Zeroing it unconditionally wiped the mask on the first
-     * per-frame poll, so from then on the game believed no controller was
-     * connected.
+     * DOA3 seeds 0x005E5CC8 from XGetDevices at boot (sub_0009EA60 opens
+     * those pads itself) and then hands that SAME word to this function as
+     * the insertions pointer every frame (sub_0009EAF0). So on real hardware
+     * 0x5E5CC8 is "pads inserted THIS frame": 0 from the first frame on.
      *
-     * That is what held the game on a black screen after the intro movie.
-     * The post-movie attract driver runs with 0x00480B70 == 2 and the screen
-     * latch 0x0047ADB8 == 1; the latch is cleared only when sub_00050250
-     * sees 0x0048E653 set, which only sub_000821B0 can do -- and its path to
-     * the join code at 0x0008239F is entered from 0x000822E5,
-     * `test [0x005E5CC8], 1 << port`. With the mask at zero that test never
-     * passed, the latch never cleared, sub_00083920 never created the title
-     * screen task (0x000CEF80) and never switched the mode byte to 0, so
-     * nothing was ever drawn.
-     *
-     * No hot-plug support here: the pad set is fixed for the process, so
-     * there is never a change to report. */
-    eax = 0;              /* FALSE - no changes; outputs left untouched */
+     * This used to return FALSE without touching the outputs, which left
+     * 0x5E5CC8 == 1 for the whole run whenever a controller was attached.
+     * The attract driver sub_000821B0 tests exactly that word at 0x000822E5
+     * (`test [0x5E5CC8], 1<<port`) as "pad just inserted" and treats it like
+     * a button press: [0x4B8228] = 1 every frame, the watchdog [0x48E638]
+     * counts 40 -> 0 and the intro scene (scr=5) tears itself down with no
+     * input -- the same teardown a START press is supposed to cause. With a
+     * controller plugged in there was therefore nothing left for START to
+     * skip, and the corner logo never armed. */
+    extern DWORD xbox_InputHostMask(void);
+    uint32_t p_ins = MEM32(esp + 8), p_rem = MEM32(esp + 12);
+    uint32_t cur = xbox_InputHostMask();
+    uint32_t ins = cur & ~s_xpp_prev_mask;
+    uint32_t rem = s_xpp_prev_mask & ~cur;
+    s_xpp_prev_mask = cur;
+    if (p_ins) MEM32(p_ins) = ins;
+    if (p_rem) MEM32(p_rem) = rem;
+    if (ins | rem) {
+        fprintf(stderr, "[XPP] XGetDeviceChanges ins=%08X rem=%08X (now %08X)\n", ins, rem, cur);
+        fflush(stderr);
+    }
+    eax = (ins | rem) ? 1u : 0u;
     esp += 16;
+}
+void sub_001E6EAF_xppgen(void);
+void sub_001E6EAF(void)   /* XInputClose(handle), stdcall ret 4 */
+{
+    /* Reached on a removal (sub_0009EAF0 closes the handle it opened). The
+     * handles are fake and there is no USB device behind them. */
+    fprintf(stderr, "[XPP] XInputClose(0x%08X)\n", MEM32(esp + 4)); fflush(stderr);
+    eax = 0;
+    esp += 8;
 }
 void sub_001E6E3A(void)   /* XInputOpen(type, port, slot, attrs) -> handle, ret 16 */
 {
@@ -709,21 +729,33 @@ void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
     if (st) {
         uint16_t buttons = 0;
         uint8_t a = 0, b = 0;
-        int16_t lx = 0, ly = 0;
-        /* host XInput pad 0 if present */
+        uint8_t an[8] = {0};          /* X, Y, Black, White, LT, RT at [2..7] */
+        int16_t lx = 0, ly = 0, rx = 0, ry = 0;
+        /* Which guest port is this? The state pointer is pad+0x2F of the
+         * pad struct (base 0x5E5CD0, stride 0x80). This used to read host
+         * pad 0 for EVERY port, so a controller enumerated on any other
+         * XInput index fed nothing. */
+        uint32_t port = 0;
         {
-            typedef struct { uint32_t pkt; uint16_t btn; uint8_t an[8];
-                             int16_t tlx, tly, trx, try_; } HostSt;
+            uint32_t pi;
+            for (pi = 0; pi < 4; pi++)
+                if (st == 0x5E5CFFu + 0x80u * pi || st == 0x5E5CE9u + 0x80u * pi) port = pi;
+        }
+        /* host pad for this port (mapping; keyboard only overlays port 0) */
+        {
             extern DWORD xbox_InputGetState(DWORD, void *);
             uint8_t raw[32] = {0};
-            if (xbox_InputGetState(0, raw) == 0) {
+            if (xbox_InputGetState(port, raw) == 0) {
                 buttons = *(uint16_t *)(raw + 4);
-                a = raw[6]; b = raw[7];
+                memcpy(an, raw + 6, 8);
+                a = an[0]; b = an[1];
                 lx = *(int16_t *)(raw + 14); ly = *(int16_t *)(raw + 16);
+                rx = *(int16_t *)(raw + 18); ry = *(int16_t *)(raw + 20);
             }
         }
-        /* keyboard fallback/overlay (user-driven only — no synthetic input) */
-        if (GetAsyncKeyState(VK_RETURN) & 0x8000) buttons |= 0x0010;  /* START */
+        /* Keyboard input comes ONLY through the Esc-menu mapping now; the old
+         * fixed Enter/arrows/Z/X extras were removed once the mapper was
+         * verified to reach the game. */
         {   /* DIAGNOSTIC ONLY (DOA3_FAKESTART=1), never on by default.
              *
              * The post-movie screen advances only on a real button press:
@@ -766,18 +798,21 @@ void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
                             s_n == 300 ? "press" : "release", s_n), fflush(stderr);
             }
         }
-        if (GetAsyncKeyState(VK_UP)     & 0x8000) buttons |= 0x0001;
-        if (GetAsyncKeyState(VK_DOWN)   & 0x8000) buttons |= 0x0002;
-        if (GetAsyncKeyState(VK_LEFT)   & 0x8000) buttons |= 0x0004;
-        if (GetAsyncKeyState(VK_RIGHT)  & 0x8000) buttons |= 0x0008;
-        if (GetAsyncKeyState('Z') & 0x8000) a = 255;
-        if (GetAsyncKeyState('X') & 0x8000) b = 255;
-        {   static int s_log = 0;
-            if (buttons && s_log < 6) {
+        an[0] = a; an[1] = b;
+        {   /* One line per press edge (first 24): what the guest received and
+             * what screen it was on, so a run log shows where a press went. */
+            static int s_log = 0, s_was = 0;
+            int now = (buttons != 0), ai;
+            for (ai = 0; ai < 8; ai++) if (an[ai] >= 30) now = 1;
+            if (now && !s_was && s_log < 24) {
                 s_log++;
-                fprintf(stderr, "[XPP-ST] #%u st=0x%08X buttons=%04X\n", s_packet, st, buttons);
+                fprintf(stderr, "[PRESS] #%u port=%u buttons=%04X A=%02X B=%02X X=%02X Y=%02X Bk=%02X Wh=%02X LT=%02X RT=%02X mode=%u scr=%u req=%u e795=%u latch=%u mvstage=%u\n",
+                        s_packet, port, buttons, an[0], an[1], an[2], an[3], an[4], an[5], an[6], an[7],
+                        MEM8(0x480B70), MEM8(0x48A2FA),
+                        MEM8(0x48A528), MEM8(0x47E795), MEM8(0x47ADB8), MEM8(0x4B83B0));
                 fflush(stderr);
             }
+            s_was = now;
         }
         /* Each pad struct (base 0x5E5CD0, stride 0x80) holds TWO consecutive
          * XINPUT_STATEs, 0x16 bytes each: one at pad+0x19 and one at pad+0x2F.
@@ -805,13 +840,11 @@ void sub_001E711E(void)   /* XInputGetState(handle, state) -> 0, ret 8 */
             uint32_t d = slots[si];
             MEM32(d) = s_packet;          /* dwPacketNumber */
             MEM16(d + 4) = buttons;       /* wButtons */
-            MEM8(d + 6) = a;              /* A */
-            MEM8(d + 7) = b;              /* B */
-            for (int i = 8; i < 14; i++) MEM8(d + i) = 0;
+            for (int i = 0; i < 8; i++) MEM8(d + 6 + i) = an[i];   /* A B X Y Black White LT RT */
             MEM16(d + 14) = (uint16_t)lx; /* sThumbLX */
             MEM16(d + 16) = (uint16_t)ly; /* sThumbLY */
-            MEM16(d + 18) = 0;
-            MEM16(d + 20) = 0;
+            MEM16(d + 18) = (uint16_t)rx; /* sThumbRX */
+            MEM16(d + 20) = (uint16_t)ry; /* sThumbRY */
         }
     }
     {   extern unsigned g_in_getstate, g_in_build;
@@ -3100,11 +3133,12 @@ void sub_000821B0(void) {
         DWORD now = GetTickCount();
         if (s_n < 40 && now >= s_next) {
             s_next = now + 1000; s_n++;
-            fprintf(stderr, "[JOIN] mode=%u scr=%u padmask=%08X agg=%08X req=%u "
-                            "latch=%u e653=%02X 49231C=%08X arm47E74C=%u\n",
+            fprintf(stderr, "[JOIN] mode=%u scr=%u ins=%08X agg=%08X req=%u "
+                            "latch=%u e653=%02X 49231C=%08X arm47E74C=%u e795=%u act4B8228=%u wd48E638=%u\n",
                     MEM8(0x480B70), MEM8(0x48A2FA), MEM32(0x5E5CC8),
                     MEM32(0x5E5ED8), MEM8(0x48A528), MEM8(0x47ADB8),
-                    MEM8(0x48E653), MEM32(0x49231C), MEM8(0x47E74C));
+                    MEM8(0x48E653), MEM32(0x49231C), MEM8(0x47E74C),
+                    MEM8(0x47E795), MEM32(0x4B8228), MEM32(0x48E638));
             fflush(stderr);
         }
     }
@@ -3882,6 +3916,24 @@ void sub_0009E340(void) {
     static int n = 0;
     int log = (n < 4); n++;
     if (log) { fprintf(stderr, "[BOOTMARK] sub_0009E340 enter\n"); fflush(stderr); }
+    {   /* The game leaves the movie here on both paths: end of stream, and
+         * START pressed in the poll loop at 0x00083480. The host presenter
+         * (movie_present.c) runs the picture and ADX audio on its own clock
+         * and only stops at end of file, so on a skip it kept owning the
+         * screen (d3d8 Present drops guest frames while it does) and the
+         * press looked like it did nothing. Hand the screen back now. */
+        extern int  doa3_movie_presenter_active(void);
+        extern void doa3_movie_present_finish(void);
+        extern void xa2_movie_stop(void);
+        extern int  g_doa3_host_movie_ended;
+        if (doa3_movie_presenter_active()) {
+            fprintf(stderr, "[HOSTFMV] game left the movie early (skip) -> stopping presenter\n");
+            fflush(stderr);
+            xa2_movie_stop();
+            g_doa3_host_movie_ended = 1;
+            doa3_movie_present_finish();
+        }
+    }
     sub_0009E340_gen();
     g_doa3_post_movie = 1;
     { extern int g_kernel_trace_reads; g_kernel_trace_reads = 1; }

@@ -8,6 +8,7 @@
 
 static PadMapping g_map;
 static int        g_menu_open = 0;
+static int        g_use_keys  = 1;   /* set per call by pad_mapping_apply_port */
 static int        g_initialised = 0;
 
 /* ── Row metadata ──────────────────────────────────────────────────────── */
@@ -269,7 +270,7 @@ static int source_value(PadBinding b, const XINPUT_STATE *xi)
     case PADSRC_KEY:
         /* Suppressed while the menu has the keyboard, so typing in the UI does
          * not also drive the game. Controller sources stay live. */
-        if (g_menu_open) return 0;
+        if (g_menu_open || !g_use_keys) return 0;
         return (GetAsyncKeyState(b.code) & 0x8000) ? 255 : 0;
     default:
         return 0;
@@ -308,12 +309,18 @@ static SHORT clamp_axis(int v)
 
 void pad_mapping_apply(const void *xinput_state, XBOX_GAMEPAD *out)
 {
+    pad_mapping_apply_port(xinput_state, out, 1);
+}
+
+void pad_mapping_apply_port(const void *xinput_state, XBOX_GAMEPAD *out, int use_keyboard)
+{
     const XINPUT_STATE *xi = (const XINPUT_STATE *)xinput_state;
     PadMapping *m = pad_mapping_get();
     int i;
 
     if (!out) return;
     memset(out, 0, sizeof(*out));
+    g_use_keys = use_keyboard ? 1 : 0;
 
     /* Digital controls -> wButtons bits. */
     for (i = PADCTL_DPAD_UP; i <= PADCTL_RTHUMB; i++)

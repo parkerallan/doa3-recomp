@@ -89,6 +89,13 @@ typedef struct XBOX_INPUT_CAPABILITIES {
 void xbox_InputInit(void);
 
 /**
+ * Bitmask of guest ports that currently have a device (bit n = port n).
+ * Re-probes empty host slots at most once a second, so it is cheap enough to
+ * call every frame from XGetDeviceChanges.
+ */
+DWORD xbox_InputHostMask(void);
+
+/**
  * Get the state of a controller.
  * Port: 0-3 (Xbox controller ports)
  */

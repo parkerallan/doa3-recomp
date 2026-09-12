@@ -456,6 +456,15 @@ int doa3_movie_host_owns_screen(void)
     return !s_host_stopped;
 }
 
+/* True only while the presenter has actually started showing a movie and
+ * has not finished: the game leaving the movie early (START during the
+ * intro) must stop it, but the same game path runs before any movie exists
+ * and must not pre-stop a presenter that has not begun. */
+int doa3_movie_presenter_active(void)
+{
+    return s_tex != NULL && !s_host_stopped;
+}
+
 void doa3_movie_present_finish(void)
 {
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();

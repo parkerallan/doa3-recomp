@@ -94,6 +94,9 @@ int  pad_mapping_has_key_binding(void);
 /* Build an Xbox gamepad state from a polled XInput state (may be NULL when no
  * controller is attached) plus the current keyboard, per the mapping. */
 void pad_mapping_apply(const void *xinput_state, XBOX_GAMEPAD *out);
+/* Same, but keyboard sources only contribute when use_keyboard is non-zero:
+ * the keyboard belongs to port 0, it must not drive players 2-4 as well. */
+void pad_mapping_apply_port(const void *xinput_state, XBOX_GAMEPAD *out, int use_keyboard);
 
 #ifdef __cplusplus
 }
