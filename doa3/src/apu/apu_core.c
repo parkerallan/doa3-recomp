@@ -58,6 +58,18 @@ void mcpx_debug_end_frame(void) {}
  * IRQ handling (stubbed - no PCI bus in standalone)
  * ============================================================ */
 
+/* Standalone interrupt delivery: the chip cannot raise a PCI IRQ here, so
+ * assert -> set a flag; the game thread polls it once per frame and runs
+ * the DirectSound driver's KINTERRUPT service routine + queued DPC
+ * (doa3_apu_deliver_irq in recomp_manual.c). Without this the driver's own
+ * "trap the FE when a voice goes idle" request left the front end trapped
+ * forever after the first idle voice, and no frame was ever mixed again. */
+volatile LONG g_apu_irq_pending = 0;
+int mcpx_apu_take_irq(void)
+{
+    return InterlockedExchange(&g_apu_irq_pending, 0) != 0;
+}
+
 static void update_irq(MCPXAPUState *d)
 {
     if (d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE_TRAPPED) {
@@ -70,6 +82,7 @@ static void update_irq(MCPXAPUState *d)
         /* In standalone mode we don't raise a PCI IRQ; the game's kernel
          * stub will poll ISTS directly or we'll signal via a flag. */
         pci_irq_assert(PCI_DEVICE(d));
+        InterlockedExchange(&g_apu_irq_pending, 1);
     } else {
         qatomic_and(&d->regs[NV_PAPU_ISTS], ~NV_PAPU_ISTS_GINTSTS);
         pci_irq_deassert(PCI_DEVICE(d));
@@ -100,6 +113,9 @@ uint64_t mcpx_apu_read(void *opaque, hwaddr addr, unsigned int size)
      * fprintf(stderr, "[APU] read  [0x%05llX] size=%u -> 0x%08llX\n",
      *         (unsigned long long)addr, size, (unsigned long long)r);
      */
+    {   static int n = 0;
+        if (n < 300) { n++;  }
+    }
     (void)size;
     return r;
 }
@@ -113,6 +129,9 @@ void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
      * fprintf(stderr, "[APU] write [0x%05llX] size=%u <- 0x%08llX\n",
      *         (unsigned long long)addr, size, (unsigned long long)val);
      */
+    {   static int n = 0;
+        if (n < 300) { n++;  }
+    }
     (void)size;
 
     switch (addr) {
@@ -124,6 +143,9 @@ void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
     case NV_PAPU_FECTL:
     case NV_PAPU_SECTL:
         qatomic_set(&d->regs[addr], (uint32_t)val);
+        /* The guest driver is bringing the APU up: let the frame thread run
+         * (standalone build starts it paused; only the test tone resumed it). */
+        d->pause_requested = false;
         qemu_cond_broadcast(&d->cond);
         break;
     case NV_PAPU_FEMEMDATA:
@@ -244,19 +266,26 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
         return;
     }
 
-    /* XAudio2 path: render and submit a buffer */
+    /* XAudio2 path. mcpx_apu_dsp_frame (passthrough stub) has just finished
+     * writing the 8th 32-sample slice of this 256-sample period into
+     * monitor.frame_buf (mixbins 0/1 = front L/R). Keep it: the old code
+     * memset() the frame buffer here and rendered only the host-mixer
+     * voices, so everything the emulated voice processor produced was
+     * discarded, and it submitted a full 1024-sample XA2 buffer every 256
+     * samples (4x oversubmission -> permanently full queue). Now the host
+     * mixer voices are layered on top and 256-sample periods are staged
+     * until one 1024-sample buffer is complete. */
     if (xa2_is_active()) {
+        static int16_t s_stage[1024][2];   /* matches XA2_BUF_SAMPLES max */
+        static int s_fill = 0;
         int buf_size = xa2_get_buffer_size();
-        int16_t xa2_tmp[1024][2];  /* matches XA2_BUF_SAMPLES max */
-        int remaining = buf_size;
-        int out_offset = 0;
+        if (buf_size > 1024) buf_size = 1024;
 
-        while (remaining > 0) {
-            int chunk = (remaining < MIXER_FRAME_SAMPLES) ? remaining : MIXER_FRAME_SAMPLES;
+        if (g_audio_muted) {
             memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
-
-            if (g_test_tone.active && !g_audio_muted) {
-                for (int i = 0; i < chunk; i++) {
+        } else {
+            if (g_test_tone.active) {
+                for (int i = 0; i < MIXER_FRAME_SAMPLES; i++) {
                     int16_t s = (int16_t)(sin(g_test_tone.phase) * g_test_tone.amplitude);
                     d->monitor.frame_buf[i][0] = s;
                     d->monitor.frame_buf[i][1] = s;
@@ -265,16 +294,29 @@ void mcpx_apu_monitor_frame(MCPXAPUState *d)
                         g_test_tone.phase -= 2.0 * M_PI;
                 }
             }
-
-            if (!g_audio_muted)
-                mixer_render(d->monitor.frame_buf, chunk);
-
-            memcpy(xa2_tmp + out_offset, d->monitor.frame_buf, chunk * 2 * sizeof(int16_t));
-            out_offset += chunk;
-            remaining -= chunk;
+            mixer_render(d->monitor.frame_buf, MIXER_FRAME_SAMPLES);
         }
 
-        xa2_submit_samples((const int16_t *)xa2_tmp, buf_size);
+        {
+            int take = MIXER_FRAME_SAMPLES;
+            if (s_fill + take > buf_size) take = buf_size - s_fill;
+            memcpy(s_stage + s_fill, d->monitor.frame_buf, take * 2 * sizeof(int16_t));
+            s_fill += take;
+        }
+        if (s_fill >= buf_size) {
+            /* Pace on the consumer: XA2 drains exactly 48 kHz, so waiting for a
+             * free slot keeps the emulated chip in real time without dropping
+             * (drops and dry queues both clicked). Bounded so a dead device
+             * cannot wedge the APU thread. */
+            extern int xa2_queued(void);
+            int spins = 0;
+            while (xa2_queued() >= 6 && spins < 200) { qemu_mutex_unlock(&d->lock); Sleep(1); qemu_mutex_lock(&d->lock); spins++; }
+            xa2_submit_samples((const int16_t *)s_stage, buf_size);
+            s_fill = 0;
+        }
+        /* a DSP that stops writing (paused/idle) must yield silence, not a
+         * repeat of the last period */
+        memset(d->monitor.frame_buf, 0, sizeof(d->monitor.frame_buf));
         return;
     }
 
@@ -344,8 +386,15 @@ static void throttle(MCPXAPUState *d)
 
     int64_t now_us = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 
+    /* DOA3: only resync when hopelessly late (>150 ms). Resetting on any
+     * lateness > one period (the original rule) threw away real time every
+     * time the 5 ms wait overslept (15.6 ms Windows timer ticks), so the
+     * chip ran at ~90% of 48 kHz and the output queue starved (clicks).
+     * Small deficits are now caught up by running frames back to back; the
+     * XA2 queue wait in the monitor bounds any overshoot. */
+    { static int s_period = 0; if (!s_period) { s_period = 1; timeBeginPeriod(1); } }
     if (d->next_frame_time_us == 0 ||
-        now_us - d->next_frame_time_us > EP_FRAME_US) {
+        now_us - d->next_frame_time_us > 150000) {
         d->next_frame_time_us = now_us;
     }
 
@@ -361,6 +410,18 @@ static void throttle(MCPXAPUState *d)
     d->next_frame_time_us += EP_FRAME_US;
 
     d->sleep_acc_us += (int)(qemu_clock_get_us(QEMU_CLOCK_REALTIME) - now_us);
+}
+
+/* DOA3 diag: one status line per call (the present hook calls it every
+ * ~2 s). Answers "does the game program the APU, and does the APU run". */
+static unsigned g_apu_frames_total;
+void apu_debug_stats_line(void)
+{
+    extern int g_apu_mmio_read_count, g_apu_mmio_write_count, g_apu_mmio_decode_fail;
+    extern unsigned g_apu_fe_methods, g_apu_voice_on_calls, g_apu_voices_active_last;
+    MCPXAPUState *d = g_state;
+    if (!d) return;
+    
 }
 
 /* ============================================================
@@ -384,6 +445,7 @@ static void se_frame(MCPXAPUState *d)
         d->sleep_acc_us = 0;
     }
     d->frame_count++;
+    g_apu_frames_total++;
 
     /* Buffer for all mixbins for this frame */
     float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME];
@@ -435,6 +497,12 @@ static void *mcpx_apu_frame_thread(void *arg)
             /* Lightweight: just monitor frame (test tone + software mixer) */
             mcpx_apu_monitor_frame(d);
             d->ep_frame_div++;
+        }
+        /* FE trap / voice event raised during the frame: latch the status
+         * bits and assert the (virtual) interrupt line. */
+        if (d->set_irq) {
+            d->set_irq = false;
+            update_irq(d);
         }
     }
 

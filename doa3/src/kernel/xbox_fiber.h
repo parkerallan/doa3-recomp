@@ -58,6 +58,9 @@ void xbox_fiber_exit(void);
 /* True if the currently running fiber is the primary (the game's main thread). */
 int  xbox_fiber_is_primary(void);
 int  xbox_fiber_run_thread(uint32_t xhandle);
+int  xbox_fiber_thread_alive(uint32_t ctx1);
+void xbox_fiber_timeslice(void);
+extern volatile int g_fib_slice_due;   /* set every 4 ms by a host timer; consumed by xbox_fiber_timeslice */
 int  xbox_fiber_any_ready(void);
 void xbox_fiber_dump_states(void);
 

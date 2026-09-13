@@ -1581,7 +1581,7 @@ loc_0017C9EC: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017CA00(void)
+void sub_0017CA00_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -2080,8 +2080,9 @@ loc_0017CC6E: ;
 
 loc_0017CC73: ;
     /* cmp eax, esi - flags set for next jcc */
+    int _cc1 = (CMP_GE(eax, esi)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = 1;
-    if (CMP_GE(eax, esi)) goto loc_0017CC81; /* jge: greater or equal (signed >=) */
+    if (_cc1) goto loc_0017CC81; /* jge: greater or equal (signed >=) */
 
 loc_0017CC7C: ;
     eax = 2;
@@ -3862,7 +3863,7 @@ loc_0017D501: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017D510(void)
+void sub_0017D510_gen(void)
 {
 
 loc_0017D510: ;
@@ -3879,7 +3880,7 @@ loc_0017D510: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017D520(void)
+void sub_0017D520_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -6940,8 +6941,9 @@ loc_0017E9F6: ;
     eax = MEM32(esp + 0x14);
     esp = esp + 0x10;
     /* cmp ecx, eax - flags set for next jcc */
+    int _cc2 = (CMP_NE(ecx, eax)); /* DOA3: flags from the compare above; ecx is overwritten before the jcc */
     ecx = MEM32(esp + 8);
-    if (CMP_NE(ecx, eax)) goto loc_0017EA13; /* jne: not equal / not zero */
+    if (_cc2) goto loc_0017EA13; /* jne: not equal / not zero */
 
 loc_0017EA0B: ;
     if (CMP_EQ(MEM32(esi + 0xCD0), ecx)) goto loc_0017EA2B; /* je: equal / zero */
@@ -7623,7 +7625,7 @@ loc_0017EDA0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017EDC0(void)
+void sub_0017EDC0_gen(void)
 {
 
 loc_0017EDC0: ;
@@ -7641,7 +7643,7 @@ loc_0017EDC0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017EDE0(void)
+void sub_0017EDE0_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -7798,7 +7800,7 @@ loc_0017EECB: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017EEE0(void)
+void sub_0017EEE0_gen(void)
 {
 
 loc_0017EEE0: ;
@@ -7854,7 +7856,7 @@ loc_0017EF20: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017EF40(void)
+void sub_0017EF40_gen(void)
 {
 
 loc_0017EF40: ;
@@ -9072,7 +9074,7 @@ loc_0017F73E: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017F750(void)
+void sub_0017F750_gen(void)
 {
 
 loc_0017F750: ;
@@ -9666,7 +9668,7 @@ loc_0017FB9E: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0017FBA0(void)
+void sub_0017FBA0_gen(void)
 {
 
 loc_0017FBA0: ;
@@ -16989,8 +16991,9 @@ loc_00182680: ;
     eax = MEM32(esp + 0x14);
     ecx = ecx + esi;
     /* cmp ecx, eax - flags set for next jcc */
+    int _cc3 = (CMP_A(ecx, eax)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = MEM32(esp + 0x24);
-    if (CMP_A(ecx, eax)) goto loc_0018269C; /* ja: above (unsigned >) */
+    if (_cc3) goto loc_0018269C; /* ja: above (unsigned >) */
 
 loc_00182696: ;
     if (CMP_A(esi, eax)) goto loc_001826B4; /* ja: above (unsigned >) */
@@ -25980,8 +25983,9 @@ loc_001868BB: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc4 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_001868D5; /* je: equal / zero */
+    if (_cc4) goto loc_001868D5; /* je: equal / zero */
 
 loc_001868D3: ;
     eax = ecx;
@@ -26003,8 +26007,9 @@ loc_001868F4: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc5 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_0018690E; /* je: equal / zero */
+    if (_cc5) goto loc_0018690E; /* je: equal / zero */
 
 loc_0018690C: ;
     eax = ecx;
@@ -26026,8 +26031,9 @@ loc_0018692C: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc6 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_00186946; /* je: equal / zero */
+    if (_cc6) goto loc_00186946; /* je: equal / zero */
 
 loc_00186944: ;
     eax = ecx;
@@ -26049,8 +26055,9 @@ loc_00186965: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc7 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_0018697F; /* je: equal / zero */
+    if (_cc7) goto loc_0018697F; /* je: equal / zero */
 
 loc_0018697D: ;
     eax = ecx;
@@ -26072,8 +26079,9 @@ loc_0018699E: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc8 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_001869B8; /* je: equal / zero */
+    if (_cc8) goto loc_001869B8; /* je: equal / zero */
 
 loc_001869B6: ;
     eax = ecx;
@@ -26095,8 +26103,9 @@ loc_001869D7: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc9 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_001869F1; /* je: equal / zero */
+    if (_cc9) goto loc_001869F1; /* je: equal / zero */
 
 loc_001869EF: ;
     eax = ecx;
@@ -26118,8 +26127,9 @@ loc_00186A10: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc10 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_00186A2A; /* je: equal / zero */
+    if (_cc10) goto loc_00186A2A; /* je: equal / zero */
 
 loc_00186A28: ;
     eax = ecx;
@@ -26141,8 +26151,9 @@ loc_00186A49: ;
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    int _cc11 = (TEST_Z(HI8(eax), 0x41)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = ecx + -1;
-    if (TEST_Z(HI8(eax), 0x41)) goto loc_00186A63; /* je: equal / zero */
+    if (_cc11) goto loc_00186A63; /* je: equal / zero */
 
 loc_00186A61: ;
     eax = ecx;
@@ -54689,8 +54700,9 @@ loc_0018E813: ;
     eax = MEM32(edi + 8);
     MEM32(esi + 8) = eax;
     /* test eax, eax - flags set for next jcc */
+    int _cc12 = (TEST_Z(eax, eax)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = MEM32(edi + 4);
-    if (TEST_Z(eax, eax)) goto loc_0018E858; /* je: equal / zero */
+    if (_cc12) goto loc_0018E858; /* je: equal / zero */
 
 loc_0018E82E: ;
     ecx = eax + 1;

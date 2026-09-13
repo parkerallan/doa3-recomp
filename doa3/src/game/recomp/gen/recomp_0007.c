@@ -90465,7 +90465,7 @@ loc_00163E1A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00163E20(void)
+void sub_00163E20_gen(void)
 {
 
 loc_00163E20: ;

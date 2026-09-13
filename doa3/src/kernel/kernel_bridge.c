@@ -294,6 +294,98 @@ static void bridge_PsCreateSystemThreadEx(void)
     g_eax = 0; /* STATUS_SUCCESS */
 }
 
+/* ── NtWaitForSingleObject (ordinal 234) ──────────────────
+ * NTSTATUS NtWaitForSingleObject(HANDLE Handle, BOOLEAN Alertable,
+ *                                PLARGE_INTEGER Timeout)
+ *
+ * Was unbridged, i.e. every wait returned 0 = STATUS_WAIT_0 at once. The
+ * one place DOA3 joins a thread is the first-boot cache install: the boot
+ * spawns the copy worker (routine 0x0009D440, sub_0009D6C0) and polls it
+ * with WaitForSingleObject(hThread, 0) from sub_0009D713 before it loads
+ * the partitions from z:\. "Signaled" on the first poll meant the boot
+ * read z:\loadfile.afs while the copy was still on voice.afs; the open
+ * failed, ADXF parked the partition in error and the boot spun on the
+ * mount forever -- the black screen after a first-boot install.
+ *
+ * Thread pseudo-handles (0xBEEFxxxx) therefore report the worker's real
+ * state: STATUS_TIMEOUT while its fiber is alive (a zero timeout is a poll),
+ * or block by yielding to it until it exits. Everything else keeps the old
+ * behaviour (satisfied immediately). */
+static void bridge_NtWaitForSingleObject(void)
+{
+    uint32_t h = STACK_ARG(0);
+    uint32_t timeout_va = STACK_ARG(2);
+    if ((h & 0xFFFF0000u) == 0xBEEF0000u) {
+        const uint32_t install_ctx = 0x0009D440u;
+        int zero_timeout = timeout_va &&
+                           BRIDGE_MEM32(timeout_va) == 0 && BRIDGE_MEM32(timeout_va + 4) == 0;
+        if (xbox_fiber_thread_alive(install_ctx)) {
+            if (xbox_fiber_active()) {
+                BRIDGE_MEM32(0x001C2CF0u + 4) = 1;   /* vblank pulse for the CRI workers */
+                xbox_fiber_wake(0x001C2CF0u);
+                xbox_fiber_yield();
+            }
+            if (zero_timeout) { g_eax = 0x00000102u; return; }   /* STATUS_TIMEOUT */
+            while (xbox_fiber_thread_alive(install_ctx) && xbox_fiber_active()) {
+                BRIDGE_MEM32(0x001C2CF0u + 4) = 1;
+                xbox_fiber_wake(0x001C2CF0u);
+                xbox_fiber_yield();
+            }
+        }
+        g_eax = 0;   /* STATUS_WAIT_0 */
+        return;
+    }
+    g_eax = 0;
+}
+
+/* ── KeInitializeInterrupt (ordinal 109) / KeInsertQueueDpc (119) ──
+ * The DirectSound driver's interrupt path. KeInitializeInterrupt records
+ * the KINTERRUPT's service routine + context; KeInsertQueueDpc queues the
+ * DPC (routine/context live in the KDPC written by KeInitializeDpc). The
+ * game thread drains both from doa3_apu_deliver_irq once per frame. */
+typedef struct { uint32_t obj, routine, ctx; } XboxIsr;
+static XboxIsr  s_isr[4];
+static int      s_isr_n;
+typedef struct { uint32_t dpc, a1, a2; } XboxDpc;
+static XboxDpc  s_dpcq[16];
+static int      s_dpcq_n;
+
+static void bridge_KeInitializeInterrupt(void)
+{
+    uint32_t obj = STACK_ARG(0), routine = STACK_ARG(1), ctx = STACK_ARG(2);
+    if (s_isr_n < 4) { s_isr[s_isr_n].obj = obj; s_isr[s_isr_n].routine = routine; s_isr[s_isr_n].ctx = ctx; s_isr_n++; }
+    fprintf(stderr, "  [KERNEL] KeInitializeInterrupt(obj=0x%08X routine=0x%08X ctx=0x%08X vector=%u)\n",
+            obj, routine, ctx, STACK_ARG(3));
+    fflush(stderr);
+    g_eax = 0;
+}
+
+static void bridge_KeInsertQueueDpc(void)
+{
+    uint32_t dpc = STACK_ARG(0), a1 = STACK_ARG(1), a2 = STACK_ARG(2);
+    int i;
+    for (i = 0; i < s_dpcq_n; i++)
+        if (s_dpcq[i].dpc == dpc) { g_eax = 0; return; }   /* already queued */
+    if (s_dpcq_n < 16) { s_dpcq[s_dpcq_n].dpc = dpc; s_dpcq[s_dpcq_n].a1 = a1; s_dpcq[s_dpcq_n].a2 = a2; s_dpcq_n++; }
+    g_eax = 1;
+}
+
+int xbox_kernel_get_isr(int i, uint32_t *obj, uint32_t *routine, uint32_t *ctx)
+{
+    if (i < 0 || i >= s_isr_n) return 0;
+    *obj = s_isr[i].obj; *routine = s_isr[i].routine; *ctx = s_isr[i].ctx;
+    return 1;
+}
+
+int xbox_kernel_pop_dpc(uint32_t *dpc, uint32_t *a1, uint32_t *a2)
+{
+    if (s_dpcq_n == 0) return 0;
+    *dpc = s_dpcq[0].dpc; *a1 = s_dpcq[0].a1; *a2 = s_dpcq[0].a2;
+    memmove(&s_dpcq[0], &s_dpcq[1], (size_t)(s_dpcq_n - 1) * sizeof(s_dpcq[0]));
+    s_dpcq_n--;
+    return 1;
+}
+
 /* ── NtClose (ordinal 187) ───────────────────────────────
  * NTSTATUS NtClose(HANDLE Handle)
  * Handle is a value (not a pointer), so safe for generic call.
@@ -1093,7 +1185,19 @@ static void bridge_write_iostatus(uint32_t ios_va, NTSTATUS status, uint32_t inf
 #define XFH_MAX   4096
 static HANDLE s_fh[XFH_MAX];
 static WCHAR  s_fh_path[XFH_MAX][MAX_PATH];
+static unsigned char s_fh_write[XFH_MAX];   /* opened with write access */
 static unsigned s_fh_next;
+
+/* Is any live guest handle writing this host path? (the wxCi cache
+ * installer holds its z:\ target open for write while it copies) */
+static int xbox_fh_has_writer(const WCHAR *win_path)
+{
+    unsigned i;
+    for (i = 0; i < s_fh_next && i < XFH_MAX; i++)
+        if (s_fh[i] && s_fh_write[i] && _wcsicmp(s_fh_path[i], win_path) == 0)
+            return 1;
+    return 0;
+}
 
 static uint32_t xbox_fh_publish(HANDLE h, const WCHAR *win_path)
 {
@@ -1105,6 +1209,7 @@ static uint32_t xbox_fh_publish(HANDLE h, const WCHAR *win_path)
         return (uint32_t)(uintptr_t)h;
     }
     s_fh[s_fh_next] = h;
+    s_fh_write[s_fh_next] = 0;
     s_fh_path[s_fh_next][0] = 0;
     if (win_path)
         wcsncpy_s(s_fh_path[s_fh_next], MAX_PATH, win_path, MAX_PATH - 1);
@@ -1144,6 +1249,15 @@ static HANDLE xbox_fh_resolve(uint32_t gh)
     return (HANDLE)(uintptr_t)gh;               /* not ours: unchanged */
 }
 
+static const WCHAR *xbox_fh_path(uint32_t gh)
+{
+    if ((gh & 0xFF000000u) == XFH_TAG) {
+        unsigned i = (gh & 0x00FFFFFFu) / 4u;
+        if (i < XFH_MAX) return s_fh_path[i];
+    }
+    return NULL;
+}
+
 static int xbox_fh_release(uint32_t gh)
 {
     if ((gh & 0xFF000000u) == XFH_TAG) {
@@ -1175,6 +1289,56 @@ static HANDLE bridge_read_handle(uint32_t va)
 }
 
 /* Translate Xbox path and open file via Win32 CreateFileW */
+/* z:\ cache copies of the game archives: cache MISS -> the d:\ original.
+ *
+ * DOA3's wxCi installer copies loadfile/bgm/voice.afs to Z: in the background
+ * and the boot keeps going meanwhile. On the console a copy that is not there
+ * yet is a plain cache miss and the CRI reads the disc instead. Here that
+ * miss was fatal: with an empty cache the installer was still on voice.afs
+ * when the boot's partition load asked for z:\loadfile.afs, the open failed
+ * ("can not open 'z:\loadfile.afs'" from wxCiOpen), ADXF parked the
+ * partition in error (-3) and the boot spun on the mount forever. A re-install
+ * has the same window: the target is truncated first and grows while the
+ * game already reads from it (an interrupted install left a 53 MB
+ * loadfile.afs in the user's cache and the post-movie loads read past its
+ * end).
+ *
+ * So a READ open (or path stat) of one of the three archives under z:\ uses
+ * the d:\ original while the cache copy is missing or an installer has it
+ * open for writing. A complete, stamped copy is used exactly as before, and
+ * an interrupted copy fails validation on the next boot and is redone. Write
+ * opens are never redirected. */
+static int bridge_cache_archive_fallback(const char *xbox_path, WCHAR *win_path,
+                                         DWORD win_access, const char *why)
+{
+    static const char *k_afs[] = { "loadfile.afs", "bgm.afs", "voice.afs" };
+    const char *name;
+    int i;
+    if (!xbox_path || !((xbox_path[0] == 'z' || xbox_path[0] == 'Z') && xbox_path[1] == ':'))
+        return 0;
+    if (win_access & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA |
+                      FILE_WRITE_ATTRIBUTES | DELETE))
+        return 0;
+    name = xbox_path + 2;
+    while (*name == '\\' || *name == '/') name++;
+    for (i = 0; i < 3; i++) {
+        if (_stricmp(name, k_afs[i]) == 0) {
+            int missing = 0;   /* a missing copy must stay visible: the validator decides to install */
+            int installing = xbox_fh_has_writer(win_path);
+            char dpath[64];
+            WCHAR alt[MAX_PATH];
+            if (!installing) return 0;
+            snprintf(dpath, sizeof dpath, "D:\\%s", k_afs[i]);
+            if (xbox_translate_path(dpath, alt, MAX_PATH) &&
+                GetFileAttributesW(alt) != INVALID_FILE_ATTRIBUTES) {
+                wcscpy_s(win_path, MAX_PATH, alt);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static NTSTATUS bridge_create_file_impl(
     uint32_t handle_va, ACCESS_MASK access, uint32_t obj_attrs_va,
     uint32_t iostatus_va, ULONG file_attrs, ULONG share,
@@ -1223,6 +1387,8 @@ static NTSTATUS bridge_create_file_impl(
     if (access & 0x00100000) win_access |= SYNCHRONIZE;
     if (win_access == 0 || win_access == SYNCHRONIZE)
         win_access |= GENERIC_READ;
+
+    bridge_cache_archive_fallback(xbox_path, win_path, win_access, "open");
 
     /* Share mode: always grant full sharing. The Xbox kernel's FATX driver
      * was permissive within a title; DOA3's wxCi cache installer holds a
@@ -1303,6 +1469,9 @@ static NTSTATUS bridge_create_file_impl(
 
     {
         uint32_t gh = xbox_fh_publish(h, win_path);
+        if ((gh & 0xFF000000u) == XFH_TAG &&
+            (win_access & (GENERIC_WRITE | GENERIC_ALL | FILE_WRITE_DATA | FILE_APPEND_DATA)))
+            s_fh_write[(gh & 0x00FFFFFFu) / 4u] = 1;
         if (handle_va) BRIDGE_MEM32(handle_va) = gh;
         bridge_write_iostatus(iostatus_va, STATUS_SUCCESS,
                               (disposition == 2) ? 2 /* FILE_CREATED */ : 1 /* FILE_OPENED */);
@@ -1693,6 +1862,39 @@ static void bridge_NtSetInformationFile(void)
         g_eax = STATUS_SUCCESS;
         break;
     }
+    case 4: { /* FileBasicInformation: CreationTime, LastAccessTime,
+               * LastWriteTime, ChangeTime (8 bytes each, 0 = leave alone),
+               * FileAttributes. The CRI wxCi cache installer stamps each
+               * finished z:\ copy with the d:\ source's times; without this
+               * the copies never validated on the next boot. */
+        FILETIME ct, at, wt;
+        FILETIME *pct = NULL, *pat = NULL, *pwt = NULL;
+        BOOL ok;
+        ct.dwLowDateTime = BRIDGE_MEM32(info_va +  0); ct.dwHighDateTime = BRIDGE_MEM32(info_va +  4);
+        at.dwLowDateTime = BRIDGE_MEM32(info_va +  8); at.dwHighDateTime = BRIDGE_MEM32(info_va + 12);
+        wt.dwLowDateTime = BRIDGE_MEM32(info_va + 16); wt.dwHighDateTime = BRIDGE_MEM32(info_va + 20);
+        if (ct.dwLowDateTime | ct.dwHighDateTime) pct = &ct;
+        if (at.dwLowDateTime | at.dwHighDateTime) pat = &at;
+        if (wt.dwLowDateTime | wt.dwHighDateTime) pwt = &wt;
+        ok = SetFileTime(handle, pct, pat, pwt);
+        if (!ok) {
+            /* The guest handle may lack FILE_WRITE_ATTRIBUTES on the host
+             * side; retry through a fresh attributes-only handle by path. */
+            const WCHAR *path = xbox_fh_path(STACK_ARG(0));
+            if (path && path[0]) {
+                HANDLE h2 = CreateFileW(path, FILE_WRITE_ATTRIBUTES,
+                                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+                if (h2 != INVALID_HANDLE_VALUE) {
+                    ok = SetFileTime(h2, pct, pat, pwt);
+                    CloseHandle(h2);
+                }
+            }
+        }
+        bridge_write_iostatus(ios_va, ok ? STATUS_SUCCESS : 0xC0000022u, 0); /* ACCESS_DENIED */
+        g_eax = ok ? STATUS_SUCCESS : 0xC0000022u;
+        break;
+    }
     default:
         fprintf(stderr, "  [FILE] NtSetInformationFile: unhandled class %u\n", infoclass);
         bridge_write_iostatus(ios_va, STATUS_SUCCESS, 0);
@@ -1766,6 +1968,7 @@ static void bridge_NtQueryFullAttributesFile(void)
         return;
     }
 
+    bridge_cache_archive_fallback(xbox_path, win_path, 0, "stat");
     if (!GetFileAttributesExW(win_path, GetFileExInfoStandard, &fad)) {
         DWORD err = GetLastError();
         g_eax = (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
@@ -2250,11 +2453,14 @@ static int stdcall_args_for_ordinal(ULONG ordinal)
 
     /* ── Unknown stubs ── */
     case   8: return  0;  /* Unknown_8(void) */
-    case  23: return  0;  /* Unknown_23(void) */
+    case  23: return  4;  /* ExQueryPoolBlockSize(ptr): called right after each DSOUND
+                           * allocation to accumulate pool statistics (1 arg). */
     case  42: return  0;  /* Unknown_42(void) */
 
     /* ── Pool Allocator ── */
-    case  15: return  4;  /* ExAllocatePool(1) */
+    case  15: return  8;  /* ExAllocatePoolWithTag(size, tag): the only caller (DSOUND's
+                           * sub_001C6AA0) pushes the 'DSND' tag then the size. Popping 4
+                           * left the tag on the stack after every sound allocation. */
     case  16: return  8;  /* ExAllocatePoolWithTag(2) */
     /* case  17: DATA export - ExEventObjectType */
     case  24: return  4;  /* ExQueryPoolBlockSize(1) */
@@ -2262,9 +2468,16 @@ static int stdcall_args_for_ordinal(ULONG ordinal)
     /* ── HAL ── */
     case  40: return  4;  /* HalClearSoftwareInterrupt(1) */
     case  41: return  8;  /* HalDisableSystemInterrupt(2) */
-    case  44: return 12;  /* DOA3 HalGetInterruptVector(3 args, XDK 3911) */
+    case  44: return  8;  /* HalGetInterruptVector(Level, &Irql): 2 args. Every DOA3 call site
+                           * pushes exactly two (0x1C912C: push &irql, push 5); the D3D and
+                           * DSOUND sites also push a callee-saved register BEFORE the args
+                           * and pop it afterwards, which was misread as a third argument.
+                           * Popping 12 discarded that saved register and skewed every
+                           * later pop in CMcpxAPU's stream init (sub_001CE8E6). */
     case  46: return  8;  /* HalReadSMCTrayState(2) */
-    case  47: return 24;  /* HalReadWritePCISpace(6) */
+    case  47: return  8;  /* HalRegisterShutdownNotification(&reg, Register): 2 args.
+                           * All 8 call sites push two dwords and the first is a struct
+                           * whose first field is a routine pointer (0x1CE9AA). */
     case  49: return  4;  /* HalRequestSoftwareInterrupt(1) */
     case 358: return  0;  /* HalIsResetOrShutdownPending(void) */
 
@@ -2493,6 +2706,12 @@ static void bridge_HalGetInterruptVector_44(void)
     g_eax = 33;
 }
 
+/* HalRegisterShutdownNotification (ordinal 47): nothing to do on the host. */
+static void bridge_HalRegisterShutdownNotification(void)
+{
+    g_eax = 0;
+}
+
 static bridge_func_t bridge_for_ordinal(ULONG ordinal)
 {
     switch (ordinal) {
@@ -2511,6 +2730,9 @@ static bridge_func_t bridge_for_ordinal(ULONG ordinal)
 
     /* File/Handle */
     case 187: return bridge_NtClose;
+    case 109: return bridge_KeInitializeInterrupt;
+    case 119: return bridge_KeInsertQueueDpc;
+    case 234: return bridge_NtWaitForSingleObject;
     case 190: return bridge_NtCreateFile;
     case 195: return bridge_NtDeleteFile;
     case 196: return bridge_NtDeviceIoControlFile;
@@ -2572,7 +2794,7 @@ static bridge_func_t bridge_for_ordinal(ULONG ordinal)
     case 238: return bridge_NtYieldExecution;
 
     /* Hardware */
-    case  47: return bridge_HalReadSMCTrayState;
+    case  47: return bridge_HalRegisterShutdownNotification;
 
     /* Display */
     case   3: return bridge_AvSetDisplayMode;
@@ -2621,6 +2843,11 @@ static void kernel_thunk_dispatch(void)
     bridge = g_slot_bridges[slot];
 
     g_kernel_call_count++;
+    {   /* worker-thread scheduling point (see xbox_fiber_timeslice). Only
+         * once the movie is over (its verified timing is left alone), and
+         * never from inside the CRI server pump or with the CRI lock held. */
+        if (g_fib_slice_due) xbox_fiber_timeslice();
+    }
 
     if (g_kernel_call_count <= 200) {
         fprintf(stderr, "  [KERNEL] #%llu: ordinal %u (slot %d) esp=0x%08X\n",

@@ -36580,7 +36580,7 @@ loc_00172D28: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00172D30(void)
+void sub_00172D30_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -36706,7 +36706,7 @@ loc_00172DC1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00172DE0(void)
+void sub_00172DE0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -37073,7 +37073,7 @@ loc_0017305C: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00173070(void)
+void sub_00173070_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -38133,9 +38133,10 @@ loc_0017368E: ;
     edi = MEM32(ecx + 0x64);
     esi = MEM32(ecx + 8);
     /* cmp eax, 2 - flags set for next jcc */
+    int _cc1 = (CMP_NE(eax, 2)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = MEM32(ecx + 0x70);
     eax = edi + eax * 2;
-    if (CMP_NE(eax, 2)) { g_seh_ebp = ebp; sub_001736C8(); return; } /* jne: not equal / not zero */
+    if (_cc1) { g_seh_ebp = ebp; sub_001736C8(); return; } /* jne: not equal / not zero */
 
 loc_001736A2: ;
     edi = MEM32(ecx + 0x6C);
@@ -42276,8 +42277,9 @@ loc_00174F6A: ;
 
 loc_00174F6C: ;
     /* cmp MEM16(eax + edx + 8), 1 - flags set for next jcc */
+    int _cc2 = (CMP_LE(MEM16(eax + edx + 8), 1)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = eax + edx + 8;
-    if (CMP_LE(MEM16(eax + edx + 8), 1)) { sub_00174F7F(); return; } /* jle: less or equal (signed <=) */
+    if (_cc2) { sub_00174F7F(); return; } /* jle: less or equal (signed <=) */
 
 loc_00174F78: ;
     POP32(esp, edi);
@@ -49584,7 +49586,7 @@ loc_0017842B: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00178430(void)
+void sub_00178430_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -50668,8 +50670,9 @@ loc_00178A76: ;
 loc_00178A7E: ;
     esp = esp + 8;
     /* test eax, eax - flags set for next jcc */
+    int _cc3 = (TEST_NZ(eax, eax)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = edi + 0xA94;
-    if (TEST_NZ(eax, eax)) goto loc_00178AB7; /* jne: not equal / not zero */
+    if (_cc3) goto loc_00178AB7; /* jne: not equal / not zero */
 
 loc_00178A8B: ;
     PUSH32(esp, ebp);
@@ -54089,11 +54092,12 @@ loc_0017A13A: ;
     ecx = MEM32(edi);
     ebx = 0; /* xor self */
     /* test eax, eax - flags set for next jcc */
+    int _cc4 = (CMP_EQ(eax, ecx)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     SET_LO8(ebx, (CMP_LE(eax & eax, 0)) ? 1 : 0); /* setle */
     ebx--;
     ebx = ebx & eax;
     eax = MEM32(esi + 0xC);
-    if (CMP_EQ(eax, ecx)) { g_seh_ebp = ebp; sub_0017A188(); return; } /* je: equal / zero */
+    if (_cc4) { g_seh_ebp = ebp; sub_0017A188(); return; } /* je: equal / zero */
 
 loc_0017A157: ;
     MEM32(esi + 0xC) = ecx;

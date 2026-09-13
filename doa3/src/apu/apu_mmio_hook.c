@@ -20,9 +20,9 @@
 MCPXAPUState *g_apu_state = NULL;
 
 /* Statistics */
-static int g_apu_mmio_read_count = 0;
-static int g_apu_mmio_write_count = 0;
-static int g_apu_mmio_decode_fail = 0;
+int g_apu_mmio_read_count = 0;     /* non-static: read by apu_debug_stats_line */
+int g_apu_mmio_write_count = 0;
+int g_apu_mmio_decode_fail = 0;
 static int g_apu_mmio_sse_count = 0;
 
 /* ============================================================

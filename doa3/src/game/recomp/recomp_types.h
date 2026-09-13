@@ -476,8 +476,13 @@ recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
  * Restores g_esp to saved_esp (pre-arg value) on lookup failure,
  * preventing stdcall argument leaks on failed vtable calls.
  */
+extern volatile int g_fib_slice_due;
+void xbox_fiber_timeslice(void);
 #define RECOMP_ICALL_SAFE(xbox_va, saved_esp) do { \
     uint32_t _va = (uint32_t)(xbox_va); \
+    /* worker-thread scheduling point (xbox_fiber_timeslice): the game thread
+     * can spend seconds without a kernel call while it loads a scene. */ \
+    if (g_fib_slice_due) xbox_fiber_timeslice(); \
     g_icall_trace[g_icall_trace_idx & (ICALL_TRACE_SIZE-1)] = _va; \
     g_icall_trace_idx++; \
     g_icall_count++; \

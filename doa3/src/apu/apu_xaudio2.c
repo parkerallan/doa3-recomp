@@ -11,6 +11,7 @@
 #include <xaudio2.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "apu_xaudio2.h"
@@ -21,7 +22,7 @@
 #define XA2_SAMPLE_RATE   48000
 #define XA2_CHANNELS      2
 #define XA2_BUF_SAMPLES   1024   /* ~21ms per submission */
-#define XA2_NUM_BUFS      3
+#define XA2_NUM_BUFS      6   /* ~128 ms of slack; the APU thread now waits instead of dropping */
 #define XA2_MOVIE_BUF_SAMPLES 2048
 #define XA2_MOVIE_NUM_BUFS 4
 
@@ -114,6 +115,14 @@ void xa2_shutdown(void)
     g_xa2_initialized = 0;
 }
 
+/* Buffers currently queued on the source voice (-1 when inactive). */
+int xa2_queued(void)
+{
+    XAUDIO2_VOICE_STATE state;
+    if (!g_xa2_initialized || !g_xa2_source) return -1;
+    IXAudio2SourceVoice_GetState(g_xa2_source, &state, XAUDIO2_VOICE_NOSAMPLESPLAYED);
+    return (int)state.BuffersQueued;
+}
 int xa2_is_active(void)
 {
     return g_xa2_initialized;
@@ -142,6 +151,29 @@ int xa2_submit_samples(const int16_t *samples, int num_samples)
     xbuf.pAudioData = (const BYTE *)g_xa2_bufs[idx];
 
     IXAudio2SourceVoice_SubmitSourceBuffer(g_xa2_source, &xbuf, NULL);
+    {   /* DOA3 DIAG: DOA3_WAVCAP=<path> appends the submitted 48 kHz s16 stereo
+         * stream to a raw file (first 60 s) so the output can be inspected. */
+        static FILE *s_cap = NULL; static int s_cap_tried = 0; static unsigned s_cap_samples = 0;
+        if (!s_cap_tried) { const char *cp = getenv("DOA3_WAVCAP"); s_cap_tried = 1; if (cp) s_cap = fopen(cp, "wb"); }
+        if (s_cap && s_cap_samples < 48000u * 130u) {
+            fwrite(samples, XA2_CHANNELS * sizeof(int16_t), copy_samples, s_cap); fflush(s_cap);
+            s_cap_samples += copy_samples;
+        }
+    }
+
+    {   /* Output meter: is the APU mix actually carrying sound? Peak sample
+         * and non-silent buffer count over each ~2 s window. */
+        static DWORD s_next = 0; static unsigned s_bufs = 0, s_loud = 0, s_starved = 0; static int s_peak = 0;
+        int i, n = copy_samples * XA2_CHANNELS;
+        for (i = 0; i < n; i++) { int v = samples[i]; if (v < 0) v = -v; if (v > s_peak) s_peak = v; }
+        s_bufs++; if (state.BuffersQueued == 0) s_starved++;
+        if (s_peak > 64) s_loud++;
+        if (GetTickCount() >= s_next) {
+            s_next = GetTickCount() + 2000;
+            
+            s_bufs = s_loud = s_starved = 0; s_peak = 0;
+        }
+    }
 
     g_xa2_next_buf = (idx + 1) % XA2_NUM_BUFS;
     g_xa2_frames_written++;

@@ -5,6 +5,7 @@
 
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
+#include <stdio.h>
 #include <math.h>
 
 /**
@@ -47,7 +48,7 @@ loc_001C7653: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C765A(void)
+void sub_001C765A_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -136,7 +137,7 @@ loc_001C76D0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C76DF(void)
+void sub_001C76DF_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -196,6 +197,7 @@ loc_001C7707: ;
 
 loc_001C770B: ;
     MEM32(esi + 0x1C) = 0x258;
+    sub_001C7712(); return; /* DOA3: restored dropped fall-through (0x001C7712) */
 
 }
 
@@ -479,7 +481,7 @@ loc_001C786A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C7873(void)
+void sub_001C7873_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -517,6 +519,7 @@ loc_001C7892: ;
     PUSH32(esp, edi);
     PUSH32(esp, 0); sub_001C6AFB(); /* call 0x001C6AFB */
 
+    sub_001C7898(); return; /* DOA3: restored dropped fall-through to sub_001C7898 */
 }
 
 /**
@@ -1309,7 +1312,7 @@ loc_001C7C21: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C7C29(void)
+void sub_001C7C29_gen(void)
 {
 
 loc_001C7C29: ;
@@ -1400,7 +1403,7 @@ loc_001C7C8A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C7C92(void)
+void sub_001C7C92_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -1456,7 +1459,7 @@ loc_001C7CE0: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C7CE5(void)
+void sub_001C7CE5_gen(void)
 {
 
 loc_001C7CE5: ;
@@ -1514,7 +1517,7 @@ loc_001C7D1A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C7D21(void)
+void sub_001C7D21_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -1522,6 +1525,7 @@ void sub_001C7D21(void)
 loc_001C7D21: ;
     PUSH32(esp, ebp);
     ebp = esp;
+    { static int n=0; if (n<4) { n++; fprintf(stderr, "[7D21] ebp=%08X [ebp+8]=%08X [ebp+C]=%08X\n", ebp, MEM32(ebp+8), MEM32(ebp+0xC)); } } /* DOA3 probe */
     esp = esp - 0xC;
     PUSH32(esp, 0); sub_001C6B22(); /* call 0x001C6B22 */
 
@@ -1553,6 +1557,7 @@ void sub_001C7D4D(void)
 
 loc_001C7D4D: ;
     ecx = 0; /* xor self */
+    sub_001C7D4F(); return; /* DOA3: restored dropped fall-through (0x001C7D4F, alloc-failure path) */
 
 }
 
@@ -1731,6 +1736,7 @@ loc_001C7E40: ;
     eax = ebp + 8;
     PUSH32(esp, eax);
     PUSH32(esp, 0); sub_001C72C4(); /* call 0x001C72C4 */
+    g_seh_ebp = ebp; sub_001C7E49(); return; /* DOA3: restored dropped fall-through (0x001C7E49 epilogue, returns esi) */
 
 }
 
@@ -1869,7 +1875,7 @@ loc_001C7ECA: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C7ECD(void)
+void sub_001C7ECD_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -1910,6 +1916,7 @@ void sub_001C7EF1(void)
 loc_001C7EF1: ;
     eax = 0; /* xor self */
 
+    sub_001C7EF3(); return; /* DOA3: restored dropped fall-through to sub_001C7EF3 */
 }
 
 /**
@@ -2259,11 +2266,12 @@ loc_001C80A4: ;
     edx = MEM32(ebp + -4);
     SET_LO8(ecx, 2);
     /* cmp LO8(eax), LO8(ecx) - flags set for next jcc */
+    int _cc1 = (CMP_EQ(MEM32(eax), 0)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = _cf ? 0xFFFFFFFF : 0; /* sbb self (CF extend) */
     eax = (uint32_t)(-(int32_t)eax);
     MEM32(edx) = eax;
     eax = MEM32(ebp + -4);
-    if (CMP_EQ(MEM32(eax), 0)) goto loc_001C80D4; /* je: equal / zero */
+    if (_cc1) goto loc_001C80D4; /* je: equal / zero */
 
 loc_001C80C8: ;
     { uint32_t _icall_esp = g_esp;
@@ -2348,6 +2356,7 @@ loc_001C80FA: ;
 loc_001C8109: ;
     esi = MEM32(esi);
 
+    sub_001C810B(); return; /* DOA3: restored dropped fall-through to sub_001C810B */
 }
 
 /**
@@ -2401,7 +2410,7 @@ loc_001C8133: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C8135(void)
+void sub_001C8135_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -2666,6 +2675,7 @@ void sub_001C82F1(void)
 loc_001C82F1: ;
     edx = ecx + ebx * 8 + 0x5CC;
 
+    sub_001C82F8(); return; /* DOA3: restored dropped fall-through to sub_001C82F8 */
 }
 
 /**
@@ -2741,8 +2751,9 @@ loc_001C8364: ;
 
 loc_001C836F: ;
     /* test LO8(eax), 0x10 - flags set for next jcc */
+    int _cc2 = (TEST_Z(LO8(eax), 0x10)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = MEM32(ebp + 0xC);
-    if (TEST_Z(LO8(eax), 0x10)) goto loc_001C837E; /* je: equal / zero */
+    if (_cc2) goto loc_001C837E; /* je: equal / zero */
 
 loc_001C8376: ;
     MEM32(eax) = 1;
@@ -2831,6 +2842,7 @@ loc_001C83D5: ;
     PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(0x1ED254), _icall_esp); /* indirect call */
     }
 
+    g_seh_ebp = ebp; sub_001C83DD(); return; /* DOA3: restored dropped fall-through to sub_001C83DD */
 }
 
 /**
@@ -2931,6 +2943,7 @@ loc_001C8429: ;
     eax = MEM32(edi);
     if (CMP_NE(eax, edi)) { sub_001C8433(); return; } /* jne: not equal / not zero */
 
+    sub_001C842F(); return; /* DOA3: restored dropped fall-through to sub_001C842F */
 }
 
 /**
@@ -3184,6 +3197,7 @@ loc_001C8537: ;
     MEM32(ebp + -8) = ecx;
     ecx = MEM32(ecx + ebx * 4 + 0x10);
 
+    g_seh_ebp = ebp; sub_001C8551(); return; /* DOA3: restored dropped fall-through to sub_001C8551 */
 }
 
 /**
@@ -3738,6 +3752,7 @@ loc_001C894A: ;
     PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(0x1ED200), _icall_esp); /* indirect call */
     }
 
+    sub_001C8964(); return; /* DOA3: restored dropped fall-through to sub_001C8964 */
 }
 
 /**
@@ -3848,6 +3863,7 @@ loc_001C89C6: ;
     PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(eax + 0x18), _icall_esp); /* indirect call */
     }
 
+    g_seh_ebp = ebp; sub_001C89D4(); return; /* DOA3: restored dropped fall-through to sub_001C89D4 */
 }
 
 /**
@@ -4273,7 +4289,7 @@ loc_001C8C8F: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C8C9A(void)
+void sub_001C8C9A_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -4314,6 +4330,7 @@ void sub_001C8CBE(void)
 
 loc_001C8CBE: ;
     edi = 0; /* xor self */
+    sub_001C8CC0(); return; /* DOA3: restored dropped fall-through (0x001C8CC0) */
 
 }
 
@@ -4421,6 +4438,7 @@ loc_001C8D36: ;
 loc_001C8D3D: ;
     MEM32(esi + 0x5F4) = MEM32(esi + 0x5F4) & 0;
 
+    sub_001C8D44(); return; /* DOA3: restored dropped fall-through to sub_001C8D44 */
 }
 
 /**
@@ -5015,6 +5033,7 @@ void sub_001C8FFE(void)
 loc_001C8FFE: ;
     PUSH32(esp, 0); sub_001C8EF0(); /* call 0x001C8EF0 */
 
+    sub_001C9003(); return; /* DOA3: restored dropped fall-through to sub_001C9003 */
 }
 
 /**
@@ -5178,7 +5197,7 @@ loc_001C90BD: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C90C0(void)
+void sub_001C90C0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -5394,6 +5413,7 @@ void sub_001C9206(void)
 loc_001C9206: ;
     eax = 0; /* xor self */
 
+    sub_001C9208(); return; /* DOA3: restored dropped fall-through to sub_001C9208 */
 }
 
 /**
@@ -5459,7 +5479,7 @@ loc_001C9257: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C925A(void)
+void sub_001C925A_gen(void)
 {
 
 loc_001C925A: ;
@@ -5487,7 +5507,7 @@ loc_001C925A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C927C(void)
+void sub_001C927C_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -5522,6 +5542,7 @@ loc_001C9291: ;
     MEM32(ecx) = eax;
     eax = 0; /* xor self */
 
+    sub_001C92A0(); return; /* DOA3: restored dropped fall-through to sub_001C92A0 */
 }
 
 /**
@@ -5916,6 +5937,7 @@ loc_001C94D1: ;
     MEM32(ebx + 0x810) = eax;
     eax = 0; /* xor self */
 
+    g_seh_ebp = ebp; sub_001C94F0(); return; /* DOA3: restored dropped fall-through to sub_001C94F0 */
 }
 
 /**
@@ -6645,7 +6667,7 @@ loc_001C984C: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001C984F(void)
+void sub_001C984F_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -6655,8 +6677,9 @@ loc_001C984F: ;
     eax = MEM32(ecx + 0xE0);
     eax = MEM32(eax + 0x10);
     /* cmp MEM16(eax), 0x69 - flags set for next jcc */
-    eax = ZX16(MEM16(eax + 0xC));
-    if (CMP_NE(MEM16(eax), 0x69)) { g_seh_ebp = ebp; sub_001C986E(); return; } /* jne: not equal / not zero */
+    { int _tag_ne = (MEM16(eax) != 0x69); /* DOA3: cmp [fmt],0x69 is evaluated BEFORE eax becomes nBlockAlign (lifter recomputed it after) */
+      eax = ZX16(MEM16(eax + 0xC));
+      if (_tag_ne) { g_seh_ebp = ebp; sub_001C986E(); return; } } /* jne: not equal / not zero */
 
 loc_001C9862: ;
     ecx = MEM32(esp + 4);
@@ -6677,7 +6700,7 @@ void sub_001C986E(void)
 
 loc_001C986E: ;
     eax = (uint32_t)((int32_t)eax * (int32_t)MEM32(esp + 4));
-
+    esp += 8; return; /* DOA3: restored dropped fall-through into 0x001C9873 (ret 4) */
 }
 
 /**
@@ -6840,6 +6863,7 @@ void sub_001C98FE(void)
 loc_001C98FE: ;
     eax = MEM32(eax + 0x20);
 
+    sub_001C9901(); return; /* DOA3: restored dropped fall-through to sub_001C9901 */
 }
 
 /**
@@ -7034,6 +7058,7 @@ loc_001C99F1: ;
     ecx++;
     if (CMP_B(ecx, 0x20)) goto loc_001C99E5; /* jb: below (unsigned <) */
 
+    g_seh_ebp = ebp; sub_001C99F7(); return; /* DOA3: restored dropped fall-through to sub_001C99F7 */
 }
 
 /**
@@ -7344,6 +7369,7 @@ loc_001C9C03: ;
 loc_001C9C0C: ;
     esi = eax;
 
+    sub_001C9C0E(); return; /* DOA3: restored dropped fall-through to sub_001C9C0E */
 }
 
 /**
@@ -7635,6 +7661,7 @@ loc_001C9D87: ;
     POP32(esp, edi);
     POP32(esp, esi);
 
+    sub_001C9D93(); return; /* DOA3: restored dropped fall-through to sub_001C9D93 */
 }
 
 /**
@@ -8754,6 +8781,7 @@ loc_001CA41B: ;
     eax = 0; /* xor self */
     eax++;
 
+    sub_001CA41E(); return; /* DOA3: restored dropped fall-through to sub_001CA41E */
 }
 
 /**
@@ -8986,6 +9014,7 @@ loc_001CA575: ;
     edi = ZX16(MEM16(ebx + 0xAE));
     MEM32(ebp + -12) = edi;
 
+    g_seh_ebp = ebp; sub_001CA5B1(); return; /* DOA3: restored dropped fall-through to sub_001CA5B1 */
 }
 
 /**
@@ -9003,8 +9032,9 @@ void sub_001CA5B1(void)
 loc_001CA5B1: ;
     edi = MEM32(ebx + 0xE0);
     /* test MEM8(edi + 0xC), 0x10 - flags set for next jcc */
+    int _cc4 = (TEST_Z(MEM8(edi + 0xC), 0x10)); /* DOA3: flags from the compare above; edi is overwritten before the jcc */
     edi = MEM32(ebp + -32);
-    if (TEST_Z(MEM8(edi + 0xC), 0x10)) goto loc_001CA5C7; /* je: equal / zero */
+    if (_cc4) goto loc_001CA5C7; /* je: equal / zero */
 
 loc_001CA5C0: ;
     if (TEST_NZ(edi, edi)) goto loc_001CA5C7; /* jne: not equal / not zero */
@@ -9317,7 +9347,7 @@ loc_001CA84D: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CA851(void)
+void sub_001CA851_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -9383,6 +9413,7 @@ void sub_001CA8BD(void)
 loc_001CA8BD: ;
     esi = 0; /* xor self */
 
+    sub_001CA8BF(); return; /* DOA3: restored dropped fall-through to sub_001CA8BF */
 }
 
 /**
@@ -9688,6 +9719,7 @@ loc_001CAAB9: ;
     edx = edx & 0x1F;
     edx = edx << 0x10;
     MEM32(esi + 0x84) = MEM32(esi + 0x84) | edx;
+    sub_001CAACD(); return; /* DOA3: restored dropped fall-through (0x001CAACD epilogue) */
 
 }
 
@@ -10322,6 +10354,7 @@ loc_001CAF77: ;
     edx++;
     if (CMP_B(ecx, edx)) goto loc_001CAF5D; /* jb: below (unsigned <) */
 
+    g_seh_ebp = ebp; sub_001CAF99(); return; /* DOA3: restored dropped fall-through to sub_001CAF99 */
 }
 
 /**
@@ -11501,9 +11534,10 @@ loc_001CB5E5: ;
     ecx = ecx << 5;
     POP32(esp, esi);
     /* test HI8(eax), 1 - flags set for next jcc */
+    int _cc5 = (TEST_NZ(HI8(eax), 1)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     POP32(esp, ebx);
     eax = ecx + 0x1CEE88;
-    if (TEST_NZ(HI8(eax), 1)) goto loc_001CB631; /* jne: not equal / not zero */
+    if (_cc5) goto loc_001CB631; /* jne: not equal / not zero */
 
 loc_001CB621: ;
     edx = MEM32(ebp + 0x14);
@@ -11590,6 +11624,7 @@ loc_001CB669: ;
     #undef fp_popp
     #undef fp_top
     #undef fp_st1
+    sub_001CB66B(); return; /* DOA3: restored dropped fall-through to sub_001CB66B */
 }
 
 /**
@@ -13147,6 +13182,7 @@ loc_001CBF1F: ;
     eax = eax - ebx;
     MEM32(edi + 4) = eax;
 
+    g_seh_ebp = ebp; sub_001CBF2B(); return; /* DOA3: restored dropped fall-through to sub_001CBF2B */
 }
 
 /**
@@ -13350,8 +13386,9 @@ loc_001CC02F: ;
     ecx = ZX16(MEM16(eax + 0xC));
     edx = 0; /* xor self */
     /* cmp MEM16(eax), 0x69 - flags set for next jcc */
+    int _cc6 = (CMP_NE(MEM16(eax), 0x69)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = MEM32(esp + 4);
-    if (CMP_NE(MEM16(eax), 0x69)) { g_seh_ebp = ebp; sub_001CC04F(); return; } /* jne: not equal / not zero */
+    if (_cc6) { g_seh_ebp = ebp; sub_001CC04F(); return; } /* jne: not equal / not zero */
 
 loc_001CC048: ;
     { uint64_t _dividend = ((uint64_t)edx << 32) | eax;
@@ -13375,7 +13412,7 @@ loc_001CC04F: ;
     { uint64_t _dividend = ((uint64_t)edx << 32) | eax;
       eax = (uint32_t)(_dividend / (uint32_t)ecx);
       edx = (uint32_t)(_dividend % (uint32_t)ecx); }
-
+    esp += 8; return; /* DOA3: restored dropped fall-through into 0x001CC051 (ret 4) */
 }
 
 /**
@@ -13704,7 +13741,7 @@ loc_001CC21D: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CC223(void)
+void sub_001CC223_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -14318,7 +14355,7 @@ loc_001CC57B: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CC584(void)
+void sub_001CC584_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -14350,6 +14387,7 @@ void sub_001CC59A(void)
 loc_001CC59A: ;
     PUSH32(esp, 0); sub_001CC186(); /* call 0x001CC186 */
 
+    sub_001CC59F(); return; /* DOA3: restored dropped fall-through to sub_001CC59F */
 }
 
 /**
@@ -15161,7 +15199,7 @@ loc_001CCB31: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCB38(void)
+void sub_001CCB38_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -15218,7 +15256,7 @@ loc_001CCBA3: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCBA7(void)
+void sub_001CCBA7_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -15461,7 +15499,7 @@ loc_001CCC90: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCC97(void)
+void sub_001CCC97_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -15560,7 +15598,7 @@ loc_001CCCE1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCCE8(void)
+void sub_001CCCE8_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -15594,7 +15632,7 @@ loc_001CCD0B: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCD0E(void)
+void sub_001CCD0E_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -15805,7 +15843,7 @@ loc_001CCE0C: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCE10(void)
+void sub_001CCE10_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -15901,7 +15939,7 @@ loc_001CCEDA: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CCEE5(void)
+void sub_001CCEE5_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -16028,7 +16066,7 @@ loc_001CCFB7: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD00F(void)
+void sub_001CD00F_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -16203,7 +16241,7 @@ loc_001CD182: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD1AA(void)
+void sub_001CD1AA_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -16476,7 +16514,7 @@ loc_001CD34E: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD352(void)
+void sub_001CD352_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -16786,6 +16824,7 @@ void sub_001CD4CD(void)
 loc_001CD4CD: ;
     eax = MEM32(0x1E132C);
 
+    sub_001CD4D2(); return; /* DOA3: restored dropped fall-through to sub_001CD4D2 */
 }
 
 /**
@@ -16987,7 +17026,7 @@ loc_001CD605: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD60C(void)
+void sub_001CD60C_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -17027,6 +17066,7 @@ loc_001CD630: ;
     ecx = MEM32(esi + 0xD4);
     PUSH32(esp, 0); sub_001CE441(); /* call 0x001CE441 */
 
+    sub_001CD63B(); return; /* DOA3: restored dropped fall-through to sub_001CD63B */
 }
 
 /**
@@ -17104,7 +17144,7 @@ loc_001CD6B4: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD6D8(void)
+void sub_001CD6D8_gen(void)
 {
 
 loc_001CD6D8: ;
@@ -17165,7 +17205,7 @@ loc_001CD7A1: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD7A3(void)
+void sub_001CD7A3_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -17358,7 +17398,7 @@ loc_001CD8DA: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CD8E8(void)
+void sub_001CD8E8_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -17409,6 +17449,7 @@ void sub_001CD927(void)
 loc_001CD927: ;
     MEM32(-25161728) = MEM32(-25161728) | 0xFFFFFFFFu;
 
+    sub_001CD92E(); return; /* DOA3: restored dropped fall-through to sub_001CD92E */
 }
 
 /**
@@ -17654,6 +17695,7 @@ void sub_001CDA43(void)
 loc_001CDA43: ;
     edx = MEM32(ecx);
 
+    sub_001CDA45(); return; /* DOA3: restored dropped fall-through to sub_001CDA45 */
 }
 
 /**
@@ -18118,6 +18160,7 @@ loc_001CDC8F: ;
 loc_001CDC96: ;
     edi = eax;
 
+    sub_001CDC98(); return; /* DOA3: restored dropped fall-through to sub_001CDC98 */
 }
 
 /**
@@ -18270,6 +18313,7 @@ loc_001CDD36: ;
     MEM8(esi + 8) = MEM8(esi + 8) & 0;
     MEM32(esi + 0xC) = ebx;
 
+    sub_001CDD3D(); return; /* DOA3: restored dropped fall-through to sub_001CDD3D */
 }
 
 /**
@@ -18428,7 +18472,7 @@ loc_001CDDD3: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CDDD5(void)
+void sub_001CDDD5_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -18518,6 +18562,7 @@ loc_001CDE73: ;
     eax = MEM32(esi);
     MEM32(0xFE8020DCu) = eax;
 
+    sub_001CDE7F(); return; /* DOA3: restored dropped fall-through to sub_001CDE7F */
 }
 
 /**
@@ -19047,6 +19092,7 @@ loc_001CE160: ;
     PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(0x1ED254), _icall_esp); /* indirect call */
     }
 
+    sub_001CE168(); return; /* DOA3: restored dropped fall-through to sub_001CE168 */
 }
 
 /**
@@ -19154,6 +19200,7 @@ loc_001CE1B0: ;
     PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(0x1ED254), _icall_esp); /* indirect call */
     }
 
+    sub_001CE1B8(); return; /* DOA3: restored dropped fall-through to sub_001CE1B8 */
 }
 
 /**
@@ -19399,6 +19446,7 @@ loc_001CE28C: ;
     SET_LO8(ebx, 0); /* xor self */
     SET_LO8(ecx, 0); /* xor self */
 
+    sub_001CE290(); return; /* DOA3: restored dropped fall-through to sub_001CE290 */
 }
 
 /**
@@ -19458,7 +19506,7 @@ loc_001CE2D3: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CE2D7(void)
+void sub_001CE2D7_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -19550,7 +19598,7 @@ loc_001CE342: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CE347(void)
+void sub_001CE347_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -19595,6 +19643,7 @@ void sub_001CE375(void)
 loc_001CE375: ;
     eax = 0; /* xor self */
 
+    sub_001CE377(); return; /* DOA3: restored dropped fall-through to sub_001CE377 */
 }
 
 /**
@@ -19650,7 +19699,7 @@ loc_001CE3A6: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CE3AD(void)
+void sub_001CE3AD_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -19870,7 +19919,7 @@ loc_001CE503: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CE507(void)
+void sub_001CE507_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -20312,6 +20361,7 @@ void sub_001CE76B(void)
 loc_001CE76B: ;
     MEM32(ebp + -4) = MEM32(ebp + -4) & 0;
 
+    g_seh_ebp = ebp; sub_001CE76F(); return; /* DOA3: restored dropped fall-through to sub_001CE76F */
 }
 
 /**
@@ -20692,7 +20742,7 @@ loc_001CE8DE: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001CE8E6(void)
+void sub_001CE8E6_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -20837,6 +20887,7 @@ loc_001CE9AA: ;
 loc_001CE9BC: ;
     POP32(esp, esi);
 
+    g_seh_ebp = ebp; sub_001CE9BD(); return; /* DOA3: restored dropped fall-through to sub_001CE9BD */
 }
 
 /**
@@ -20958,6 +21009,7 @@ loc_001CEA4D: ;
     eax = MEM32(ebp + 0x10);
     MEM32(eax) = 0x2B3;
 
+    g_seh_ebp = ebp; sub_001CEA5F(); return; /* DOA3: restored dropped fall-through to sub_001CEA5F */
 }
 
 /**
@@ -21210,6 +21262,7 @@ void sub_001CEBC6(void)
 loc_001CEBC6: ;
     eax = 0; /* xor self */
 
+    sub_001CEBC8(); return; /* DOA3: restored dropped fall-through to sub_001CEBC8 */
 }
 
 /**

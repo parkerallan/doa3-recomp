@@ -38209,7 +38209,7 @@ loc_0009D319: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_0009D320(void)
+void sub_0009D320_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 
@@ -43868,7 +43868,7 @@ loc_0009F63E: ;
  * Frame: fpo_leaf
  */
 #if 0  /* DOA3: overridden in recomp_manual.c — skip the DirectSound effects download */
-void sub_0009F640(void)
+void sub_0009F640_gen(void)
 {
     int _flags = 0; /* fallback flag var */
 

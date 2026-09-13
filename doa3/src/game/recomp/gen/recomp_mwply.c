@@ -370,7 +370,7 @@ loc_00178363: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00178A20(void)
+void sub_00178A20_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -420,8 +420,9 @@ loc_00178A76: ;
 loc_00178A7E: ;
     esp = esp + 8;
     /* test eax, eax - flags set for next jcc */
+    int _cc1 = (TEST_NZ(eax, eax)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     eax = edi + 0xA94;
-    if (TEST_NZ(eax, eax)) goto loc_00178AB7; /* jne: not equal / not zero */
+    if (_cc1) goto loc_00178AB7; /* jne: not equal / not zero */
 
 loc_00178A8B: ;
     PUSH32(esp, ebp);
@@ -620,7 +621,7 @@ loc_00178C0A: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00178C20(void)
+void sub_00178C20_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -704,7 +705,7 @@ loc_00178CA8: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00178CB0(void)
+void sub_00178CB0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -2518,7 +2519,7 @@ loc_0017C64F: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001789B0(void)
+void sub_001789B0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

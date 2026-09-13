@@ -110,10 +110,11 @@ extern int  xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param,
                                       uint32_t stack_size);
 extern void xbox_fiber_destroy(int idx);
 extern void xbox_fiber_switch_direct(int idx);
-extern int  xbox_fiber_current(void);
+/* SwitchToFiber(handle) — stdcall ret 4. Completes the call frame FIRST, then
+ * transfers; when something switches back here, we return normally. */
 #define XFIBER_TAG  0xF1BE0000u
 
-/* CreateFiber(stack_size, start_routine, param) — stdcall ret 12. */
+/* CreateFiber(stack_size, start_routine, param) â€” stdcall ret 12. */
 void sub_00164F50(void)
 {
     extern uint32_t g_eax, g_esp;
@@ -121,13 +122,11 @@ void sub_00164F50(void)
     uint32_t routine = MEM32(g_esp + 8);
     uint32_t param   = MEM32(g_esp + 0xC);
     int idx = xbox_fiber_create_dormant(routine, param, stack_sz);
-    static int n = 0;
-    if (n < 24) { fprintf(stderr, "[XFIBER] create routine=0x%08X param=0x%08X stack=%u -> #%d\n", routine, param, stack_sz, idx); fflush(stderr); n++; }
     g_eax = (idx > 0) ? (XFIBER_TAG | (uint32_t)idx) : 0;
     g_esp += 16;
 }
 
-/* DeleteFiber(handle) — stdcall ret 4. */
+/* DeleteFiber(handle) â€” stdcall ret 4. */
 void sub_00164FDC(void)
 {
     extern uint32_t g_esp;
@@ -137,8 +136,6 @@ void sub_00164FDC(void)
     g_esp += 8;
 }
 
-/* SwitchToFiber(handle) — stdcall ret 4. Completes the call frame FIRST, then
- * transfers; when something switches back here, we return normally. */
 void sub_00164FEF(void)
 {
     extern uint32_t g_esp;
@@ -179,16 +176,19 @@ BOOT_MARK(sub_0009DD20)
  * stdcall ret 12 (gen does esp += 16 including the dummy). */
 void sub_001C7457(void)
 {
+    extern void sub_001C7457_gen(void);
     extern uint32_t g_eax, g_esp;
     static int n = 0;
-    if (n < 8) { fprintf(stderr, "[DS-PLAY] stream start stubbed (this=0x%08X)\n", MEM32(g_esp + 4)); fflush(stderr); n++; }
-    /* RE-STUBBED (2026-07-02): the real implementation starts an APU voice our
-     * emulation never advances -> the DSOUND per-frame service spins on QPC
-     * polls (with residual esp leaks in its mis-lifted loop) until the main
-     * stack underflows into the game BSS. Silent audio until the APU voice
-     * path works — RENDERING FIRST. */
-    g_eax = 0;          /* DS_OK */
-    g_esp += 16;        /* args(12) + dummy return(4) */
+    uint32_t self = MEM32(g_esp + 4), a2 = MEM32(g_esp + 8), a3 = MEM32(g_esp + 12);
+    /* Un-stubbed 2026-09-12: the stub dated from before the DSOUND
+     * per-frame service esp leaks (sub_001C6D91 / sub_001C883B) were
+     * enforced; the APU voice processor does advance CBO, so let the real
+     * stream Play run (-> sub_001C6D46). */
+    /* STUB again (2026-09-12): the game hands this call a NULL stream because the
+     * host DirectSound shim creates no stream objects yet; running the XBE
+     * body with that crashed 6 s after the movie. */
+    g_eax = 0; g_esp += 16;
+    if (n < 8) {  n++; }
 }
 
 /* sub_00168DE0 — ADXF op GetStat (used by the game's own load-wait spins, e.g.
@@ -278,7 +278,7 @@ void sub_00169BC0(void)
     n++;
     sub_00169BC0_gen();
     if (n == 1 || n == 50 || n == 2000) {
-        fprintf(stderr, "[ADX-SRV] run #%ld; cvFs-streams:", n);
+        
         for (int i = 0; i < 40; i++) {
             uint32_t ent = 0xC05AC0 + i * 0x40;   /* cvFs stream pool (sub_0016BD20) */
             if (!MEM8(ent) && !MEM32(ent + 0x14)) continue;   /* skip empty slots */
@@ -1008,7 +1008,9 @@ void sub_0007FFB0(void)
 {
     static int s_n = 0;
     uint32_t a1 = MEM32(esp + 4), a2 = MEM32(esp + 8);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
     sub_0007FFB0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;   /* callee-saved: caller sub_0009F730 keeps 0 in esi across this call */
     s_n++;
     if (s_n <= 10) {
         fprintf(stderr, "[LDW-KICK] #%d a1=0x%08X a2=0x%08X -> phase=0x%08X\n",
@@ -2870,6 +2872,396 @@ void sub_0017C980(void)
         name##_gen(); \
         if (log) { fprintf(stderr, "[BOOTMARK] " #name " exit (eax=0x%X)\n", eax); fflush(stderr); } \
     }
+/* DirectSoundCreate chain (cxbx symbol cache names): sub_001C800C = create
+ * path, sub_001C7ECD = CDirectSound::Initialize, sub_001C6AA0 = DSOUND pool
+ * alloc, sub_001C765A / sub_001C8A76 / sub_001C90C0 = APU driver setup steps.
+ * Enter/exit markers to find which step leaves the game with pDS == NULL. */
+#define BOOT_MARK2_ABI(name) \
+    void name(void) { \
+        extern void name##_gen(void); \
+        static int n = 0; \
+        uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx; \
+        int log = (n < 60); n++; \
+        if (log) { fprintf(stderr, "[BOOTMARK] " #name " enter\n"); fflush(stderr); } \
+        name##_gen(); \
+        if (log) { fprintf(stderr, "[BOOTMARK] " #name " exit (eax=0x%X) edi %08X->%08X\n", eax, edi, s_edi); fflush(stderr); } \
+        edi = s_edi; esi = s_esi; ebx = s_ebx; \
+    }
+/* silence-loop buffer built at the end of CDirectSound::Initialize:
+ * CreateSoundBuffer / SetBufferData / Play, and the two DSERR_INVALIDCALL
+ * producers reachable from them. */
+void sub_001C7DE1_gen(void);
+void sub_001C7DE1(void)   /* CDirectSound::CreateSoundBuffer(desc in eax?, ...) */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, e_esp = esp;
+    uint32_t in_eax = eax, in_ecx = ecx, in_edx = edx, a1 = MEM32(esp + 4), a2 = MEM32(esp + 8);
+    sub_001C7DE1_gen();
+    if (n < 6) { n++;
+        
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI(sub_001C7B6F)
+BOOT_MARK2_ABI(sub_001C7B33)
+void sub_001C8135_gen(void);
+void sub_001C8135(void)   /* CMcpxAPU buffer page/voice allocation check */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    uint32_t self = ecx, buf = MEM32(esp + 4);
+    uint32_t st = (buf > 0x1000 && buf < 0x8000000) ? MEM32(buf + 0xE0) : 0;
+    uint32_t fmt = (st > 0x1000 && st < 0x8000000) ? MEM32(st + 0x10) : 0;
+    if (n < 6) { n++;
+         }
+    sub_001C8135_gen();
+    if (n <= 6) {  }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI(sub_001C927C)
+BOOT_MARK2_ABI(sub_001C7CE5)
+BOOT_MARK2_ABI(sub_001C7D21)
+BOOT_MARK2_ABI(sub_001C7C29)
+/* APU interrupt delivery (see apu_core.c g_apu_irq_pending). Runs the
+ * DirectSound driver's KINTERRUPT service routine (the one registered from
+ * the DSOUND library, routine VA 0x001C0000..0x001E0000) and then every DPC
+ * it queued, all as ordinary guest calls on this thread. */
+void doa3_apu_deliver_irq(void)
+{
+    typedef struct MCPXAPUState MCPXAPUState;
+    extern MCPXAPUState *g_apu_state;
+    extern uint64_t mcpx_apu_mmio_read(MCPXAPUState *, uint64_t, unsigned int);
+    extern int mcpx_apu_take_irq(void);
+    extern int xbox_kernel_get_isr(int, uint32_t *, uint32_t *, uint32_t *);
+    extern int xbox_kernel_pop_dpc(uint32_t *, uint32_t *, uint32_t *);
+    extern recomp_func_t recomp_lookup(uint32_t xbox_va);
+    extern recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
+    static unsigned s_isr_calls = 0, s_dpc_calls = 0;
+    uint32_t obj, routine, ctx, dpc, a1, a2;
+    int i;
+    if (!mcpx_apu_take_irq()) return;
+    for (i = 0; xbox_kernel_get_isr(i, &obj, &routine, &ctx); i++) {
+        recomp_func_t fn;
+        if (routine < 0x001C0000u || routine >= 0x001E0000u) continue;
+        fn = recomp_lookup_manual(routine);
+        if (!fn) fn = recomp_lookup(routine);
+        if (!fn) continue;
+        {
+            uint32_t saved_esp = esp;
+            PUSH32(esp, ctx);
+            PUSH32(esp, obj);
+            PUSH32(esp, 0);           /* dummy return address */
+            fn();
+            esp = saved_esp;
+        }
+        s_isr_calls++;
+        if (s_isr_calls <= 5 || (s_isr_calls % 500) == 0) {
+            
+        }
+    }
+    while (xbox_kernel_pop_dpc(&dpc, &a1, &a2)) {
+        uint32_t droutine = MEM32(dpc + 12), dctx = MEM32(dpc + 16);
+        recomp_func_t fn = recomp_lookup_manual(droutine);
+        if (!fn) fn = recomp_lookup(droutine);
+        if (!fn) continue;
+        {
+            uint32_t saved_esp = esp;
+            PUSH32(esp, a2);
+            PUSH32(esp, a1);
+            PUSH32(esp, dctx);
+            PUSH32(esp, dpc);
+            PUSH32(esp, 0);
+            fn();
+            esp = saved_esp;
+        }
+        s_dpc_calls++;
+        if (s_dpc_calls <= 5 || (s_dpc_calls % 500) == 0) {
+            
+        }
+    }
+}
+BOOT_MARK2_ABI(sub_001CC584)
+void sub_001CCBA7_gen(void);
+void sub_001CCBA7(void)   /* CMcpxVoiceClient: fill / start after SetBufferData */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, e_esp = esp, vc = ecx;
+    int ok = (vc > 0x1000 && vc < 0x8000000);
+    if (n < 8) { n++;
+         }
+    sub_001CCBA7_gen();
+    if (n <= 8) {  }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+#define BOOT_MARK2_ABI_ESI(name)     void name(void) {         extern void name##_gen(void);         static int n = 0;         uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, s_esp = esp;         int log = (n < 12); n++;         name##_gen();         if (log) { fprintf(stderr, "[ABI] " #name " eax=%08X esi %08X->%08X edi %08X->%08X ebx %08X->%08X esp %+d\n", eax, s_esi, esi, s_edi, edi, s_ebx, ebx, (int)(esp - s_esp)); fflush(stderr); }         edi = s_edi; esi = s_esi; ebx = s_ebx;     }
+BOOT_MARK2_ABI_ESI(sub_001CD60C)
+void sub_001789B0_gen(void);
+void sub_001789B0(void)   /* Sofdec audio server step: this in eax; gates on flag[6] and the audio stream state */
+{
+    static int n = 0;
+    uint32_t pl = eax, idx = MEM32(pl + 0x4184);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_001789B0_gen();
+    n++;
+    if (n <= 12 || (n % 300) == 0) {
+        
+    }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI_ESI(sub_0017D510)
+BOOT_MARK2_ABI_ESI(sub_0017EDC0)
+void sub_0017EDE0_gen(void);
+void sub_0017EDE0(void)   /* Sofdec: bytes queued in stream N (player, N) */
+{
+    static int n = 0;
+    uint32_t pl = MEM32(esp + 4), idx = MEM32(esp + 8);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_0017EDE0_gen();
+    if (idx == 0 && n < 60) { n++;
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI_ESI(sub_0017CA00)
+BOOT_MARK2_ABI_ESI(sub_0017EF40)
+BOOT_MARK2_ABI_ESI(sub_00178A20)
+BOOT_MARK2_ABI_ESI(sub_00178C20)
+BOOT_MARK2_ABI_ESI(sub_00178CB0)
+BOOT_MARK2_ABI_ESI(sub_00178430)
+BOOT_MARK2_ABI_ESI(sub_0017FBA0)
+BOOT_MARK2_ABI_ESI(sub_001CA851)
+BOOT_MARK2_ABI_ESI(sub_001C984F)
+BOOT_MARK2_ABI_ESI(sub_00172260)
+BOOT_MARK2_ABI_ESI(sub_00172330)
+uint32_t g_doa3_last_adx_dev = 0;   /* device handed to the ADX Start method most recently (the movie voice) */
+void sub_00172360_gen(void);
+void sub_00172360(void)
+{
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    g_doa3_last_adx_dev = MEM32(esp + 4);
+    sub_00172360_gen();
+    
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI_ESI(sub_00172410)
+BOOT_MARK2_ABI_ESI(sub_00172470)
+BOOT_MARK2_ABI_ESI(sub_001724F0)
+BOOT_MARK2_ABI_ESI(sub_00172580)
+BOOT_MARK2_ABI_ESI(sub_001725B0)
+BOOT_MARK2_ABI_ESI(sub_001725E0)
+BOOT_MARK2_ABI_ESI(sub_00172610)
+BOOT_MARK2_ABI_ESI(sub_00172640)
+BOOT_MARK2_ABI_ESI(sub_00172680)
+BOOT_MARK2_ABI_ESI(sub_001726B0)
+BOOT_MARK2_ABI_ESI(sub_001726D0)
+BOOT_MARK2_ABI_ESI(sub_0007FFD0)
+BOOT_MARK2_ABI_ESI(sub_0009CF10)
+BOOT_MARK2_ABI_ESI(sub_0009D320)
+BOOT_MARK2_ABI_ESI(sub_001C6B92)
+BOOT_MARK2_ABI_ESI(sub_001CCCE8)
+/* 0x001CDCD8 is a 5-byte `jmp 0x001CDB16` stub that the page-manager vtable
+ * (slot +0x14, called from sub_001CC3AC to map a buffer into SGE entries)
+ * points at. The lifter glued it to the dead tail of sub_001CDC98, so the
+ * indirect call resolved to nothing and returned 0 = "no entries". */
+void sub_001CDCD8(void) { sub_001CDB16(); }
+BOOT_MARK2_ABI_ESI(sub_001C7C92)
+BOOT_MARK2_ABI_ESI(sub_001C76DF)
+BOOT_MARK2_ABI_ESI(sub_001CCD0E)
+BOOT_MARK2_ABI_ESI(sub_001C6DE3)
+BOOT_MARK2_ABI_ESI(sub_001CCC97)
+void sub_001C7873_gen(void);
+void sub_001C7873(void)   /* CDirectSoundBufferSettings::SetBufferData(this=settings, pv, cb) */
+{
+    static int n = 0;
+    uint32_t self = ecx, pv = MEM32(esp + 4), cb = MEM32(esp + 8);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, e_esp = esp;
+    sub_001C7873_gen();
+    if (n < 16) { n++;
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001CC223_gen(void);
+void sub_001CC223(void)   /* CMcpxVoiceClient::GetCurrentPosition(this, pPlay, pWrite) */
+{
+    static int n = 0;
+    uint32_t self = ecx, st = MEM32(ecx + 0x148), pplay = MEM32(esp + 4), pwrite = MEM32(esp + 8);
+    uint32_t size = (st > 0x1000 && st < 0x8000000) ? MEM32(st + 0x4C) : 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (n < 12) { n++;
+        { uint32_t fmt = st ? MEM32(st + 0x10) : 0, buf = st ? MEM32(st + 0x48) : 0, sum = 0, nz = 0, i;
+          if (buf > 0x1000 && buf < 0x8000000) for (i = 0; i < size && i < 0x10000; i += 4) { uint32_t v = MEM32(buf + i); sum += v; nz += (v != 0); }
+           }
+         }
+    if (size == 0) {   /* the original divides by the buffer size; report position 0 instead of faulting */
+        if (pplay) MEM32(pplay) = 0;
+        if (pwrite) MEM32(pwrite) = 0;
+        eax = 0; esp += 12; return;   /* ret 8 */
+    }
+    sub_001CC223_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI_ESI(sub_001CE8E6)
+BOOT_MARK2_ABI_ESI(sub_001CE347)
+BOOT_MARK2_ABI_ESI(sub_001CE564)
+BOOT_MARK2_ABI_ESI(sub_001CE3AD)
+BOOT_MARK2_ABI_ESI(sub_001CE2D7)
+BOOT_MARK2_ABI_ESI(sub_001CD7A3)
+BOOT_MARK2_ABI_ESI(sub_001CD6D8)
+BOOT_MARK2_ABI_ESI(sub_001CCE10)
+BOOT_MARK2_ABI_ESI(sub_001CD1AA)
+BOOT_MARK2_ABI_ESI(sub_001CD00F)
+BOOT_MARK2_ABI_ESI(sub_001CD352)
+BOOT_MARK2_ABI_ESI(sub_001CE507)
+BOOT_MARK2_ABI_ESI(sub_001C925A)
+BOOT_MARK2_ABI_ESI(sub_001CD8E8)
+static void apu_dump_block(const char *tag, uint32_t apu)
+{
+    int i;
+    fprintf(stderr, "%s apu=%08X +0C=%08X +70..B0:", tag, apu, MEM32(apu + 0xC));
+    for (i = 0x70; i < 0xB0; i += 4) fprintf(stderr, " %08X", MEM32(apu + i));
+    fprintf(stderr, "\n"); fflush(stderr);
+}
+void sub_001CCEE5_gen(void);
+void sub_001CCEE5(void)   /* CMcpxAPU: GP/EP program + page-list setup */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, apu = ecx;
+    if (n < 4) { n++; apu_dump_block("[APU-CEE5 in ]", apu); }
+    sub_001CCEE5_gen();
+    if (n <= 4) { apu_dump_block("[APU-CEE5 out]", apu); }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001CDDD5_gen(void);
+void sub_001CDDD5(void)   /* page-list builder: this=ecx, arg=[esp+4] */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, self = ecx, arg = MEM32(esp + 4);
+    uint32_t desc = MEM32(self + 0x20), flag = MEM32(self + 8);
+    uint32_t off = (flag != 1) ? 0xA8 : 0x90;
+    uint32_t base = MEM32(desc + off + 0x10), size = MEM32(desc + off + 0x18), count = (size >> 3) & 0xFFFF;
+    if (n < 6) { n++;
+         }
+    if ((int)(count - arg) < 0 || (int)(count - arg) > 0x4000) {
+        
+        esp += 8; edi = s_edi; esi = s_esi; ebx = s_ebx; return;   /* ret 4 */
+    }
+    sub_001CDDD5_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001C8C9A_gen(void);
+void sub_001C8C9A(void)   /* CMcpxAPU::CreateVoiceClient(settings, callbacks, buffer, out) */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, e_esp = esp;
+    if (n < 8) { n++;
+         }
+    sub_001C8C9A_gen();
+    if (n <= 8) {  }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001C7477_gen(void);
+void sub_001C7477(void)   /* IDirectSoundBuffer method (this, value); this-0x1C = CDirectSoundBuffer */
+{
+    static int n = 0;
+    uint32_t self = MEM32(esp + 4), arg = MEM32(esp + 8);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (self < 0x10000 || self >= 0x08000000u) {
+        if (n < 20) { n++;
+             }
+        eax = 0x80004005u; esp += 12; return;   /* ret 8: refuse instead of walking the zero page */
+    }
+    if (n < 8) { n++;  }
+    sub_001C7477_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001C7EA9_gen(void);
+void sub_001C7EA9(void)   /* IDirectSound_CreateSoundBuffer(this, desc, out) */
+{
+    static int n = 0;
+    uint32_t ds = MEM32(esp + 4), desc = MEM32(esp + 8), out = MEM32(esp + 12);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, e_esp = esp;
+    sub_001C7EA9_gen();
+    if (n < 12) { n++;
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001C75DD_gen(void);
+void sub_001C75DD(void)   /* IDirectSoundBuffer_Lock(this, off, bytes, ppv1, pcb1, ppv2, pcb2, flags) */
+{
+    static int n = 0;
+    uint32_t a[8], i; for (i = 0; i < 8; i++) a[i] = MEM32(esp + 4 + 4 * i);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    {   static uint32_t s_ppv = 0, s_pcb = 0;   /* what did the caller write into the region it locked last time? */
+        if (s_ppv > 0x1000 && s_ppv < 0x8000000 && n < 80) { uint32_t k, nz = 0; for (k = 0; k < s_pcb; k += 4) nz += (MEM32(s_ppv + k) != 0);
+             }
+        sub_001C75DD_gen();
+        s_ppv = (a[3] > 0x1000 && a[3] < 0x8000000) ? MEM32(a[3]) : 0; s_pcb = (a[4] > 0x1000 && a[4] < 0x8000000) ? MEM32(a[4]) : 0; if (s_pcb > 0x10000) s_pcb = 0;
+    }
+    if (n < 80) { n++;
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_00172DE0_gen(void);
+void sub_00172DE0(void)   /* CRI ADX output writer: (obj) -> pushes decoded PCM to each attached device */
+{
+    static int n = 0;
+    uint32_t obj = MEM32(esp + 4);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (n < 40) { n++;
+         }
+    sub_00172DE0_gen();
+    if (n <= 40) {  }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_00173070_gen(void);
+void sub_00173070(void)   /* CRI ADX output server step: gates the PCM writer on the manager state at 0xBF8740 */
+{
+    static int n = 0; static uint32_t last[4] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, k;
+    for (k = 0; k < 4; k++) { uint32_t m = 0xBF8740 + k * 0x4D8, st = MEM32(m);
+        if (st != last[k] && n < 60) { n++; last[k] = st;
+             } }
+    sub_00173070_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_00172D30_gen(void);
+void sub_00172D30(void)   /* CRI ADX output server, mode 1: pull decoded data from the source and probe it */
+{
+    static int n = 0;
+    uint32_t obj = MEM32(esp + 4), src = MEM32(obj + 0x1C);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_00172D30_gen();
+    if (n < 24) { n++;
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+void sub_001CCB38_gen(void);
+void sub_001CCB38(void)   /* CMcpxVoiceClient::Initialize(settings, callbacks, buffer) */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx, e_esp = esp, vc = ecx;
+    int ok = (vc > 0x1000 && vc < 0x8000000);
+    if (n < 8) { n++;
+         }
+    sub_001CCB38_gen();
+    if (n <= 8) {  }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI(sub_001C800C)
+BOOT_MARK2_ABI(sub_001C7ECD)
+BOOT_MARK2_ABI_ESI(sub_001C6AA0)
+BOOT_MARK2_ABI(sub_001C765A)
+void sub_001C8A76_gen(void);
+void sub_001C8A76(void)   /* CMcpxAPU constructor: ABI-enforced (edi leaked) */
+{
+    static int n = 0;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_001C8A76_gen();
+    if (n < 4) { n++;
+         }
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+BOOT_MARK2_ABI(sub_001C90C0)
+
 /* The resource-load service (sub_000804EB) keeps the slot pointer in ESI
  * across its callees and, on completion at 0x00080646, writes the request key
  * back through it: [esi+3] = [esi+1], [esi+4] = [esi+2]. ESI is callee-saved,
@@ -3216,6 +3608,15 @@ uint32_t g_blk50380;   /* last basic block entered in sub_00050380 */
 uint32_t g_blkC5D70;   /* last basic block entered in sub_000C5D70 */
 unsigned g_c5d70cnt[16];  /* decision-block hit counts in sub_000C5D70 */
 volatile int g_doa3_post_movie = 0;
+volatile int g_doa3_in_pump = 0;   /* doa3_pump_cri_servers is on the stack */
+/* May the primary fiber hand a time slice to the worker threads right now?
+ * Only after the movie (its verified timing is left alone), never from
+ * inside the CRI server pump, and not while the CRI lock is held or a CRI
+ * server is on the stack -- the workers would re-enter them. */
+int doa3_workers_may_run(void)
+{
+    return g_doa3_post_movie && !g_doa3_in_pump && MEM32(0xB24D38) == 0 && MEM32(0xC0E384) == 0;
+}
 
 /* [FLOWCNT] which links of the title-screen chain actually execute.
  * mode 0 (sub_00083A90) -> mode 1 (sub_00083BC0 sets 0x48A39C) ->
@@ -3613,12 +4014,26 @@ void sub_00157700(void) {
     {   /* DOA3 DIAG: the walker's own callee-saved/esp contract (ret 0, this in ecx). */
         uint32_t sb = ebx, ss = esi, sd = edi, sp = esp;
         static int n = 0;
+        static LARGE_INTEGER s_tf = {0}; static LONGLONG s_tot = 0, s_max = 0; static unsigned s_calls = 0; static DWORD s_next = 0;
+        LARGE_INTEGER t0, t1;
+        uint32_t in_esi = esi, in_idx = (esi > 0x1000 && esi < 0x8000000u) ? MEM16(esi) : 0xFFFF, in_tbl = MEM32(esp + 0x20);
+        uint32_t in_slot = (in_tbl > 0x1000 && in_tbl < 0x8000000u && in_idx != 0xFFFF) ? MEM32(in_tbl + in_idx * 4) : 0;
+        if (!s_tf.QuadPart) QueryPerformanceFrequency(&s_tf);
+        QueryPerformanceCounter(&t0);
         sub_00157700_gen();
+        QueryPerformanceCounter(&t1);
+        {   LONGLONG dt = t1.QuadPart - t0.QuadPart; s_tot += dt; if (dt > s_max) s_max = dt; s_calls++;
+            if (dt * 1000 > 50 * s_tf.QuadPart) { static int slow_n = 0; if (slow_n < 12) { slow_n++;
+                uint32_t hb = ok ? MEM32(t + 0x60 + 0x68) : 0, cnt = ok ? MEM32(t + 0x60 + 0x6C + (hb << 4)) : 0;
+                
+                
+                { void *bt[12]; USHORT nb = CaptureStackBackTrace(0, 12, bt, NULL); int k; 
+                  for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]); fputc(10, stderr); }
+                fflush(stderr); } }
+            if (GetTickCount() >= s_next) { s_next = GetTickCount() + 2000;
+                 s_tot = s_max = 0; s_calls = 0; } }
         if ((ebx != sb || esi != ss || edi != sd || esp != sp) && n < 30) { n++;
-            fprintf(stderr, "[VBW-ABI] #%u this=%08X%s%s%s%s ebx %08X->%08X esi %08X->%08X edi %08X->%08X esp %08X->%08X (d=%+d) [blk+8]w=%04X\n",
-                    g_vbw_seq, t, ebx != sb ? " EBX" : "", esi != ss ? " ESI" : "", edi != sd ? " EDI" : "", esp != sp ? " ESP" : "",
-                    sb, ebx, ss, esi, sd, edi, sp, esp, (int)(esp - sp), ok ? MEM16(t + 0x60 + 8) : 0);
-            fflush(stderr); }
+             }
     }
 }
 /* sub_001B3940 -- the same callee-saved leak on the D3D8 inline-vertex path,
@@ -3941,7 +4356,7 @@ void sub_0009E340(void) {
                fflush(stderr); }
 }
 CALL_COUNT_PROBE(sub_0016B400)   /* ADX stream handle create (movie work buf) */
-CALL_COUNT_PROBE(sub_0009C840)   /* sound/cache init: registers wxCi groups */
+BOOT_MARK2_ABI_ESI(sub_0009C840)   /* sound/cache init: registers wxCi groups; restores ebx/esi/edi (leaked esi=1 into sub_0009F730's voice-table clear) */
 CALL_COUNT_PROBE(sub_0009F730)   /* caller of sub_0009C840 */
 
 /* sub_00169150 — ADXF partition mount/install status poll. The boot task's
@@ -6039,8 +6454,7 @@ void doa3_pump_cri_servers(void)
     doa3_ptinfo_check("pump");
     extern void sub_00170640(void);
     extern void sub_00170660(void);
-    static int s_inpump = 0;
-    if (s_inpump) return;                     /* no recursive pumping */
+    if (g_doa3_in_pump) return;               /* no recursive pumping */
 
     if (MEM32(0xB24D38) != 0 || MEM32(0xC0E384) != 0) return;  /* lock held / in server */
     {   /* EOS detector (task #2 end-half): when the movie is PLAYING but no
@@ -6090,7 +6504,7 @@ void doa3_pump_cri_servers(void)
         static unsigned s_mp = 0;
         if ((++s_mp & 7) == 0) doa3_pump_messages();
     }
-    s_inpump = 1;
+    g_doa3_in_pump = 1;
     {   /* DOA3 DIAG: arm the DOA3_WATCHVA exact-address watch once the movie
          * has handed the screen over. The runaway scan in sub_0017CC30 walks
          * the mwPly pool with the count at 0xC0E514 and the base at 0xC0E518;
@@ -6280,7 +6694,9 @@ void doa3_pump_cri_servers(void)
             sub_001705E0();
             esp = saved_esp2;
         }
+       
         PUSH32(esp, 0); sub_00170640(); esp = saved_esp2;   /* ADX main server */
+       
         PUSH32(esp, 0); sub_00170660(); esp = saved_esp2;   /* mwPly tick */
         /* CRI file server. This is the tick that actually performs file I/O:
          * sub_00170710 -> sub_00169BC0 -> sub_0016C6B0 -> sub_00171A70 ->
@@ -6352,6 +6768,19 @@ void doa3_pump_cri_servers(void)
             extern void xbox_fiber_yield(void);
             for (int yi = 0; yi < 32; yi++) xbox_fiber_yield();
         }
+        else {
+            /* After the movie the main loop never blocks in the kernel, so the
+             * CRI worker threads (vblank-paced ADX/file servers, and the I/O
+             * completion worker) only ran when a deadlock breaker fired --
+             * about once a second (measured: prim_yields=1..3 per 2 s). The
+             * music stream then got a file read every ~4 s for ~2 s of audio,
+             * and the voice replayed its ring buffer in the gaps (the 341 ms
+             * echo). On hardware those threads run on every vblank; give them
+             * one round-robin lap per pump, the same model the movie uses. */
+            extern volatile int g_doa3_post_movie;
+            extern void xbox_fiber_timeslice(void);
+            xbox_fiber_timeslice();
+        }
         /* keep the last movie frame on screen (~30Hz repaint; see
          * movie_present.c — nothing else presents during/after a movie) */
         {
@@ -6408,7 +6837,8 @@ void doa3_pump_cri_servers(void)
             }
         }
     }
-    s_inpump = 0;
+   
+    g_doa3_in_pump = 0;
 }
 
 void sub_001B8970(void)
@@ -7083,13 +7513,50 @@ void recomp_icall_fail_log(uint32_t va)
     }
 }
 
+void sub_00172260(void);
+void sub_00172330(void);
+void sub_00172360(void);
+void sub_00172410(void);
+void sub_00172470(void);
+void sub_001724F0(void);
+void sub_00172520(void);
+void sub_00172520_gen(void);
+BOOT_MARK2_ABI_ESI(sub_00172520)
+void sub_00172580(void);
+void sub_001725B0(void);
+void sub_001725E0(void);
+void sub_00172610(void);
+void sub_00172640(void);
+void sub_00172680(void);
+void sub_001726B0(void);
+void sub_001726D0(void);
+
+void sub_001C792E(void) { sub_001C6BEF(); }   /* 0x1C792E: jmp 0x1C6BEF (Release) */
+
 /* ── Manual override table ──────────────────────────────────────────
- * Map original Xbox VA -> hand-written replacement. Empty for now; the
- * trailing {0,0} sentinel keeps the array valid and is skipped at lookup. */
+ * Map original Xbox VA -> hand-written replacement; the trailing {0,0}
+ * sentinel keeps the array valid and is skipped at lookup. */
 static const struct {
     uint32_t      xbox_va;
     recomp_func_t func;
 } g_manual_funcs[] = {
+    { 0x001CDCD8u, sub_001CDCD8 },   /* DSOUND page-manager vtable jmp stub */
+    { 0x001C792Eu, sub_001C792E },   /* CDirectSoundBuffer vtable Release jmp stub (folded into sub_001C7929) */
+    { 0x00172260u, sub_00172260 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172330u, sub_00172330 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172360u, sub_00172360 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172410u, sub_00172410 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172470u, sub_00172470 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x001724F0u, sub_001724F0 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172520u, sub_00172520 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172580u, sub_00172580 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x001725B0u, sub_001725B0 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x001725E0u, sub_001725E0 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172610u, sub_00172610 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172640u, sub_00172640 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x00172680u, sub_00172680 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x001726B0u, sub_001726B0 },   /* CRI ADX sound-device method (recomp_extra3.c) */
+    { 0x001726D0u, sub_001726D0 },   /* CRI ADX sound-device method (recomp_extra3.c) */
     { 0u, 0 },  /* sentinel */
 };
 #define NUM_MANUAL_FUNCS (sizeof(g_manual_funcs) / sizeof(g_manual_funcs[0]))
@@ -7231,3 +7698,87 @@ void sub_000910B9(void)
     }
 D3D_ABI_KEEP(sub_001B15B0)
 D3D_ABI_KEEP(sub_001B1870)
+
+/* Sofdec player flag setter: (player, index, value). Index 6 = audio enabled. */
+void sub_0017D520_gen(void);
+void sub_0017D520(void)
+{
+    static int n = 0;
+    uint32_t pl = MEM32(esp + 4), idx = MEM32(esp + 8), val = MEM32(esp + 12);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (idx == 6 && n < 20) { n++;
+         }
+    sub_0017D520_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* Sofdec per-track word setter: (player, track, value). Track 6 = audio; value 1 here disables it. */
+void sub_0017F750_gen(void);
+void sub_0017F750(void)
+{
+    static int n = 0;
+    uint32_t pl = MEM32(esp + 4), idx = MEM32(esp + 8), val = MEM32(esp + 12);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (n < 30) { n++;
+         }
+    sub_0017F750_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* Sofdec per-stream word setter (player, stream, value) for the +0xD3C "finished" word. */
+void sub_0017EEE0_gen(void);
+void sub_0017EEE0(void)
+{
+    static int n = 0;
+    uint32_t pl = MEM32(esp + 4), idx = MEM32(esp + 8), val = MEM32(esp + 12);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (n < 30) { n++;
+         }
+    sub_0017EEE0_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* CRI ADX DirectSound device: write method (dev, src, ?, nsamples, chflag). Two writes per region were observed. */
+void sub_00172770_gen(void);
+void sub_00172770(void)
+{
+    static int n = 0;
+    uint32_t dev = MEM32(esp + 4), ch = MEM32(esp + 8), soff = MEM32(esp + 12), src = MEM32(esp + 16), ns = MEM32(esp + 20);
+    uint32_t base = MEM32(dev + 0x20), dst = base + soff * 4;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    int ok = (src > 0x1000 && src < 0x8000000), okd = (dst > 0x1000 && dst < 0x8000000);
+    if (ch == 0 && (n < 200 || (n % 100) == 0)) {
+         }
+    sub_00172770_gen();
+    if (ch == 0) { n++; if (n > 200 && (n % 100) != 1) goto skip_after;
+         }
+skip_after:
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+/* D3D8 resource create (sub_001B4B80): its tail stores the new resource through the
+ * caller-supplied out pointer; a NULL out pointer writes guest address 0, which the
+ * scene walker later reads as an object pointer (0x1E10D0) and spins on. */
+void sub_001B4B80_gen(void);
+void sub_001B4B80(void)
+{
+    static int n = 0;
+    uint32_t a[9], i; for (i = 0; i < 9; i++) a[i] = MEM32(esp + 4 + 4 * i);
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    if (n < 40) { n++;
+        
+        { void *bt[10]; USHORT nb = CaptureStackBackTrace(0, 10, bt, NULL); int k; fprintf(stderr, " bt:"); for (k = 0; k < nb; k++) fprintf(stderr, " %llX", (unsigned long long)(uintptr_t)bt[k]); }
+        fputc(10, stderr); fflush(stderr); }
+    sub_001B4B80_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+}
+
+BOOT_MARK2_ABI_ESI(sub_001BA530)
+BOOT_MARK2_ABI_ESI(sub_00163E20)
+void sub_001B4C10_gen(void);
+void sub_001B4C10(void)   /* tail of the D3D resource create: *out = resource */
+{
+    static int n = 0;
+    if (n < 8) { n++;  }
+    sub_001B4C10_gen();
+}

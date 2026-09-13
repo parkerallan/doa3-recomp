@@ -144,6 +144,7 @@ static DWORD WINAPI doa3_watchdog(LPVOID unused)
         LONG now;
         Sleep(2000);
         now = g_doa3_heartbeat;
+
         if (now != last) { last = now; stalled = 0; continue; }
         /* Never arm before the first present: the heartbeat is legitimately 0
          * through boot, and a "stall" there is meaningless. */
@@ -230,6 +231,13 @@ void doa3_present_frame(void)
             s_next = GetTickCount() + 2000;
             fprintf(stderr, "[RT@PRESENT] dev40C=%08X dev5A0[0]=%g\n", MEM32(0x1C0C0Cu), MEMF(0x1C0DA0u));
         }
+    }
+    {   /* DOA3 DIAG: APU state every ~2 s (audio bring-up) */
+        extern void apu_debug_stats_line(void);
+        static DWORD s_next = 0;
+        { extern void doa3_apu_deliver_irq(void); doa3_apu_deliver_irq(); }
+        if (GetTickCount() >= s_next) { s_next = GetTickCount() + 2000; apu_debug_stats_line();
+             }
     }
     if (getenv("DOA3_NO_PRESENT")) return;   /* isolation: skip pump + present entirely */
     MSG msg;
@@ -1079,6 +1087,17 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
             if (!p) p = VirtualAlloc((LPVOID)alloc_base, 0x10000, MEM_COMMIT, PAGE_READWRITE);
             if (p) {
                 memset(p, 0, 0x10000);
+                /* MCPX AC97 codec controller (0xFEC00000): the recompiled
+                 * DirectSound driver brings the codec up in CMcpxAPU::Initialize
+                 * (sub_001CE17A: release cold reset in the global control
+                 * register 0x12C, then poll global status 0x130 bit 8, primary
+                 * codec ready, sub_001CE1B8 / sub_001CE1A9) and reports
+                 * DSERR_NODRIVER when it never sets. There is no codec to
+                 * emulate here -- the APU mix is delivered by the host mixer --
+                 * so the page that backs the controller reports both codecs
+                 * ready. Only 0x12C, 0x130 and 0x17C are ever touched. */
+                if ((fault_xbox_va & 0xFFFF0000u) == 0xFEC00000u)
+                    *(volatile uint32_t *)((uintptr_t)p + 0x130) = 0x00000300u;
                 if (g_fault_logged < 60) {
                     fprintf(stderr, "  [NV2A] GPU mem page 0x%08X (%s)\n",
                             fault_xbox_va & 0xFFFF0000u, is_write ? "W" : "R");
@@ -1390,6 +1409,11 @@ int main(int argc, char **argv)
                 if (wl) g_watch_exact_len = (uint32_t)strtoul(wl, NULL, 16);
                 fprintf(stderr, "  [WATCHVA] will arm on guest 0x%08X\n",
                         g_watch_exact_va);
+                if (getenv("DOA3_WATCHVA_NOW")) {   /* DOA3 DIAG: arm before any guest code runs */
+                    extern void doa3_watch_arm(uint32_t xb_page);
+                    doa3_watch_arm(g_watch_exact_va & ~0xFFFu);
+                    fprintf(stderr, "  [WATCHVA] armed NOW (now = 0x%08X)\n", MEM32(g_watch_exact_va));
+                }
             }
         }
     }

@@ -178,9 +178,15 @@ static void set_hrir_coeff_tar(MCPXAPUState *d, int channel, int coeff_idx,
  * Front-End method dispatch
  * ============================================================ */
 
+/* DOA3 diag counters (read by apu_debug_stats_line) */
+unsigned g_apu_fe_methods, g_apu_voice_on_calls, g_apu_voices_active_last;
+
 static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
 {
     unsigned int slot;
+    g_apu_fe_methods++;
+    if (g_apu_fe_methods <= 64) {  }
+    if (method == NV1BA0_PIO_VOICE_ON) g_apu_voice_on_calls++;
 
     d->regs[NV_PAPU_FEDECMETH] = method;
     d->regs[NV_PAPU_FEDECPARAM] = argument;
@@ -875,6 +881,11 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
                 uint32_t linear_addr = ba + cbo * (uint32_t)block_size;
                 addr = get_data_ptr(d->regs[NV_PAPU_VPSGEADDR], 0xFFFFFFFF,
                                     linear_addr);
+                {   /* DOA3 DIAG: first fetches per voice: where does the SGE table send us? */
+                    static unsigned s_cnt[MCPX_HW_MAX_VOICES];
+                    if (v < MCPX_HW_MAX_VOICES && s_cnt[v] < 4 && (sample_count == 0)) { unsigned e = linear_addr / TARGET_PAGE_SIZE; s_cnt[v]++;
+                         }
+                }
             }
 
             for (unsigned int channel = 0; channel < channels; channel++) {
@@ -949,23 +960,41 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
 static int voice_resample(MCPXAPUState *d, uint16_t v, float samples[][2],
                           int requested_num, float rate)
 {
-    /* Without libsamplerate, just fetch raw samples at native rate.
-     * Rate < 1.0 means we need more source samples than output samples.
-     * For initial functionality, just get the samples directly. */
-    int sample_count = 0;
-    while (sample_count < requested_num) {
-        int active = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                    NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
-        if (!active) break;
-
-        int count = voice_get_samples(d, v, &samples[sample_count],
-                                      requested_num - sample_count);
-        if (count < 0) break;
-        if (count == 0) return -1;
-        sample_count += count;
+    /* rate = output/input ratio (1 / 2^(pitch/4096), as in xemu). The voice
+     * data is fetched at its own sample rate and linearly interpolated onto
+     * the 48 kHz frame grid, so a 44.1 kHz buffer plays at 44.1 kHz and its
+     * play cursor advances at the rate the guest expects. */
+    MCPXAPUVoiceFilter *f = &d->vp.filters[v];
+    double step = (rate > 0.0f) ? 1.0 / (double)rate : 1.0;
+    if (step > 16.0) step = 16.0;
+    if (step < 1.0 / 16.0) step = 1.0 / 16.0;
+    if (!f->rs_init || voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
+                                      NV_PAVS_VOICE_PAR_STATE_NEW_VOICE)) {
+        f->rs_init = 1; f->rs_in_n = f->rs_in_i = 0; f->rs_frac = 2.0;
+        f->rs_prev[0] = f->rs_prev[1] = f->rs_cur[0] = f->rs_cur[1] = 0.0f;
     }
-    (void)rate; /* Ignored until we add proper resampling */
-    return sample_count;
+    int out = 0;
+    while (out < requested_num) {
+        while (f->rs_frac >= 1.0) {
+            if (f->rs_in_i >= f->rs_in_n) {
+                int active = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
+                                            NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
+                int count = active ? voice_get_samples(d, v, f->rs_in, NUM_SAMPLES_PER_FRAME) : -1;
+                if (count <= 0) return out > 0 ? out : -1;
+                f->rs_in_n = count; f->rs_in_i = 0;
+            }
+            f->rs_prev[0] = f->rs_cur[0]; f->rs_prev[1] = f->rs_cur[1];
+            f->rs_cur[0] = f->rs_in[f->rs_in_i][0]; f->rs_cur[1] = f->rs_in[f->rs_in_i][1];
+            f->rs_in_i++;
+            f->rs_frac -= 1.0;
+        }
+        {   float t = (float)f->rs_frac;
+            samples[out][0] = f->rs_prev[0] + (f->rs_cur[0] - f->rs_prev[0]) * t;
+            samples[out][1] = f->rs_prev[1] + (f->rs_cur[1] - f->rs_prev[1]) * t; }
+        out++;
+        f->rs_frac += step;
+    }
+    return out;
 }
 
 /* ============================================================
@@ -1173,6 +1202,7 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
                         float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
     memset(d->vp.sample_buf, 0, sizeof(d->vp.sample_buf));
+    unsigned active_now = 0;
 
     for (int list = 0; list < 3; list++) {
         hwaddr top, current, next;
@@ -1198,10 +1228,13 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
             } else {
                 /* Process voice directly (single-threaded) */
                 voice_process(d, mixbins, d->vp.sample_buf, v, list);
+                active_now++;
             }
             d->regs[current] = d->regs[next];
         }
     }
+
+    g_apu_voices_active_last = active_now;
 
     /* VP monitor output */
     if (d->monitor.point == MCPX_APU_DEBUG_MON_VP) {

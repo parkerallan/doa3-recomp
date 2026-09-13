@@ -8420,7 +8420,7 @@ loc_001720FF: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_00172770(void)
+void sub_00172770_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -8520,10 +8520,11 @@ loc_00172830: ;
     ecx = MEM32(edi + 0x28);
     edx = MEM32(esp + 0x2C);
     /* cmp ecx, eax - flags set for next jcc */
+    int _cc1 = (CMP_NE(ecx, eax)); /* DOA3: flags from the compare above; ecx is overwritten before the jcc */
     ecx = MEM32(esp + 0x20);
     PUSH32(esp, ecx);
     PUSH32(esp, edx);
-    if (CMP_NE(ecx, eax)) goto loc_0017284D; /* jne: not equal / not zero */
+    if (_cc1) goto loc_0017284D; /* jne: not equal / not zero */
 
 loc_00172841: ;
     eax = MEM32(esp + 0x18);
@@ -8534,10 +8535,9 @@ loc_0017284B: ;
     goto loc_00172862;
 
 loc_0017284D: ;
-    eax = MEM32(esp + 0x2C);
-    /* test eax, eax - flags set for next jcc */
-    eax = MEM32(esp + 0x18);
-    if (TEST_Z(eax, eax)) goto loc_0017285C; /* je: equal / zero */
+    { int _ch0 = (MEM32(esp + 0x2C) == 0); /* DOA3: `test eax,eax` was on the channel index, evaluated BEFORE eax became the destination pointer */
+      eax = MEM32(esp + 0x18);
+      if (_ch0) goto loc_0017285C; /* je: equal / zero */ }
 
 loc_00172859: ;
     eax = eax + 2;
@@ -9811,9 +9811,10 @@ loc_0017C07E: ;
 loc_0017C085: ;
     ecx = 0; /* xor self */
     /* cmp LO8(eax), 0xB8 - flags set for next jcc */
+    int _cc2 = (TEST_Z(eax, eax)); /* DOA3: flags from the compare above; eax is overwritten before the jcc */
     SET_LO8(ecx, (CMP_EQ(LO8(eax), 0xB8)) ? 1 : 0); /* sete */
     eax = ecx;
-    if (TEST_Z(eax, eax)) goto loc_0017C098; /* je: equal / zero */
+    if (_cc2) goto loc_0017C098; /* je: equal / zero */
 
 loc_0017C092: ;
     MEM32(esi + 0x2FB4) = ebx;

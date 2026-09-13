@@ -151,7 +151,10 @@ ptrdiff_t xbox_GetMemoryOffset(void);
  *  across frames). Trimmed back to 2 MB because the movie player needs the
  *  low (GPU-addressable, <64 MB) heap space: the Sofdec intro allocates a ring
  *  of 720x480 frame surfaces (~1.3 MB each) that exhausted the 43 MB heap. */
-#define XBOX_STACK_SIZE     (2 * 1024 * 1024)
+#define XBOX_STACK_SIZE     (1 * 1024 * 1024)   /* was 2 MB; deepest main-thread esp ever logged is ~4 KB below the top, and
+                                                 * the audio path (DSOUND regions + ADX movie voices) needs the low heap
+                                                 * headroom: the ADX voice-open hit "out of memory (requested 65536)" at
+                                                 * 51,105,792/51,118,080 with the 2 MB stack. */
 
 /** Base VA of the stack area (above last XBE section).
  *  DOA3's image (incl. BSS, DOLBY, $$XTIMAGE) extends to ~0x00C31500, so the

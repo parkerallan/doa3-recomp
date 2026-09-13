@@ -49,6 +49,8 @@ void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
     (void)d;
 }
 
+#define APU_OUTPUT_GAIN 8.0f   /* +18 dB, see the output stage below */
+
 void mcpx_apu_dsp_frame(MCPXAPUState *d,
                          float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
@@ -71,8 +73,14 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d,
     if (d->monitor.point != MCPX_APU_DEBUG_MON_VP) {
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
             /* Clamp to [-1, 1] range */
-            float left = mixbins[0][i];
-            float right = mixbins[1][i];
+            /* Output stage gain. On hardware the DSP output mixer sits here;
+             * without it the raw mixbins reach the speakers at the voice gain
+             * (default -6 dB mixbin volume and 6 dB headroom: a music voice
+             * comes out at ~0.2 of its decoded level, while the host movie
+             * path plays decoded audio at 1.0). +18 dB puts the music above the
+             * movie level (user preference); the clamp below still bounds the result. */
+            float left = mixbins[0][i] * APU_OUTPUT_GAIN;
+            float right = mixbins[1][i] * APU_OUTPUT_GAIN;
             if (left > 1.0f) left = 1.0f;
             if (left < -1.0f) left = -1.0f;
             if (right > 1.0f) right = 1.0f;

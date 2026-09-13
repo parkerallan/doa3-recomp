@@ -89,10 +89,20 @@ static void load_regs(Fiber *f)
 }
 
 /* Next runnable (READY) fiber after `from`, round-robin. -1 if none. */
+/* Post-movie only: the movie phase relies on the older round-robin resumption of
+ * game tasks (a task waits for the movie by yielding, and the primary must run
+ * in between); its verified timing is left as it was. */
+extern volatile int g_doa3_post_movie;
 static int pick_next(int from)
 {
     for (int k = 1; k <= g_nfib; k++) {
         int i = (from + k) % g_nfib;
+        /* XAPI fibers (game tasks) resume only when the game switches to them,
+         * never by round-robin: two runnable tasks were being resumed in index
+         * order after a vblank wait, so the render record builder and the
+         * walker interleaved in a way the game never does and the walker spun
+         * on a half-rebuilt list (the intro-scene freeze). */
+        if (g_fib[i].is_coroutine && g_doa3_post_movie) continue;
         if (g_fib[i].state == FIB_READY) return i;
     }
     return -1;
@@ -200,6 +210,13 @@ void xbox_fiber_yield(void)
     } else {
         n = pick_next(me);
     }
+    if (g_fib[me].is_coroutine && g_doa3_post_movie) {
+        /* A game task yielding (vblank wait, sleep): let one worker run and
+         * come straight back here -- the task is not schedulable by anyone
+         * else (see pick_next). */
+        if (n < 0) return;
+        g_direct_return = me;
+    }
     if (n < 0) {
         /* Nobody else is READY.
          *
@@ -240,6 +257,53 @@ void xbox_fiber_yield(void)
     SwitchToFiber(g_fib[n].handle);
     /* Resumed: the switcher already restored our register-globals. */
     g_cur = me; g_fib[me].state = FIB_RUNNING;
+}
+
+/* Time-based scheduling point for the worker threads.
+ *
+ * The scheduler is cooperative, so the CRI worker threads (vblank-paced ADX
+ * and file servers, and the I/O completion worker) only run when the game
+ * thread parks. After the movie the game loop never blocks in the kernel,
+ * and while it loads a scene it does not present either, so the workers ran
+ * only when a deadlock breaker fired: the music stream got one file read
+ * every few seconds and the voice replayed its 341 ms ring buffer in between
+ * (measured: prim_yields=1..3 per 2 s, writes in 2 s bursts). On hardware
+ * those threads are woken by the vblank interrupt regardless of what the
+ * game thread is doing. Model that with a periodic lap through the READY
+ * fibers from the primary, taken from the kernel-call path (which the game
+ * thread hits constantly) but never while it is inside the CRI server pump
+ * or holds the CRI lock, so no server is re-entered. */
+volatile int g_fib_slice_due = 0;
+static DWORD WINAPI fib_slice_timer(LPVOID p)
+{
+    (void)p;
+    for (;;) { Sleep(4); g_fib_slice_due = 1; }
+}
+void xbox_fiber_timeslice(void)
+{
+    extern int doa3_workers_may_run(void);
+    static HANDLE s_timer;
+    if (!g_active || g_cur != 0) return;
+    if (!s_timer) s_timer = CreateThread(NULL, 0, fib_slice_timer, NULL, 0, NULL);
+    if (!g_fib_slice_due) return;
+    if (!doa3_workers_may_run()) return;
+    g_fib_slice_due = 0;
+    {   /* One lap per 4 ms tick that elapsed since the last slice, capped.
+         * While a scene loads the game thread sits in host D3D11 calls for
+         * tens of ms at a time (no hook can run there); a timer-driven
+         * thread would have run once per tick in the meantime, so catch up
+         * on the missed ticks instead of granting a single lap. */
+        static LARGE_INTEGER s_last, s_freq;
+        LARGE_INTEGER now; int laps = 1;
+        if (!s_freq.QuadPart) QueryPerformanceFrequency(&s_freq);
+        QueryPerformanceCounter(&now);
+        if (s_last.QuadPart) {
+            long long ticks /* ms; a worker iteration is ~4 laps */ = (now.QuadPart - s_last.QuadPart) * 1000 / s_freq.QuadPart;
+            if (ticks > laps) laps = (int)(ticks > 64 ? 64 : ticks);
+        }
+        s_last = now;
+        while (laps-- > 0) xbox_fiber_yield();
+    }
 }
 
 void xbox_fiber_block(uint32_t event_va)
@@ -332,6 +396,21 @@ void xbox_fiber_exit(void)
  * returning to the caller as soon as the target parks again. Falls back to a
  * plain wake when no matching fiber is parked. Returns 1 if a switch
  * happened. Only intended for the primary fiber (NtResumeThread bridge). */
+/* Is a spawned (non-coroutine) thread whose start context is ctx1 still
+ * running? DOA3 joins exactly one such thread: its cache-install worker
+ * (routine 0x0009D440), see bridge_NtWaitForSingleObject. */
+int xbox_fiber_thread_alive(uint32_t ctx1)
+{
+    for (int i = 0; i < g_nfib; i++) {
+        Fiber *f = &g_fib[i];
+        if (f->is_coroutine) continue;
+        if (f->ctx1 != ctx1) continue;
+        if (f->state == FIB_FREE || f->state == FIB_DONE) continue;
+        return 1;
+    }
+    return 0;
+}
+
 int xbox_fiber_run_thread(uint32_t xhandle)
 {
     if (!g_active) return 0;
