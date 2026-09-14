@@ -29835,7 +29835,7 @@ loc_000EAB86: ;
 
 loc_000EABB5: ;
     SET_LO16(ecx, MEM16(esi + 8));
-    /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
+    RC_SETF_CMP(LO16(ecx), MEM16(esi + 6));   /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
 
 loc_000EABBD: ;
     if (CMP_BE(LO16(ecx), MEM16(esi + 6))) goto loc_000EA7B9; /* jbe: below or equal (unsigned <=) */
@@ -62620,7 +62620,7 @@ loc_000EAA04: ;
     if (CMP_A(MEM16(esi + 8), LO16(eax))) { g_seh_ebp = ebp; sub_000EA7BE(); return; } /* ja: above (unsigned >) */
 
 loc_000EAA1E: ;
-    /* cmp LO16(eax), LO16(ebx) - flags set for next jcc */
+    RC_SETF_CMP(LO16(eax), LO16(ebx));   /* cmp LO16(eax), LO16(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000EA7B7(); return; /* tail jmp 0x000EA7B7 */
 
     SET_LO16(eax, MEM16(esi + 8));

@@ -13570,7 +13570,7 @@ loc_000B38BA: ;
     eax = MEM32(esp + 0x1C);
     MEM8(ebp + 0x484CA1) = 1;
     MEM8(ebp + 0x484CA2) = 0;
-    /* cmp MEM8(ebx + 0x5C), 1 - flags set for next jcc */
+    RC_SETF_CMP(MEM8(ebx + 0x5C), 1);   /* cmp MEM8(ebx + 0x5C), 1 - flags set for next jcc */
     MEM8(eax + 0x85BAA4) = 1;
     if (CMP_NE(MEM8(ebx + 0x5C), 1)) goto loc_000B3980; /* jne: not equal / not zero */
 
@@ -13720,7 +13720,7 @@ loc_000B39DE: ;
     if (CMP_NE(LO8(eax), 0xB)) { g_seh_ebp = ebp; sub_000B39F6(); return; } /* jne: not equal / not zero */
 
 loc_000B39E2: ;
-    /* cmp MEM8(esi + 0x85BBE4), 2 - flags set for next jcc */
+    RC_SETF_CMP(MEM8(esi + 0x85BBE4), 2);   /* cmp MEM8(esi + 0x85BBE4), 2 - flags set for next jcc */
 
     g_seh_ebp = ebp; sub_000B39E9(); return; /* DOA3: restored dropped fall-through to sub_000B39E9 */
 }
@@ -13736,7 +13736,7 @@ void sub_000B39E9(void)
     int _flags = 0; /* fallback flag var */
 
 loc_000B39E9: ;
-    if (_flags /* je: equal / zero */) { sub_000B39F6(); return; }
+    if (RC_F_JE() /* je: equal / zero */) { sub_000B39F6(); return; }
 
 loc_000B39EB: ;
     PUSH32(esp, 1);
@@ -68255,7 +68255,7 @@ loc_000CE2E0: ;
     if (TEST_NZ(esi, esi)) { g_seh_ebp = ebp; sub_000CE2F0(); return; } /* jne: not equal / not zero */
 
 loc_000CE2EC: ;
-    /* test LO8(eax), 1 - flags set for next jcc */
+    RC_SETF_TEST(LO8(eax), 1);   /* test LO8(eax), 1 - flags set for next jcc */
     g_seh_ebp = ebp; sub_000CE2F2(); return; /* tail jmp 0x000CE2F2 */
 
 }
@@ -68278,7 +68278,7 @@ loc_000CE2E3: ;
     if (TEST_NZ(esi, esi)) { g_seh_ebp = ebp; sub_000CE2F0(); return; } /* jne: not equal / not zero */
 
 loc_000CE2EC: ;
-    /* test LO8(eax), 1 - flags set for next jcc */
+    RC_SETF_TEST(LO8(eax), 1);   /* test LO8(eax), 1 - flags set for next jcc */
     g_seh_ebp = ebp; sub_000CE2F2(); return; /* tail jmp 0x000CE2F2 */
 
 }
@@ -68293,7 +68293,7 @@ void sub_000CE2F0(void)
 {
 
 loc_000CE2F0: ;
-    /* test LO8(eax), 2 - flags set for next jcc */
+    RC_SETF_TEST(LO8(eax), 2);   /* test LO8(eax), 2 - flags set for next jcc */
 
     sub_000CE2F2(); return; /* DOA3: restored dropped fall-through to sub_000CE2F2 */
 }
@@ -68311,7 +68311,7 @@ void sub_000CE2F2(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_000CE2F2: ;
-    if (_flags /* jne: not equal / not zero */) goto loc_000CE325;
+    if (RC_F_JNE() /* jne: not equal / not zero */) goto loc_000CE325;
 
 loc_000CE2F4: ;
     eax = 0x86134D;

@@ -9845,7 +9845,7 @@ loc_0006F880: ;
     if (((int32_t)(LO8(edx) & LO8(edx)) >= 0)) { g_seh_ebp = ebp; sub_0006F8A1(); return; } /* jns: not sign (positive) */
 
 loc_0006F89D: ;
-    /* test LO8(eax), LO8(eax) - flags set for next jcc */
+    RC_SETF_TEST(LO8(eax), LO8(eax));   /* test LO8(eax), LO8(eax) - flags set for next jcc */
     g_seh_ebp = ebp; sub_0006F8A3(); return; /* tail jmp 0x0006F8A3 */
 
 }
@@ -9860,7 +9860,7 @@ void sub_0006F8A1(void)
 {
 
 loc_0006F8A1: ;
-    /* cmp LO8(eax), 1 - flags set for next jcc */
+    RC_SETF_CMP(LO8(eax), 1);   /* cmp LO8(eax), 1 - flags set for next jcc */
 
     sub_0006F8A3(); return; /* DOA3: restored dropped fall-through to sub_0006F8A3 */
 }
@@ -9881,7 +9881,7 @@ void sub_0006F8A3(void)
     #define fp_st1() g_fp_stack[(g_fp_top + 1) & 7]
 
 loc_0006F8A3: ;
-    if (_flags /* jne: not equal / not zero */) goto loc_0006F943;
+    if (RC_F_JNE() /* jne: not equal / not zero */) goto loc_0006F943;
 
 loc_0006F8A9: ;
     fp_push(MEMF(0x484C4C)); /* fld float */
@@ -31253,7 +31253,7 @@ loc_00079C50: ;
     if (CMP_NE(LO8(eax), 5)) { g_seh_ebp = ebp; sub_00079C65(); return; } /* jne: not equal / not zero */
 
 loc_00079C5D: ;
-    /* cmp MEM8(0x484C4A), LO8(ecx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(0x484C4A), LO8(ecx));   /* cmp MEM8(0x484C4A), LO8(ecx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_00079C6F(); return; /* tail jmp 0x00079C6F */
 
 }
@@ -31272,7 +31272,7 @@ loc_00079C65: ;
     if (CMP_NE(LO8(eax), 0xE)) { sub_00079C71(); return; } /* jne: not equal / not zero */
 
 loc_00079C69: ;
-    /* cmp MEM8(0x484C4A), LO8(edx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(0x484C4A), LO8(edx));   /* cmp MEM8(0x484C4A), LO8(edx) - flags set for next jcc */
 
     sub_00079C6F(); return; /* DOA3: restored dropped fall-through to sub_00079C6F */
 }
@@ -31290,7 +31290,7 @@ void sub_00079C6F(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_00079C6F: ;
-    if (_flags /* je: equal / zero */) goto loc_00079CBD;
+    if (RC_F_JE() /* je: equal / zero */) goto loc_00079CBD;
 
 loc_00079C71: ;
     SET_LO8(eax, MEM8(0x484CB1));

@@ -14871,7 +14871,7 @@ loc_00196102: ;
     edi = ecx;
 
 loc_00196104: ;
-    /* cmp MEM32(ebp + -16), 0 - flags set for next jcc */
+    RC_SETF_CMP(MEM32(ebp + -16), 0);   /* cmp MEM32(ebp + -16), 0 - flags set for next jcc */
     eax = MEM32(ebp + 0xC);
     MEM32(eax) = edi;
     if (CMP_EQ(MEM32(ebp + -16), 0)) goto loc_001961A9; /* je: equal / zero */
@@ -16042,7 +16042,7 @@ loc_001960FD: ;
     edi = ecx;
 
 loc_00196104: ;
-    /* cmp MEM32(ebp + -16), 0 - flags set for next jcc */
+    RC_SETF_CMP(MEM32(ebp + -16), 0);   /* cmp MEM32(ebp + -16), 0 - flags set for next jcc */
     eax = MEM32(ebp + 0xC);
     MEM32(eax) = edi;
     if (CMP_EQ(MEM32(ebp + -16), 0)) goto loc_001961A9; /* je: equal / zero */
@@ -16207,7 +16207,7 @@ void sub_00196104_oldcf2(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_00196104: ;
-    /* cmp MEM32(ebp + -16), 0 - flags set for next jcc */
+    RC_SETF_CMP(MEM32(ebp + -16), 0);   /* cmp MEM32(ebp + -16), 0 - flags set for next jcc */
     eax = MEM32(ebp + 0xC);
     MEM32(eax) = edi;
     if (CMP_EQ(MEM32(ebp + -16), 0)) goto loc_001961A9; /* je: equal / zero */
@@ -16699,7 +16699,7 @@ void sub_0019627D(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_0019627D: ;
-    if (_flags /* je: equal / zero */) goto loc_00196285;
+    if (RC_F_JE() /* je: equal / zero */) goto loc_00196285;
 
 loc_0019627F: ;
     MEM8(ebx + 2) = 0x2D;

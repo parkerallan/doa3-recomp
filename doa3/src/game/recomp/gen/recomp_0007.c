@@ -63304,7 +63304,13 @@ void sub_001579A2(void)
     int _flags = 0; /* fallback flag var */
 
 loc_001579A2: ;
-    if (_flags /* jne: not equal / not zero */) { sub_001577B2(); return; }
+    /* DOA3: the guest is  0x001579A0 test esi,esi / 0x001579A2 jne 0x001577B2.
+     * The lifter split the test and the branch across two fragments, so the
+     * branch was emitted reading an uninitialised local and was never taken:
+     * every stage object whose block chain passed through here stopped at
+     * its first type != 0 block -- the temple's wall panels and the
+     * interior walls. */
+    if (TEST_NZ(esi, esi)) { sub_001577B2(); return; }
 
 loc_001579A8: ;
     POP32(esp, edi);
@@ -70429,7 +70435,7 @@ void sub_0015A897(void)
 loc_0015A897: ;
     eax = MEM32(0x3C23DC);
     MEM16(0x3C25C8) = 0xA;
-    /* cmp MEM8(eax + 0x34), LO8(edx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(eax + 0x34), LO8(edx));   /* cmp MEM8(eax + 0x34), LO8(edx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_0015A8BC(); return; /* tail jmp 0x0015A8BC */
 
 }
@@ -70471,7 +70477,7 @@ void sub_0015A8BC(void)
     int _flags = 0; /* fallback flag var */
 
 loc_0015A8BC: ;
-    if (_flags /* jne: not equal / not zero */) goto loc_0015A8C4;
+    if (RC_F_JNE() /* jne: not equal / not zero */) goto loc_0015A8C4;
 
 loc_0015A8BE: ;
     MEM8(0xB1F7D8) = LO8(ebx);

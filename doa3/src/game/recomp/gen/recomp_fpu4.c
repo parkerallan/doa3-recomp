@@ -2565,7 +2565,7 @@ loc_00041E34: ;
     MEM32(esp + 0x1C) = edx;
     edx = ZX8(MEM8(edi + 1));
     MEMF(esp + 0x20) = (float)fp_top(); fp_popp(); /* fstp */
-    /* test edx, edx - flags set for next jcc */
+    RC_SETF_TEST(edx, edx);   /* test edx, edx - flags set for next jcc */
     fp_push(MEMF(esp + 0x3C)); /* fld float */
     fp_top() = fp_top() - (double)MEMF(esp + 0x50); /* fsub mem */
     eax = edi + 0x38;
@@ -2671,7 +2671,7 @@ loc_00041E34: ;
     MEM32(esp + 0x1C) = edx;
     edx = ZX8(MEM8(edi + 1));
     MEMF(esp + 0x20) = (float)fp_top(); fp_popp(); /* fstp */
-    /* test edx, edx - flags set for next jcc */
+    RC_SETF_TEST(edx, edx);   /* test edx, edx - flags set for next jcc */
     fp_push(MEMF(esp + 0x3C)); /* fld float */
     fp_top() = fp_top() - (double)MEMF(esp + 0x50); /* fsub mem */
     eax = edi + 0x38;
@@ -67585,7 +67585,7 @@ loc_00016707: ;
     eax = MEM32(0x3C23DC);
 
 loc_0001670F: ;
-    /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(eax + 0x33), LO8(ebx));   /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000166E3(); return; /* tail jmp 0x000166E3 */
 
     PUSH32(esp, 0); sub_000114D0(); /* call 0x000114D0 */
@@ -86355,7 +86355,7 @@ loc_00041E6C: ;
     fp_push(MEMF(esp + 0x44)); /* fld float */
     fp_top() = fp_top() - (double)MEMF(esp + 0x58); /* fsub mem */
     MEMF(esp + 0x2C) = (float)fp_top(); fp_popp(); /* fstp */
-    if (_flags /* jle: less or equal (signed <=) */) goto loc_00041F10;
+    if (RC_F_JLE() /* jle: less or equal (signed <=) */) goto loc_00041F10;
 
 loc_00041E80: ;
     ecx = esi;

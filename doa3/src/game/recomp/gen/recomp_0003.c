@@ -70619,7 +70619,7 @@ loc_000A9C9E: ;
     ecx = MEM32(esi + 0x14);
     eax = eax - 0x8000;
     eax = eax & 0xFFFF;
-    /* cmp ecx, eax - flags set for next jcc */
+    RC_SETF_CMP(ecx, eax);   /* cmp ecx, eax - flags set for next jcc */
     g_seh_ebp = ebp; sub_000A9D3B(); return; /* tail jmp 0x000A9D3B */
 
 }
@@ -70931,7 +70931,7 @@ void sub_000A9D39(void)
 {
 
 loc_000A9D39: ;
-    /* cmp LO8(eax), 1 - flags set for next jcc */
+    RC_SETF_CMP(LO8(eax), 1);   /* cmp LO8(eax), 1 - flags set for next jcc */
 
     sub_000A9D3B(); return; /* DOA3: restored dropped fall-through to sub_000A9D3B */
 }
@@ -70947,7 +70947,7 @@ void sub_000A9D3B(void)
     int _flags = 0; /* fallback flag var */
 
 loc_000A9D3B: ;
-    if (_flags /* jne: not equal / not zero */) { sub_000A9D3F(); return; }
+    if (RC_F_JNE() /* jne: not equal / not zero */) { sub_000A9D3F(); return; }
 
     sub_000A9D3D(); return; /* DOA3: restored dropped fall-through to sub_000A9D3D */
 }

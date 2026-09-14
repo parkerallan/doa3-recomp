@@ -36,6 +36,7 @@ extern ID3D11Device        *d3d8_GetD3D11Device(void);
 extern ID3D11DeviceContext *d3d8_GetD3D11Context(void);
 extern IDXGISwapChain      *d3d8_GetSwapChain(void);
 extern void                 d3d8_PresentFrame(void);
+extern void                 d3d8_RestoreDefaultTarget(void);
 
 static ID3D11Texture2D          *s_tex;
 static ID3D11ShaderResourceView *s_srv;
@@ -481,6 +482,7 @@ void doa3_movie_present_finish(void)
         ID3D11DeviceContext_ClearRenderTargetView(ctx, s_rtv, black);
         d3d8_PresentFrame();
     }
+    d3d8_RestoreDefaultTarget();
     fprintf(stderr, "[MVPRES] movie finished -- screen released to the game\n");
     fflush(stderr);
 }
@@ -592,6 +594,13 @@ void doa3_movie_repaint(void)
     ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &s_smp);
     ID3D11DeviceContext_Draw(ctx, 3, 0);
     d3d8_PresentFrame();
+    /* Hand the output merger back with the depth buffer attached. The
+     * movie binds its own render-target view and no depth-stencil view;
+     * leaving that bound means every guest draw afterwards runs with no
+     * depth test and no depth writes, so the stage comes out in
+     * submission order and whatever is drawn last -- the sky backdrop --
+     * covers the temple, the ground and the walls. */
+    d3d8_RestoreDefaultTarget();
 }
 
 void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
@@ -647,6 +656,7 @@ void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
     ID3D11DeviceContext_Draw(ctx, 3, 0);
 
     d3d8_PresentFrame();                   /* message pump + vsync present */
+    d3d8_RestoreDefaultTarget();           /* see doa3_present_movie_frame */
 
     s_frames++;
     if (s_frames <= 4 || (s_frames % 256) == 0) {

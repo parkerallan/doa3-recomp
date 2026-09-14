@@ -5606,6 +5606,54 @@ void sub_00080D00(void)
  * setting notifier+0x44 = device[0] makes them self-equal -> always satisfied
  * (the "GPU read == write" trick, adapted to DOA3's notifier layout).
  * RAM push buffer is allocated in main.c. */
+/* Flags carried across a generated-fragment boundary; see recomp_types.h.
+ * Exact x86 flag semantics for CMP (a - b) and TEST (a & b) at the operand
+ * width the compare used. */
+uint32_t g_flg_a, g_flg_b;
+int g_flg_w = 4, g_flg_test;
+
+int rc_flg_cc(int cc)
+{
+    uint32_t mask = (g_flg_w == 1) ? 0xFFu : (g_flg_w == 2) ? 0xFFFFu : 0xFFFFFFFFu;
+    uint32_t sign = (g_flg_w == 1) ? 0x80u : (g_flg_w == 2) ? 0x8000u : 0x80000000u;
+    uint32_t a = g_flg_a & mask, b = g_flg_b & mask, r;
+    int zf, sf, cf = 0, of = 0, pf, i, ones = 0;
+    unsigned lo;
+
+    if (g_flg_test) {
+        r = (a & b) & mask;
+    } else {
+        r = (a - b) & mask;
+        cf = (a < b);
+        of = ((((a ^ b) & (a ^ r)) & sign) != 0);
+    }
+    zf = (r == 0);
+    sf = ((r & sign) != 0);
+    lo = (unsigned)(r & 0xFFu);
+    for (i = 0; i < 8; i++) if (lo & (1u << i)) ones++;
+    pf = ((ones & 1) == 0);
+
+    switch (cc) {
+    case 0:  return zf;                 /* je  */
+    case 1:  return !zf;                /* jne */
+    case 2:  return cf;                 /* jb  */
+    case 3:  return !cf;                /* jae */
+    case 4:  return cf || zf;           /* jbe */
+    case 5:  return !cf && !zf;         /* ja  */
+    case 6:  return sf != of;           /* jl  */
+    case 7:  return sf == of;           /* jge */
+    case 8:  return zf || (sf != of);   /* jle */
+    case 9:  return !zf && (sf == of);  /* jg  */
+    case 10: return sf;                 /* js  */
+    case 11: return !sf;                /* jns */
+    case 12: return of;                 /* jo  */
+    case 13: return !of;                /* jno */
+    case 14: return pf;                 /* jp  */
+    case 15: return !pf;                /* jnp */
+    default: return 0;
+    }
+}
+
 uint32_t g_doa3_pb_base = 0, g_doa3_pb_end = 0;
 uint32_t g_doa3_movie_ticks = 0;    /* synthetic movie clock (PTS units) */
 uint32_t g_doa3_movie_frames = 0;   /* frames actually blitted (clock pace anchor) */

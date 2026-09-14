@@ -335,6 +335,37 @@ static __forceinline uint32_t xmm_movmskps(xmm128_t a) {
 #define CMP_LE(a, b)  (RC_SXA(a) <= RC_SXB(a, b))       /* less or equal */
 #define CMP_G(a, b)   (RC_SXA(a) >  RC_SXB(a, b))       /* greater */
 
+/* ── Flags carried across a fragment boundary ─────────────
+ *
+ * When the lifter split a basic block so that the cmp/test ended one generated
+ * function and the jcc began the next, it emitted the branch as
+ * `int _flags = 0; ... if (_flags ...)` -- a branch that can never be
+ * taken. Re-evaluating the compare at the branch is not enough: several of
+ * those branches are reached from paths that compared different things. The
+ * compare therefore records its operands here and the branch evaluates the
+ * x86 condition from them, which is exact for cmp and test. */
+extern uint32_t g_flg_a, g_flg_b;
+extern int g_flg_w, g_flg_test;
+#define RC_SETF_CMP(a, b)  (g_flg_a = (uint32_t)(a), g_flg_b = (uint32_t)(b),                             g_flg_w = (int)sizeof(a), g_flg_test = 0)
+#define RC_SETF_TEST(a, b) (g_flg_a = (uint32_t)(a), g_flg_b = (uint32_t)(b),                             g_flg_w = (int)sizeof(a), g_flg_test = 1)
+int rc_flg_cc(int cc);
+#define RC_F_JE()   rc_flg_cc(0)
+#define RC_F_JNE()  rc_flg_cc(1)
+#define RC_F_JB()   rc_flg_cc(2)
+#define RC_F_JAE()  rc_flg_cc(3)
+#define RC_F_JBE()  rc_flg_cc(4)
+#define RC_F_JA()   rc_flg_cc(5)
+#define RC_F_JL()   rc_flg_cc(6)
+#define RC_F_JGE()  rc_flg_cc(7)
+#define RC_F_JLE()  rc_flg_cc(8)
+#define RC_F_JG()   rc_flg_cc(9)
+#define RC_F_JS()   rc_flg_cc(10)
+#define RC_F_JNS()  rc_flg_cc(11)
+#define RC_F_JO()   rc_flg_cc(12)
+#define RC_F_JNO()  rc_flg_cc(13)
+#define RC_F_JP()   rc_flg_cc(14)
+#define RC_F_JNP()  rc_flg_cc(15)
+
 /* TEST-based conditions (AND without storing result) */
 #define TEST_Z(a, b)  (((uint32_t)(a) & (uint32_t)(b)) == 0)  /* ZF=1 */
 #define TEST_NZ(a, b) (((uint32_t)(a) & (uint32_t)(b)) != 0)  /* ZF=0 */

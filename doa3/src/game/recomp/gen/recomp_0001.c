@@ -18025,7 +18025,7 @@ loc_00041E34: ;
     MEM32(esp + 0x1C) = edx;
     edx = ZX8(MEM8(edi + 1));
     MEMF(esp + 0x20) = (float)fp_top(); fp_popp(); /* fstp */
-    /* test edx, edx - flags set for next jcc */
+    RC_SETF_TEST(edx, edx);   /* test edx, edx - flags set for next jcc */
     fp_push(MEMF(esp + 0x3C)); /* fld float */
     fp_st1() -= fp_top(); fp_pop(); /* fsub */
     eax = edi + 0x38;
@@ -18131,7 +18131,7 @@ loc_00041E34: ;
     MEM32(esp + 0x1C) = edx;
     edx = ZX8(MEM8(edi + 1));
     MEMF(esp + 0x20) = (float)fp_top(); fp_popp(); /* fstp */
-    /* test edx, edx - flags set for next jcc */
+    RC_SETF_TEST(edx, edx);   /* test edx, edx - flags set for next jcc */
     fp_push(MEMF(esp + 0x3C)); /* fld float */
     fp_st1() -= fp_top(); fp_pop(); /* fsub */
     eax = edi + 0x38;
@@ -29198,7 +29198,7 @@ loc_00047051: ;
     if (CMP_EQ(eax, 8)) { g_seh_ebp = ebp; sub_0004709F(); return; } /* je: equal / zero */
 
 loc_00047056: ;
-    /* cmp eax, 9 - flags set for next jcc */
+    RC_SETF_CMP(eax, 9);   /* cmp eax, 9 - flags set for next jcc */
     g_seh_ebp = ebp; sub_000470E8(); return; /* tail jmp 0x000470E8 */
 
 }
@@ -29215,7 +29215,7 @@ void sub_0004705E(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_0004705E: ;
-    /* cmp eax, 8 - flags set for next jcc */
+    RC_SETF_CMP(eax, 8);   /* cmp eax, 8 - flags set for next jcc */
     g_seh_ebp = ebp; sub_000470E8(); return; /* tail jmp 0x000470E8 */
 
 }
@@ -29341,7 +29341,7 @@ loc_000470DD: ;
     if (CMP_EQ(LO8(eax), 0x30)) { g_seh_ebp = ebp; sub_000470EA(); return; } /* je: equal / zero */
 
 loc_000470E6: ;
-    /* cmp LO8(eax), 0x6E - flags set for next jcc */
+    RC_SETF_CMP(LO8(eax), 0x6E);   /* cmp LO8(eax), 0x6E - flags set for next jcc */
 
     g_seh_ebp = ebp; sub_000470E8(); return; /* DOA3: restored dropped fall-through to sub_000470E8 */
 }
@@ -29357,7 +29357,7 @@ void sub_000470E8(void)
     int _flags = 0; /* fallback flag var */
 
 loc_000470E8: ;
-    if (_flags /* jne: not equal / not zero */) { sub_000470F0(); return; }
+    if (RC_F_JNE() /* jne: not equal / not zero */) { sub_000470F0(); return; }
 
     sub_000470EA(); return; /* DOA3: restored dropped fall-through to sub_000470EA */
 }

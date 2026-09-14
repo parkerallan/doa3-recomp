@@ -6116,7 +6116,7 @@ loc_00016707: ;
     eax = MEM32(0x3C23DC);
 
 loc_0001670F: ;
-    /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(eax + 0x33), LO8(ebx));   /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000166E3(); return; /* tail jmp 0x000166E3 */
 
     PUSH32(esp, 0); sub_000114D0(); /* call 0x000114D0 */
@@ -121345,7 +121345,7 @@ loc_000B38BA: ;
     eax = MEM32(esp + 0x1C);
     MEM8(ebp + 0x484CA1) = 1;
     MEM8(ebp + 0x484CA2) = 0;
-    /* cmp MEM8(ebx + 0x5C), 1 - flags set for next jcc */
+    RC_SETF_CMP(MEM8(ebx + 0x5C), 1);   /* cmp MEM8(ebx + 0x5C), 1 - flags set for next jcc */
     MEM8(eax + 0x85BAA4) = 1;
     if (CMP_NE(MEM8(ebx + 0x5C), 1)) goto loc_000B3980; /* jne: not equal / not zero */
 
@@ -153165,7 +153165,7 @@ loc_000EAB86: ;
 
 loc_000EABB5: ;
     SET_LO16(ecx, MEM16(esi + 8));
-    /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
+    RC_SETF_CMP(LO16(ecx), MEM16(esi + 6));   /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
 
 loc_000EABBD: ;
     if (CMP_BE(LO16(ecx), MEM16(esi + 6))) goto loc_000EA7B9; /* jbe: below or equal (unsigned <=) */
@@ -153401,7 +153401,7 @@ loc_000EAA04: ;
     if (CMP_A(MEM16(esi + 8), LO16(eax))) { g_seh_ebp = ebp; sub_000EA7BE(); return; } /* ja: above (unsigned >) */
 
 loc_000EAA1E: ;
-    /* cmp LO16(eax), LO16(ebx) - flags set for next jcc */
+    RC_SETF_CMP(LO16(eax), LO16(ebx));   /* cmp LO16(eax), LO16(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000EA7B7(); return; /* tail jmp 0x000EA7B7 */
 
     SET_LO16(eax, MEM16(esi + 8));

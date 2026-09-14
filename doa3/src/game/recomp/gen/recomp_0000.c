@@ -14624,7 +14624,7 @@ loc_000166D5: ;
     if (CMP_NE(MEM16(eax + 0x30), LO16(edi))) { sub_0001807C(); return; } /* jne: not equal / not zero */
 
 loc_000166DF: ;
-    /* cmp MEM8(eax + 0x3D), 1 - flags set for next jcc */
+    RC_SETF_CMP(MEM8(eax + 0x3D), 1);   /* cmp MEM8(eax + 0x3D), 1 - flags set for next jcc */
 
     sub_000166E3(); return; /* DOA3: restored dropped fall-through to sub_000166E3 */
 }
@@ -14642,7 +14642,7 @@ void sub_000166E3(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_000166E3: ;
-    if (_flags /* jne: not equal / not zero */) { g_seh_ebp = ebp; sub_0001807C(); return; }
+    if (RC_F_JNE() /* jne: not equal / not zero */) { g_seh_ebp = ebp; sub_0001807C(); return; }
 
 loc_000166E9: ;
     eax = MEM32(0x3C27D4);
@@ -14681,7 +14681,7 @@ loc_00016707: ;
     eax = MEM32(0x3C23DC);
 
 loc_0001670F: ;
-    /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(eax + 0x33), LO8(ebx));   /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000166E3(); return; /* tail jmp 0x000166E3 */
 
     PUSH32(esp, 0); sub_000114D0(); /* call 0x000114D0 */
@@ -14873,7 +14873,7 @@ loc_00016885: ;
     esp = esp + 4;
 
 loc_0001688D: ;
-    /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
+    RC_SETF_CMP(MEM8(eax + 0x33), LO8(ebx));   /* cmp MEM8(eax + 0x33), LO8(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000166E3(); return; /* tail jmp 0x000166E3 */
 
 }
@@ -39071,7 +39071,7 @@ loc_0001F9A4: ;
     if (CMP_NE(LO16(edi), 0xFD)) { g_seh_ebp = ebp; sub_0001FA00(); return; } /* jne: not equal / not zero */
 
 loc_0001F9AB: ;
-    /* cmp MEM8(ebp + 1), 7 - flags set for next jcc */
+    RC_SETF_CMP(MEM8(ebp + 1), 7);   /* cmp MEM8(ebp + 1), 7 - flags set for next jcc */
     g_seh_ebp = ebp; sub_0001F9DB(); return; /* tail jmp 0x0001F9DB */
 
 }
@@ -39116,7 +39116,7 @@ void sub_0001F9DB(void)
     int _flags = 0; /* fallback flag var */
 
 loc_0001F9DB: ;
-    if (_flags /* jne: not equal / not zero */) { sub_0001FA00(); return; }
+    if (RC_F_JNE() /* jne: not equal / not zero */) { sub_0001FA00(); return; }
 
     sub_0001F9DD(); return; /* DOA3: restored dropped fall-through to sub_0001F9DD */
 }
@@ -85118,7 +85118,7 @@ loc_00034CF9: ;
 
 loc_00034D07: ;
     eax = MEM32(ebx + 0x7C);
-    /* cmp eax, ecx - flags set for next jcc */
+    RC_SETF_CMP(eax, ecx);   /* cmp eax, ecx - flags set for next jcc */
     POP32(esp, edi);
     if (CMP_LE(eax, ecx)) { g_seh_ebp = ebp; sub_00034D23(); return; } /* jle: less or equal (signed <=) */
 
@@ -85468,7 +85468,7 @@ loc_00034CF9: ;
 
 loc_00034D07: ;
     eax = MEM32(ebx + 0x7C);
-    /* cmp eax, ecx - flags set for next jcc */
+    RC_SETF_CMP(eax, ecx);   /* cmp eax, ecx - flags set for next jcc */
     POP32(esp, edi);
     if (CMP_LE(eax, ecx)) { g_seh_ebp = ebp; sub_00034D23(); return; } /* jle: less or equal (signed <=) */
 
@@ -85556,7 +85556,7 @@ loc_00034CF9: ;
 
 loc_00034D07: ;
     eax = MEM32(ebx + 0x7C);
-    /* cmp eax, ecx - flags set for next jcc */
+    RC_SETF_CMP(eax, ecx);   /* cmp eax, ecx - flags set for next jcc */
     POP32(esp, edi);
     if (CMP_LE(eax, ecx)) { g_seh_ebp = ebp; sub_00034D23(); return; } /* jle: less or equal (signed <=) */
 
@@ -85585,7 +85585,7 @@ void sub_00034D23(void)
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
 loc_00034D23: ;
-    if (_flags /* jl: less (signed <) */) goto loc_00034D3C;
+    if (RC_F_JL() /* jl: less (signed <) */) goto loc_00034D3C;
 
 loc_00034D25: ;
     eax = MEM32(ebx + 0x80);

@@ -34209,7 +34209,7 @@ loc_000EA7A5: ;
     g_seh_ebp = ebp; sub_000EA7BE(); return; /* tail jmp 0x000EA7BE */
 
     SET_LO16(ecx, MEM16(esi + 8));
-    /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
+    RC_SETF_CMP(LO16(ecx), MEM16(esi + 6));   /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
 
     #undef fp_push
     #undef fp_pop
@@ -34230,7 +34230,7 @@ void sub_000EA7B7(void)
     int _flags = 0; /* fallback flag var */
 
 loc_000EA7B7: ;
-    if (_flags /* je: equal / zero */) { sub_000EA7BE(); return; }
+    if (RC_F_JE() /* je: equal / zero */) { sub_000EA7BE(); return; }
 
     sub_000EA7B9(); return; /* DOA3: restored dropped fall-through to sub_000EA7B9 */
 }
@@ -34523,7 +34523,7 @@ loc_000EAA04: ;
     if (CMP_A(MEM16(esi + 8), LO16(eax))) { g_seh_ebp = ebp; sub_000EA7BE(); return; } /* ja: above (unsigned >) */
 
 loc_000EAA1E: ;
-    /* cmp LO16(eax), LO16(ebx) - flags set for next jcc */
+    RC_SETF_CMP(LO16(eax), LO16(ebx));   /* cmp LO16(eax), LO16(ebx) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000EA7B7(); return; /* tail jmp 0x000EA7B7 */
 
     SET_LO16(eax, MEM16(esi + 8));
@@ -35488,7 +35488,7 @@ loc_000EAE74: ;
 
 loc_000EAE8A: ;
     SET_LO16(ecx, MEM16(esi + 8));
-    /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
+    RC_SETF_CMP(LO16(ecx), MEM16(esi + 6));   /* cmp LO16(ecx), MEM16(esi + 6) - flags set for next jcc */
     g_seh_ebp = ebp; sub_000EB042(); return; /* tail jmp 0x000EB042 */
 
     ecx = 0x47E230;
@@ -35718,7 +35718,7 @@ void sub_000EB042(void)
     int _flags = 0; /* fallback flag var */
 
 loc_000EB042: ;
-    if (_flags /* ja: above (unsigned >) */) { sub_000EB04B(); return; }
+    if (RC_F_JA() /* ja: above (unsigned >) */) { sub_000EB04B(); return; }
 
     sub_000EB044(); return; /* DOA3: restored dropped fall-through to sub_000EB044 */
 }
