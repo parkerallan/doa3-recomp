@@ -58527,7 +58527,7 @@ loc_00155F81: ;
     fp_push(MEMF(0x48A2A8)); /* fld float */
     fp_st1() *= fp_top(); fp_pop(); /* fmul */
     /* FPU: fsubr st(1) */
-    _fpu_cmp = (fp_top() < fp_st1()) ? -1 : (fp_top() > fp_st1()) ? 1 : 0; /* fcomp st(2) */
+    _fpu_cmp = (fp_top() < g_fp_stack[(g_fp_top + 2) & 7]) ? -1 : (fp_top() > g_fp_stack[(g_fp_top + 2) & 7]) ? 1 : 0; /* fcomp st(2) */
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
@@ -58550,7 +58550,7 @@ loc_00155FBB: ;
     fp_push(MEMF(0x47E73C)); /* fld float */
     fp_st1() *= fp_top(); fp_pop(); /* fmul */
     /* FPU: fsubr st(1) */
-    _fpu_cmp = (fp_top() < fp_st1()) ? -1 : (fp_top() > fp_st1()) ? 1 : 0; /* fcomp st(2) */
+    _fpu_cmp = (fp_top() < g_fp_stack[(g_fp_top + 2) & 7]) ? -1 : (fp_top() > g_fp_stack[(g_fp_top + 2) & 7]) ? 1 : 0; /* fcomp st(2) */
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 0x41 - flags set for next jcc */

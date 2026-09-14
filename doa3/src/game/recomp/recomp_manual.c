@@ -3733,10 +3733,33 @@ void sub_001BA7D8(void)
  * across two calls, so log the argument and the result to tell a bad argument
  * from a clobbered register. */
 void sub_001B1350_gen(void);
+/* Render-target identity for the pgraph translator: the implicit back buffer
+ * surface lives inside the device object (dev+0x2150 / dev+0x2168); anything
+ * else the game hands SetRenderTarget is a texture surface (the reflection
+ * target 0x04002E50 in stage 0x3F). Both have the same 720x480 pitch, so
+ * the translator cannot tell them apart from surface registers alone; it
+ * keys on the colour offsets recorded here (D3DResource.Data & 0x03FFFFFF,
+ * which is what SET_SURFACE_COLOR_OFFSET carries). */
+uint32_t g_doa3_fb_offs[4]; int g_doa3_fb_n;
+uint32_t g_doa3_offrt_off;           /* the most recent texture surface */
+uint32_t g_doa3_offrt_offs[8]; int g_doa3_offrt_n;   /* every texture surface seen */
 void sub_001B1350(void)
 {
     uint32_t arg = MEM32(esp + 4);
     sub_001B1350_gen();
+    if (arg >= 0x1000 && arg < 0x08000000u) {
+        uint32_t d = MEM32(0x001C3390), data = MEM32(arg + 4) & 0x03FFFFFFu;
+        if (arg == d + 0x2150 || arg == d + 0x2168) {
+            int k, seen = 0;
+            for (k = 0; k < g_doa3_fb_n; k++) if (g_doa3_fb_offs[k] == data) seen = 1;
+            if (!seen && g_doa3_fb_n < 4) g_doa3_fb_offs[g_doa3_fb_n++] = data;
+        } else {
+            int k, seen = 0;
+            g_doa3_offrt_off = data;
+            for (k = 0; k < g_doa3_offrt_n; k++) if (g_doa3_offrt_offs[k] == data) seen = 1;
+            if (!seen && g_doa3_offrt_n < 8) g_doa3_offrt_offs[g_doa3_offrt_n++] = data;
+        }
+    }
     {   /* DOA3 DIAG: per-frame render-target switch trace (post-movie). */
         extern volatile int g_doa3_post_movie; extern volatile LONG g_doa3_heartbeat;
         static int s_t = 0;
@@ -7533,6 +7556,33 @@ void sub_001726D0(void);
 
 void sub_001C792E(void) { sub_001C6BEF(); }   /* 0x1C792E: jmp 0x1C6BEF (Release) */
 
+/* 0x0011CE30 / 0x0011CE40 -- two 7-byte thunks the disassembler never saw
+ * (no direct caller; reached only through the function pointer at
+ * 0x8C8770, which the stage-0x3F renderer sub_0011B5F0 sets to 0x11CE30
+ * before its sub-passes issue `call [0x8C8770]`).
+ *
+ *     0011CE30  call 0x157700   ; draw this object through the walker
+ *     0011CE35  ret  4
+ *     0011CE40  ret  4          ; the no-op variant
+ *
+ * Without them the indirect call fell into the unresolved-target path:
+ * the walker was never called for those objects (cxbx makes 49 such calls
+ * per frame in this stage -- the walls, ground and skybox) and the 4-byte
+ * argument was never popped, so the sub-pass then restored its saved
+ * matrix from [esp+0x10] of a shifted frame and handed the next ten
+ * objects a garbage matrix-stack top. Same call convention as generated
+ * code: dummy return slot pushed by the caller, `ret 4` pops it plus the
+ * argument. */
+void sub_0011CE30(void)
+{
+    PUSH32(esp, 0); sub_00157700(); /* call 0x00157700 */
+    esp += 8; return; /* ret 4 */
+}
+void sub_0011CE40(void)
+{
+    esp += 8; return; /* ret 4 */
+}
+
 /* ── Manual override table ──────────────────────────────────────────
  * Map original Xbox VA -> hand-written replacement; the trailing {0,0}
  * sentinel keeps the array valid and is skipped at lookup. */
@@ -7540,6 +7590,8 @@ static const struct {
     uint32_t      xbox_va;
     recomp_func_t func;
 } g_manual_funcs[] = {
+    { 0x0011CE30u, sub_0011CE30 },   /* stage renderer draw thunk: call sub_00157700; ret 4 */
+    { 0x0011CE40u, sub_0011CE40 },   /* its no-op variant: ret 4 */
     { 0x001CDCD8u, sub_001CDCD8 },   /* DSOUND page-manager vtable jmp stub */
     { 0x001C792Eu, sub_001C792E },   /* CDirectSoundBuffer vtable Release jmp stub (folded into sub_001C7929) */
     { 0x00172260u, sub_00172260 },   /* CRI ADX sound-device method (recomp_extra3.c) */

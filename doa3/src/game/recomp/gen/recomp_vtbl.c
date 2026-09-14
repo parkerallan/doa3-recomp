@@ -614,11 +614,11 @@ loc_00031E00: ;
     fp_push(MEMF(0x484CBC)); /* fld float */
 
 loc_00031E0C: ;
-    { double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + 0) & 7]; g_fp_stack[(g_fp_top + 0) & 7] = _t; } /* fxch st(0) */
+    { double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + 1) & 7]; g_fp_stack[(g_fp_top + 1) & 7] = _t; } /* fxch st(1) */
     esp = esp - 8;
     fp_top() = fp_top() - g_fp_stack[(g_fp_top + 3) & 7]; /* fsub st(3) */
     MEMF(esp + 4) = (float)fp_top(); fp_popp(); /* fstp */
-    { double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + 0) & 7]; g_fp_stack[(g_fp_top + 0) & 7] = _t; } /* fxch st(0) */
+    { double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + 1) & 7]; g_fp_stack[(g_fp_top + 1) & 7] = _t; } /* fxch st(1) */
     fp_top() = fp_top() - g_fp_stack[(g_fp_top + 1) & 7]; /* fsub st(1) */
     MEMF(esp) = (float)fp_top(); fp_popp(); /* fstp */
     fp_popp(); /* fstp st(0) = pop */
@@ -2252,7 +2252,7 @@ loc_00034951: ;
     fp_top() = fp_top() + (double)MEMF(0x484C4C); /* fadd mem */
     fp_push(MEMF(0x484CBC)); /* fld float */
     fp_top() = fp_top() + (double)MEMF(0x484C54); /* fadd mem */
-    { double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + 0) & 7]; g_fp_stack[(g_fp_top + 0) & 7] = _t; } /* fxch st(0) */
+    { double _t = fp_top(); fp_top() = g_fp_stack[(g_fp_top + 1) & 7]; g_fp_stack[(g_fp_top + 1) & 7] = _t; } /* fxch st(1) */
     fp_top() = fp_top() * (double)MEMF(0x1ED480); /* fmul mem */
     MEMF(esp + 0x1C) = (float)fp_top(); fp_popp(); /* fstp */
     ecx = MEM32(esp + 0x1C);

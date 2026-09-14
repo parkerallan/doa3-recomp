@@ -1801,6 +1801,14 @@ class Lifter:
             # never popped, so every float comparison against memory was wrong).
             rhs = "fp_st1()"
             ops_str = insn.op_str or ""
+            # RECOMP BUG #19: a register operand other than st(1) (fcomp st(2)
+            # in the walker's visibility test 0x00155F8D) was compared against
+            # st(1); use the real stack slot.
+            for _o in ops:
+                if _o.type == "reg" and _o.reg.startswith("st"):
+                    _i = _st_index(_o.reg)
+                    if _i != 1:
+                        rhs = f"g_fp_stack[(g_fp_top + {_i}) & 7]"
             if "dword ptr" in ops_str or "qword ptr" in ops_str:
                 mem = _fmt_operand_read(ops[0]) if ops else None
                 if mem:

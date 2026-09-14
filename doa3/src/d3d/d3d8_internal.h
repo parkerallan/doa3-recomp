@@ -26,6 +26,7 @@ ID3D11RenderTargetView *d3d8_GetDefaultRTV(void);
 int  d3d8_SetOffscreenTarget(UINT w, UINT h);
 void d3d8_RestoreDefaultTarget(void);
 int  d3d8_OffscreenTargetActive(void);
+int  d3d8_BindOffscreenTexture(UINT stage);
 HWND                 d3d8_GetHWND(void);
 UINT                 d3d8_GetBackbufferWidth(void);
 UINT                 d3d8_GetBackbufferHeight(void);

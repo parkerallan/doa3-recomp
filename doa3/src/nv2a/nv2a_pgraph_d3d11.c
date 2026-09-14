@@ -303,6 +303,26 @@ static struct {
     uint32_t idx_count;
     float    composite[16];     /* NV097_SET_COMPOSITE_MATRIX */
     int      composite_seen;
+    uint32_t lighting;          /* NV097_SET_LIGHTING_ENABLE 0x0314 */
+
+    /* Fixed-function vertex lighting state (NV2A registers written by the
+     * Xbox D3D runtime; light colours already carry the material factors). */
+    struct {
+        float amb[3], dif[3], spec[3];   /* 0x1000 / 0x100C / 0x1018 (+0x80*i) */
+        float range;                     /* 0x1024 */
+        float half[3], dir[3];           /* 0x1028 / 0x1034 (eye space) */
+        float spot_fall[3], spot_dir[4]; /* 0x1040 / 0x104C */
+        float pos[3], att[3];            /* 0x105C / 0x1068 (eye space) */
+    } light[4];
+    uint32_t light_mask;        /* 0x03BC: 2 bits per light, 0 off 1 inf 2 local 3 spot */
+    uint32_t light_control;     /* 0x0294 */
+    uint32_t color_material;    /* 0x0298 */
+    uint32_t spec_enable;       /* 0x03B8 */
+    uint32_t normalize_en;      /* 0x03A4 */
+    float    scene_ambient[3];  /* 0x0A10 */
+    float    emission[3];       /* 0x03A8 */
+    float    material_alpha;    /* 0x03B4 */
+    float    spec_params[6];    /* 0x09E0 */
 
     /* Init flag */
     int initialized;
@@ -1071,9 +1091,60 @@ static uint32_t nv_pack_color(const float c[4])
            ((uint32_t)g << 8)  |  (uint32_t)b;
 }
 
+/* Fixed-function vertex lighting (NV2A / Xbox D3D8 fixed pipeline).
+ *
+ * The runtime uploads light directions/positions already in eye space and
+ * folds the material colours into the per-light colours. Eye-space position
+ * and normal come from the model-view matrix (wire row i = coefficients of
+ * output i, the same convention as the composite). DOA3's world matrices are
+ * rigid (|row| = 1 in every model-view matrix the game uploads), so the normal can use the same
+ * rows as the position. Output: D0 = clamp(sceneAmbient + emission +
+ * sum_i att_i * (amb_i + dif_i * max(0, N.L_i))), alpha = material alpha.
+ * Specular (D1) is not produced yet. */
+static uint32_t nv_light_vertex(const float pos[4], const float nrm[3])
+{
+    const float *mv = g_mv;
+    float P[3], N[3], col[3], len;
+    int i, k;
+    for (i = 0; i < 3; i++) {
+        P[i] = pos[0] * mv[i * 4 + 0] + pos[1] * mv[i * 4 + 1] + pos[2] * mv[i * 4 + 2] + mv[i * 4 + 3];
+        N[i] = nrm[0] * mv[i * 4 + 0] + nrm[1] * mv[i * 4 + 1] + nrm[2] * mv[i * 4 + 2];
+    }
+    len = sqrtf(N[0] * N[0] + N[1] * N[1] + N[2] * N[2]);
+    if (len > 1e-12f) { N[0] /= len; N[1] /= len; N[2] /= len; }
+    for (k = 0; k < 3; k++) col[k] = g_pg.scene_ambient[k] + g_pg.emission[k];
+    for (i = 0; i < 4; i++) {
+        uint32_t type = (g_pg.light_mask >> (2 * i)) & 3;
+        float L[3], att = 1.0f, ndotl;
+        if (!type) continue;
+        if (type == 1) {
+            L[0] = g_pg.light[i].dir[0]; L[1] = g_pg.light[i].dir[1]; L[2] = g_pg.light[i].dir[2];
+            len = sqrtf(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+            if (len > 1e-12f) { L[0] /= len; L[1] /= len; L[2] /= len; }
+        } else {
+            float d;
+            L[0] = g_pg.light[i].pos[0] - P[0]; L[1] = g_pg.light[i].pos[1] - P[1]; L[2] = g_pg.light[i].pos[2] - P[2];
+            d = sqrtf(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+            if (d <= 1e-12f) continue;
+            L[0] /= d; L[1] /= d; L[2] /= d;
+            {   float a0 = g_pg.light[i].att[0], a1 = g_pg.light[i].att[1], a2 = g_pg.light[i].att[2];
+                float den = a0 + a1 * d + a2 * d * d;
+                att = (den > 1e-12f) ? 1.0f / den : 1.0f; }
+            if (g_pg.light[i].range > 0.0f && d > g_pg.light[i].range) att = 0.0f;
+        }
+        ndotl = N[0] * L[0] + N[1] * L[1] + N[2] * L[2];
+        if (ndotl < 0.0f) ndotl = 0.0f;
+        for (k = 0; k < 3; k++)
+            col[k] += att * (g_pg.light[i].amb[k] + g_pg.light[i].dif[k] * ndotl);
+    }
+    {   float c4[4] = { col[0], col[1], col[2], g_pg.material_alpha };
+        return nv_pack_color(c4);
+    }
+}
+
 static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
 {
-    float pos[4], tex[4], col[4];
+    float pos[4], tex[4], col[4], nrm[4];
     uint32_t colour = 0xFFFFFFFFu;
 
     memset(v, 0, sizeof(*v));
@@ -1151,6 +1222,12 @@ static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
         {   extern float g_fix_in0[4];
             memcpy(g_fix_in0, pos, sizeof g_fix_in0); }
         nv_transform_position(pos, v);
+        /* Fixed-function lighting: only when the guest enabled it, has a
+         * light on, and supplies normals; otherwise diffuse stays white as
+         * before. */
+        if (g_pg.lighting && (g_pg.light_mask & 0xFF) && nv_composite_usable() &&
+            nv_fetch_attr(2, index, nrm, NULL))
+            v->color = nv_light_vertex(pos, nrm);
     }
     if (nv_fetch_attr(3, index, col, &colour))
         v->color = colour;
@@ -1366,7 +1443,26 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
         /* DOA3 (no Global.txd): bind a dynamic texture built from the guest
          * memory the game pointed SET_TEXTURE_OFFSET at (the movie frame
          * surface, loading screens, etc.). Vertex-color-only when absent. */
-        IDirect3DTexture8 *dtex = get_dynamic_texture(dev);
+        IDirect3DTexture8 *dtex;
+        {   /* The reflective floor samples the reflection render target. Its
+             * guest memory is never written (the pass rendered on the host),
+             * so bind the host offscreen texture instead of uploading RAM. */
+            extern uint32_t g_doa3_offrt_off; extern int d3d8_BindOffscreenTexture(UINT stage);
+            if (g_doa3_offrt_off && g_pg.tex[0].offset == g_doa3_offrt_off && !d3d8_OffscreenTargetActive()) {
+                int use_diffuse = !diffuse_all_zero;
+                dev->lpVtbl->SetTexture(dev, 0, NULL);
+                if (d3d8_BindOffscreenTexture(0)) {
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, use_diffuse ? 4 : 2);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 2 /*SELECTARG1*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, use_diffuse ? 0 : 2);
+                    nv_apply_tex_address(dev, 0);
+                    return;
+                }
+            }
+        }
+        dtex = get_dynamic_texture(dev);
         if (dtex) {
             /* DOA3 configures the pixel pipeline through the register
              * combiners, which this translator does not implement; it
@@ -1614,7 +1710,30 @@ static void nv_sync_render_target(void)
      * surface and then classed the frame buffer itself as offscreen. */
     unsigned pw = (g_pg_surf_pitch & 0xFFFF) / 4;
     unsigned h  = (g_pg.surface_clip_v >> 16) & 0xFFFF;
+    extern uint32_t g_doa3_offrt_offs[8]; extern int g_doa3_offrt_n;
     if (pw < 16 || pw > 2048) return;             /* pitch not programmed yet */
+    if (g_doa3_offrt_n) {
+        /* Colour-offset routing: the SetRenderTarget wrapper records every
+         * texture surface the game renders into (the reflection target in
+         * stage 0x3F is 720x480 with the frame buffer's pitch, which the
+         * pitch rule below misrouted onto the swap chain). Everything else --
+         * including both flip buffers, which rotate at Swap without a
+         * SetRenderTarget call -- is the swap chain. */
+        int k, is_fb = 1;
+        for (k = 0; k < g_doa3_offrt_n; k++) if (g_doa3_offrt_offs[k] == g_pg_surf_coff) is_fb = 0;
+        if (is_fb) {
+            if (d3d8_OffscreenTargetActive()) d3d8_RestoreDefaultTarget();
+        } else {
+            /* Full-size targets take the host back-buffer size so the
+             * viewport (which stays the host's) covers the whole texture. */
+            unsigned w = (g_pg.surface_clip_h >> 16) & 0xFFFF;
+            if (w < 16 || w > 2048) w = pw;
+            if (h < 16 || h > 2048) h = w;
+            if (w >= 512) { w = d3d8_GetBackbufferWidth(); h = d3d8_GetBackbufferHeight(); }
+            d3d8_SetOffscreenTarget(w, h);
+        }
+        return;
+    }
     if (pw >= 512) {
         if (d3d8_OffscreenTargetActive()) d3d8_RestoreDefaultTarget();
     } else {
@@ -2247,6 +2366,33 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
             fflush(stderr); }
         return 1;
     }
+    /* Fixed-function lighting state (record only; the draw path consumes it
+     * and the methods keep their previous handled/ignored classification). */
+    if (method == 0x0314) g_pg.lighting = param;
+    if (method >= 0x1000 && method <= 0x11FC) {
+        int li = (method - 0x1000) / 0x80, o = (method - 0x1000) % 0x80;
+        float f = u2f(param);
+        if      (o < 0x0C) g_pg.light[li].amb[o / 4] = f;
+        else if (o < 0x18) g_pg.light[li].dif[(o - 0x0C) / 4] = f;
+        else if (o < 0x24) g_pg.light[li].spec[(o - 0x18) / 4] = f;
+        else if (o < 0x28) g_pg.light[li].range = f;
+        else if (o < 0x34) g_pg.light[li].half[(o - 0x28) / 4] = f;
+        else if (o < 0x40) g_pg.light[li].dir[(o - 0x34) / 4] = f;
+        else if (o < 0x4C) g_pg.light[li].spot_fall[(o - 0x40) / 4] = f;
+        else if (o < 0x5C) g_pg.light[li].spot_dir[(o - 0x4C) / 4] = f;
+        else if (o < 0x68) g_pg.light[li].pos[(o - 0x5C) / 4] = f;
+        else if (o < 0x74) g_pg.light[li].att[(o - 0x68) / 4] = f;
+    }
+    if (method == 0x03BC) g_pg.light_mask = param;
+    if (method == 0x0294) g_pg.light_control = param;
+    if (method == 0x0298) g_pg.color_material = param;
+    if (method == 0x03B8) g_pg.spec_enable = param;
+    if (method == 0x03A4) g_pg.normalize_en = param;
+    if (method >= 0x0A10 && method <= 0x0A18) g_pg.scene_ambient[(method - 0x0A10) / 4] = u2f(param);
+    if (method >= 0x03A8 && method <= 0x03B0) g_pg.emission[(method - 0x03A8) / 4] = u2f(param);
+    if (method == 0x03B4) g_pg.material_alpha = u2f(param);
+    if (method >= 0x09E0 && method <= 0x09F4) g_pg.spec_params[(method - 0x09E0) / 4] = u2f(param);
+
     if (method >= 0x0680 && method <= 0x06BC) {          /* SET_COMPOSITE_MATRIX */
         g_pg.composite[(method - 0x0680) / 4] = u2f(param);
         g_pg.composite_seen = 1;

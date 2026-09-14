@@ -67993,7 +67993,7 @@ loc_000A8DF1: ;
     fp_st1() *= fp_top(); fp_pop(); /* fmul */
     fp_st1() += fp_top(); fp_pop(); /* faddp */
     fp_st1() += fp_top(); fp_pop(); /* faddp */
-    _fpu_cmp = (fp_top() < fp_st1()) ? -1 : (fp_top() > fp_st1()) ? 1 : 0; /* fcomp st(2) */
+    _fpu_cmp = (fp_top() < g_fp_stack[(g_fp_top + 2) & 7]) ? -1 : (fp_top() > g_fp_stack[(g_fp_top + 2) & 7]) ? 1 : 0; /* fcomp st(2) */
     /* fnstsw ax - store FPU status word */
     /* fstp st(0) */
     /* test HI8(eax), 5 - flags set for next jcc */

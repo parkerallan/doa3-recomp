@@ -675,6 +675,26 @@ void d3d8_RestoreDefaultTarget(void)
 
 int d3d8_OffscreenTargetActive(void) { return g_off_active; }
 
+/* DOA3: sample the offscreen target from a later draw (the reflective floor
+ * binds the reflection surface as its texture). The texture is created with
+ * BIND_SHADER_RESOURCE above; the view is made on first use and dropped when
+ * the target is recreated. Refuses while the target is still bound for
+ * rendering, which D3D11 would silently unbind. */
+static ID3D11ShaderResourceView *g_off_srv;
+static ID3D11Texture2D *g_off_srv_tex;
+int d3d8_BindOffscreenTexture(UINT stage)
+{
+    if (!g_off_tex || g_off_active || !g_device_state.d3d11_device) return 0;
+    if (g_off_srv && g_off_srv_tex != g_off_tex) { ID3D11ShaderResourceView_Release(g_off_srv); g_off_srv = NULL; }
+    if (!g_off_srv) {
+        if (FAILED(ID3D11Device_CreateShaderResourceView(g_device_state.d3d11_device, (ID3D11Resource *)g_off_tex, NULL, &g_off_srv)))
+            { g_off_srv = NULL; return 0; }
+        g_off_srv_tex = g_off_tex;
+    }
+    ID3D11DeviceContext_PSSetShaderResources(g_device_state.d3d11_context, stage, 1, &g_off_srv);
+    return 1;
+}
+
 static HRESULT __stdcall dev_Clear(IDirect3DDevice8 *self, DWORD Count, const D3DRECT *pRects, DWORD Flags, D3DCOLOR Color, float Z, DWORD Stencil)
 {
     (void)self; (void)Count; (void)pRects; (void)Stencil;

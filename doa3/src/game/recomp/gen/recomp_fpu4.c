@@ -105825,7 +105825,7 @@ loc_000A8DF1: ;
     fp_top() = fp_top() * (double)MEMF(esp + 0x18); /* fmul mem */
     g_fp_stack[(g_fp_top + 1) & 7] = g_fp_stack[(g_fp_top + 1) & 7] + fp_top(); fp_pop(); /* faddp st(1) */
     g_fp_stack[(g_fp_top + 1) & 7] = g_fp_stack[(g_fp_top + 1) & 7] + fp_top(); fp_pop(); /* faddp st(1) */
-    _fpu_cmp = (fp_top() < fp_st1()) ? -1 : (fp_top() > fp_st1()) ? 1 : 0; fp_popp(); /* fcomp st(2) */
+    _fpu_cmp = (fp_top() < g_fp_stack[(g_fp_top + 2) & 7]) ? -1 : (fp_top() > g_fp_stack[(g_fp_top + 2) & 7]) ? 1 : 0; fp_popp(); /* fcomp st(2) */
     eax = (eax & 0xFFFF0000u) | ((uint32_t)((_fpu_cmp < 0 ? 0x01 : 0) | (_fpu_cmp == 0 ? 0x40 : 0)) << 8); /* fnstsw ax: full AX write (C0/C3 in AH, exception flags modelled clear); the AH-only lift left stale AL bits in guards that compare eax (heap sort in sub_00159010) */
     fp_popp(); /* fstp st(0) = pop */
     /* test HI8(eax), 5 - flags set for next jcc */
