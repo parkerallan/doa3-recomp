@@ -1484,6 +1484,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_A4R4G4B4 ||
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_A8 ||
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_A8L8 ||
+                 g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT1 ||
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT3 ||
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT5);
             dev->lpVtbl->SetTexture(dev, 0, (IDirect3DBaseTexture8 *)dtex);
@@ -1491,12 +1492,14 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                                               use_diffuse ? 4 /*MODULATE*/ : 2 /*SELECTARG1*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
-            if (use_diffuse && tex_has_alpha && g_pg.blend_enable) {
-                /* A blended draw whose image has its own alpha wants
-                 * texture * diffuse, the Xbox default. Selecting the diffuse
-                 * alpha alone made the 2D overlay's transparent surround
-                 * opaque, so the corner logo drew as a black box with the
-                 * lettering inside it. */
+            if (use_diffuse && tex_has_alpha && (g_pg.blend_enable || g_pg.alpha_test)) {
+                /* A draw whose image has its own alpha wants texture *
+                 * diffuse, the Xbox default. Selecting the diffuse alpha
+                 * alone made the 2D overlay's transparent surround opaque,
+                 * so the corner logo drew as a black box with the lettering
+                 * inside it -- and it did the same to every alpha-tested
+                 * DXT1 surface: the alpha test is the other consumer of the
+                 * texture's alpha, not just blending. */
                 dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 4 /*MODULATE*/);
                 dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, 2 /*TEXTURE*/);
                 dev->lpVtbl->SetTextureStageState(dev, 0, 6 /*ALPHAARG2*/, 0 /*DIFFUSE*/);
