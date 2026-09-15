@@ -1487,10 +1487,20 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT1 ||
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT3 ||
                  g_pg.dyn_fmt == (uint32_t)D3DFMT_DXT5);
+            /* An alpha-only image carries no colour: A8 samples as
+             * (0,0,0,A). The glyph atlas the in-scene dialogue is drawn from
+             * is one of these -- 128x128 A8, one quad per character, diffuse
+             * 0xFFFFFF with the fade in the alpha byte -- so modulating the
+             * texture's RGB into it painted every letter black with the
+             * right shape. The colour has to come from the diffuse, and only
+             * the alpha from the image. */
+            int tex_alpha_only = (g_pg.dyn_fmt == (uint32_t)D3DFMT_A8);
             dev->lpVtbl->SetTexture(dev, 0, (IDirect3DBaseTexture8 *)dtex);
             dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/,
-                                              use_diffuse ? 4 /*MODULATE*/ : 2 /*SELECTARG1*/);
-            dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
+                                              (tex_alpha_only || !use_diffuse)
+                                                  ? 2 /*SELECTARG1*/ : 4 /*MODULATE*/);
+            dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/,
+                                              tex_alpha_only ? 0 /*DIFFUSE*/ : 2 /*TEXTURE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
             if (use_diffuse && tex_has_alpha && (g_pg.blend_enable || g_pg.alpha_test)) {
                 /* A draw whose image has its own alpha wants texture *
