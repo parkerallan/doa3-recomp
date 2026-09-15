@@ -215,8 +215,8 @@ class Disassembler:
             return self.analysis_json
 
         candidates = [
-            Path(self.xbe_path).parent / "burnout3_analysis.json",
-            Path("tools/xbe_parser/burnout3_analysis.json"),
+            Path(self.xbe_path).parent / "doa3_analysis.json",
+            Path("tools/xbe_parser/doa3_analysis.json"),
         ]
         for p in candidates:
             if p.exists():

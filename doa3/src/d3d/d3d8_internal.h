@@ -5,8 +5,8 @@
  * Not part of the public API - only included by d3d8_*.c files.
  */
 
-#ifndef BURNOUT3_D3D8_INTERNAL_H
-#define BURNOUT3_D3D8_INTERNAL_H
+#ifndef DOA3_D3D8_INTERNAL_H
+#define DOA3_D3D8_INTERNAL_H
 
 #define COBJMACROS
 #include "d3d8_xbox.h"
@@ -164,4 +164,4 @@ void    d3d8_states_apply(void);
 /* Create sampler state from TSS and apply to slot */
 void    d3d8_states_apply_sampler(DWORD stage);
 
-#endif /* BURNOUT3_D3D8_INTERNAL_H */
+#endif /* DOA3_D3D8_INTERNAL_H */

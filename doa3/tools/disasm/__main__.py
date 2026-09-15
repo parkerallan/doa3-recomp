@@ -37,7 +37,7 @@ def main():
     parser.add_argument(
         "--analysis-json",
         default=None,
-        help="Path to burnout3_analysis.json (auto-detected if not specified)",
+        help="Path to doa3_analysis.json (auto-detected if not specified)",
     )
     parser.add_argument(
         "--text-only",

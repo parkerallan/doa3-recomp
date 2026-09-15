@@ -2,8 +2,8 @@
  * kernel_path.c - Xbox→Windows Path Translation
  *
  * Translates Xbox device-style paths to Windows filesystem paths:
- *   \Device\CdRom0\  → <game_dir>\Burnout 3 Takedown\
- *   D:\               → <game_dir>\Burnout 3 Takedown\
+ *   \Device\CdRom0\  → <game_dir>\doa3gamefiles\
+ *   D:\               → <game_dir>\doa3gamefiles\
  *   T:\               → <save_dir>\TitleData\
  *   U:\               → <save_dir>\UserData\
  *   Z:\               → <save_dir>\Cache\
@@ -26,9 +26,9 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
     if (game_dir) {
         MultiByteToWideChar(CP_UTF8, 0, game_dir, -1, s_game_dir, MAX_PATH);
     } else {
-        /* Default: current directory + "Burnout 3 Takedown" */
+        /* Default: current directory + "doa3gamefiles" */
         GetCurrentDirectoryW(MAX_PATH, s_game_dir);
-        wcscat_s(s_game_dir, MAX_PATH, L"\\Burnout 3 Takedown");
+        wcscat_s(s_game_dir, MAX_PATH, L"\\doa3gamefiles");
     }
 
     if (save_dir) {

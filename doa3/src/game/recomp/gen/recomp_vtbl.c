@@ -1569,6 +1569,7 @@ loc_00032640: ;
  */
 void sub_000326F0(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_000326F0: ;
@@ -1585,9 +1586,10 @@ loc_000326F0: ;
 
 loc_0003271A: ;
     /* cmp eax, 2 - flags set for next jcc */
+    _rcc = (CMP_EQ(eax, 2));  /* DOA3 bug #14: the guest sets these flags at 0003271A and the branch at 0003272A reads them; eax is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     eax = MEM32(ecx + 0x98);
     eax = ZX8(MEM8(eax + 0xB0E));
-    if (CMP_EQ(eax, 2)) goto loc_0003272E; /* je: equal / zero */
+    if (_rcc) goto loc_0003272E; /* je: equal / zero */
 
 loc_0003272C: ;
     eax = ~eax;
@@ -1617,6 +1619,7 @@ loc_00032731: ;
  */
 void sub_00032760(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_00032760: ;
@@ -1633,9 +1636,10 @@ loc_00032772: ;
 
 loc_0003277A: ;
     /* cmp eax, 2 - flags set for next jcc */
+    _rcc = (CMP_EQ(eax, 2));  /* DOA3 bug #14: the guest sets these flags at 0003277A and the branch at 0003278A reads them; eax is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     eax = MEM32(ecx + 0x98);
     eax = ZX8(MEM8(eax + 0xB0E));
-    if (CMP_EQ(eax, 2)) goto loc_0003278E; /* je: equal / zero */
+    if (_rcc) goto loc_0003278E; /* je: equal / zero */
 
 loc_0003278C: ;
     eax = ~eax;

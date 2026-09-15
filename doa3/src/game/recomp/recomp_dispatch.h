@@ -1,5 +1,5 @@
 /**
- * Burnout 3: Takedown - Recompiled Function Dispatch
+ * Dead or Alive 3 - Recompiled Function Dispatch
  *
  * Provides lookup from original Xbox virtual addresses to
  * translated C function pointers. Used for:

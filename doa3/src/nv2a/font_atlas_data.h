@@ -1,6 +1,6 @@
 /* Auto-generated: DXT5 font atlas captured from xemu VRAM.
  * 256x256 DXT5, 65536 bytes from VRAM offset 0x021C4100
- * Used for menu text rendering in Burnout 3.
+ * Used for overlay text rendering.
  */
 
 #define FONT_ATLAS_WIDTH 256

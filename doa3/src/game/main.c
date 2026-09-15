@@ -60,7 +60,7 @@ static HWND doa3_create_window(void)
     wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
     RegisterClassA(&wc);
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    HWND h = CreateWindowExA(0, "DOA3Window", "Dead or Alive 3 (recomp)",
+    HWND h = CreateWindowExA(0, "DOA3Window", "Dead or Alive 3",
                              WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top, NULL, NULL,
                              wc.hInstance, NULL);

@@ -1,5 +1,5 @@
 /**
- * Burnout 3 - Recompiled code chunk 9
+ * Dead or Alive 3 - Recompiled code chunk 9
  * Functions: 1000 (0x0017BDB0 - 0x001917D8)
  */
 
@@ -2042,6 +2042,7 @@ loc_0017CC2A: ;
  */
 void sub_0017CC30(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_0017CC30: ;
@@ -2098,8 +2099,9 @@ loc_0017CC81: ;
 
 loc_0017CC95: ;
     /* cmp MEM32(esp + 0x10), esi - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(esp + 0x10), esi));  /* DOA3 bug #14: the guest sets these flags at 0017CC95 and the branch at 0017CC9A reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
-    if (CMP_EQ(MEM32(esp + 0x10), esi)) goto loc_0017CCA3; /* je: equal / zero */
+    if (_rcc) goto loc_0017CCA3; /* je: equal / zero */
 
 loc_0017CC9C: ;
     esi = 1;
@@ -18293,6 +18295,7 @@ loc_00182E0B: ;
  */
 void sub_00182E1A(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -18606,8 +18609,9 @@ loc_0018305A: ;
     eax = MEM32(esp + 0x14);
     ecx = 0; /* xor self */
     /* test esi, esi - flags set for next jcc */
+    _rcc = (TEST_Z(esi, esi));  /* DOA3 bug #14: the guest sets these flags at 00183064 and the branch at 0018306A reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     esi = MEM32(esp + 0x1C);
-    SET_LO8(ecx, (TEST_Z(esi, esi)) ? 1 : 0); /* sete */
+    SET_LO8(ecx, (_rcc) ? 1 : 0); /* sete */
     ebp = ebp << 0xF;
     ebp = ebp | eax;
     ebp = ebp << 0xD;
@@ -53459,6 +53463,7 @@ loc_0018E298: ;
  */
 void sub_0018E29A(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_0018E29A: ;
@@ -53469,10 +53474,11 @@ loc_0018E29A: ;
 
 loc_0018E2A3: ;
     /* cmp MEM32(esp + 0x14), 0 - flags set for next jcc */
+    _rcc = (CMP_NE(MEM32(esp + 0x14), 0));  /* DOA3 bug #14: the guest sets these flags at 0018E2A3 and the branch at 0018E2B9 reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, ecx);
     MEM32(0xBF4CE8) = 1;
     MEM8(0xBF4CE4) = LO8(ebx);
-    if (CMP_NE(MEM32(esp + 0x14), 0)) goto loc_0018E30D; /* jne: not equal / not zero */
+    if (_rcc) goto loc_0018E30D; /* jne: not equal / not zero */
 
 loc_0018E2BB: ;
     ecx = MEM32(0xC27F54);
@@ -60325,6 +60331,7 @@ loc_00190225: ;
  */
 void sub_00190228(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
 
@@ -60463,8 +60470,9 @@ loc_00190318: ;
 
 loc_0019031E: ;
     /* cmp MEM32(ebp + 0xC), edi - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(ebp + 0xC), edi));  /* DOA3 bug #14: the guest sets these flags at 0019031E and the branch at 00190322 reads them; edi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
-    if (CMP_EQ(MEM32(ebp + 0xC), edi)) goto loc_0019032A; /* je: equal / zero */
+    if (_rcc) goto loc_0019032A; /* je: equal / zero */
 
 loc_00190324: ;
     MEM32(esi + 0xC) = MEM32(esi + 0xC) | 0x20;
@@ -64710,6 +64718,7 @@ loc_001916D9: ;
  */
 void sub_001916E0(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -64731,8 +64740,9 @@ loc_001916F3: ;
 loc_001916F7: ;
     eax = 0; /* xor self */
     /* test esi, esi - flags set for next jcc */
+    _rcc = (TEST_Z(esi, esi));  /* DOA3 bug #14: the guest sets these flags at 001916F9 and the branch at 001916FC reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, esi);
-    SET_LO8(eax, (TEST_Z(esi, esi)) ? 1 : 0); /* sete */
+    SET_LO8(eax, (_rcc) ? 1 : 0); /* sete */
     POP32(esp, ebx);
     esp = ebp;
     POP32(esp, ebp); /* leave */

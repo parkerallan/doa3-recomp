@@ -289,7 +289,7 @@ ULONG_PTR xbox_resolve_ordinal(ULONG ordinal)
  *
  * The 112 kernel ordinals imported by Dead or Alive 3, in thunk table order.
  * Extracted from the XBE kernel thunk table at VA 0x001ED0E0
- * (tools/xbe_parser/burnout3_analysis.json, sorted by thunk_addr).
+ * (tools/xbe_parser/doa3_analysis.json, sorted by thunk_addr).
  * ============================================================================ */
 
 static const ULONG g_thunk_ordinals[XBOX_KERNEL_THUNK_TABLE_SIZE] = {

@@ -15,8 +15,8 @@
  * game/RW code can compile against our D3D11-backed implementation.
  */
 
-#ifndef BURNOUT3_D3D8_XBOX_H
-#define BURNOUT3_D3D8_XBOX_H
+#ifndef DOA3_D3D8_XBOX_H
+#define DOA3_D3D8_XBOX_H
 
 #include <stdint.h>
 #include <windows.h>
@@ -784,4 +784,4 @@ void d3d8_PresentFrame(void);
 }
 #endif
 
-#endif /* BURNOUT3_D3D8_XBOX_H */
+#endif /* DOA3_D3D8_XBOX_H */

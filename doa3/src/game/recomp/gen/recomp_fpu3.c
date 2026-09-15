@@ -1586,6 +1586,7 @@ loc_00107C51: ;
  */
 void sub_00107CFC(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     int _fpu_cmp = 0; /* FPU compare result: -1/0/1 */
@@ -1687,8 +1688,9 @@ loc_00107DD5: ;
     _fpu_cmp = (fp_top() < (double)MEMF(0x20776C)) ? -1 : (fp_top() > (double)MEMF(0x20776C)) ? 1 : 0; fp_popp(); /* fcomp dword ptr [0x20776c] */
     eax = (eax & 0xFFFF0000u) | ((uint32_t)((_fpu_cmp < 0 ? 0x01 : 0) | (_fpu_cmp == 0 ? 0x40 : 0)) << 8); /* fnstsw ax: full AX write (C0/C3 in AH, exception flags modelled clear); the AH-only lift left stale AL bits in guards that compare eax (heap sort in sub_00159010) */
     /* test HI8(eax), 0x41 - flags set for next jcc */
+    _rcc = (TEST_NZ(HI8(eax), 0x41));  /* DOA3 bug #14: the guest sets these flags at 00107DE5 and the branch at 00107DEB reads them; eax is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     eax = (uint32_t)(int32_t)SMEM16(edx);
-    if (TEST_NZ(HI8(eax), 0x41)) goto loc_00107E06; /* jne: not equal / not zero */
+    if (_rcc) goto loc_00107E06; /* jne: not equal / not zero */
 
 loc_00107DED: ;
     ecx = MEM32(0x387344);
@@ -2247,6 +2249,7 @@ loc_001469C7: ;
  */
 void sub_0004D580(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     #define fp_push(v) (g_fp_stack[--g_fp_top & 7] = (v))
@@ -2439,9 +2442,10 @@ loc_0004D734: ;
     POP32(esp, edi);
     fp_popp(); /* fstp st(0) = pop */
     /* cmp esi, 1 - flags set for next jcc */
+    _rcc = (CMP_NE(esi, 1));  /* DOA3 bug #14: the guest sets these flags at 0004D737 and the branch at 0004D73C reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, esi);
     POP32(esp, ebx);
-    if (CMP_NE(esi, 1)) goto loc_0004D774; /* jne: not equal / not zero */
+    if (_rcc) goto loc_0004D774; /* jne: not equal / not zero */
 
 loc_0004D73E: ;
     if (CMP_NE(MEM8(edx + 0x24), 7)) goto loc_0004D771; /* jne: not equal / not zero */

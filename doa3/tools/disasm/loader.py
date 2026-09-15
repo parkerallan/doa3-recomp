@@ -141,11 +141,11 @@ def _find_analysis_json(xbe_path: Path) -> Optional[Path]:
     """Auto-detect the analysis JSON file location."""
     candidates = [
         # Same directory as XBE
-        xbe_path.parent / "burnout3_analysis.json",
+        xbe_path.parent / "doa3_analysis.json",
         # In the xbe_parser tool directory
-        Path("tools/xbe_parser/burnout3_analysis.json"),
+        Path("tools/xbe_parser/doa3_analysis.json"),
         # Relative to repo root
-        xbe_path.parent.parent / "tools" / "xbe_parser" / "burnout3_analysis.json",
+        xbe_path.parent.parent / "tools" / "xbe_parser" / "doa3_analysis.json",
     ]
     for p in candidates:
         if p.exists():
@@ -159,7 +159,7 @@ def load_image(xbe_path: str, analysis_json: Optional[str] = None) -> BinaryImag
 
     Args:
         xbe_path: Path to the .xbe file.
-        analysis_json: Optional path to burnout3_analysis.json.
+        analysis_json: Optional path to doa3_analysis.json.
                        If None, auto-detected from standard locations.
 
     Returns:

@@ -20,7 +20,7 @@ set(NV2A_SOURCES
     ${NV2A_DIR}/nv2a_pb_test.c
     ${NV2A_DIR}/nv2a_pgraph_d3d11.c
     ${NV2A_DIR}/nv2a_vertex_program.c
-    ${NV2A_DIR}/nv2a_pb_replay.c
+    # nv2a_pb_replay.c -- Burnout 3 menu-replay harness, unreachable from DOA3
 )
 
 # Game host sources

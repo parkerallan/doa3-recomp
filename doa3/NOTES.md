@@ -413,7 +413,7 @@ nothing.
 A full pipeline regeneration can overwrite generated fixes. Run from `doa3/`:
 
 ```powershell
-py -3 tools/xbe_parser/xbe_parser.py ../doa3gamefiles/default.xbe --json tools/xbe_parser/burnout3_analysis.json --quiet
+py -3 tools/xbe_parser/xbe_parser.py ../doa3gamefiles/default.xbe --json tools/xbe_parser/doa3_analysis.json --quiet
 py -3 -m tools.disasm ../doa3gamefiles/default.xbe --force -v
 py -3 -m tools.func_id ../doa3gamefiles/default.xbe
 py -3 -m tools.recomp ../doa3gamefiles/default.xbe --all --split 1000

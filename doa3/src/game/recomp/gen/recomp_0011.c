@@ -1,5 +1,5 @@
 /**
- * Burnout 3 - Recompiled code chunk 11
+ * Dead or Alive 3 - Recompiled code chunk 11
  * Functions: 858 (0x001C7635 - 0x001ED09C)
  */
 
@@ -940,6 +940,7 @@ loc_001C7A99: ;
  */
 void sub_001C7A9D(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001C7A9D: ;
@@ -953,8 +954,9 @@ loc_001C7AA3: ;
 
 loc_001C7AAE: ;
     /* test esi, esi - flags set for next jcc */
+    _rcc = (TEST_Z(esi, esi));  /* DOA3 bug #14: the guest sets these flags at 001C7AAE and the branch at 001C7AB1 reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, esi);
-    if (TEST_Z(esi, esi)) goto loc_001C7ABE; /* je: equal / zero */
+    if (_rcc) goto loc_001C7ABE; /* je: equal / zero */
 
 loc_001C7AB3: ;
     { uint32_t _icall_esp = g_esp;
@@ -4481,6 +4483,7 @@ loc_001C8D52: ;
  */
 void sub_001C8D57(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001C8D57: ;
@@ -4493,8 +4496,9 @@ loc_001C8D57: ;
     esi--;
     esi = (uint32_t)((int32_t)esi >> 1);
     /* cmp edx, MEM32(eax + esi * 4 + 0x10) - flags set for next jcc */
+    _rcc = (CMP_NE(edx, MEM32(eax + esi * 4 + 0x10)));  /* DOA3 bug #14: the guest sets these flags at 001C8D73 and the branch at 001C8D78 reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, esi);
-    if (CMP_NE(edx, MEM32(eax + esi * 4 + 0x10))) goto loc_001C8D8A; /* jne: not equal / not zero */
+    if (_rcc) goto loc_001C8D8A; /* jne: not equal / not zero */
 
 loc_001C8D7A: ;
     edx = eax + 0xBC;
@@ -4517,6 +4521,7 @@ loc_001C8D8A: ;
  */
 void sub_001C8D8D(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001C8D8D: ;
@@ -4529,9 +4534,10 @@ loc_001C8D8D: ;
     MEM32(edi) = MEM32(esi); esi += 4; edi += 4; /* movsd */
     MEM8(ecx + 0x1B4) = MEM8(ecx + 0x1B4) | 0xFF;
     /* cmp MEM32(esp + 0x10), 0 - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(esp + 0x10), 0));  /* DOA3 bug #14: the guest sets these flags at 001C8DA3 and the branch at 001C8DAA reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
-    if (CMP_EQ(MEM32(esp + 0x10), 0)) goto loc_001C8DB3; /* je: equal / zero */
+    if (_rcc) goto loc_001C8DB3; /* je: equal / zero */
 
 loc_001C8DAC: ;
     PUSH32(esp, 0);
@@ -4551,6 +4557,7 @@ loc_001C8DB3: ;
  */
 void sub_001C8DB8(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001C8DB8: ;
@@ -4563,9 +4570,10 @@ loc_001C8DB8: ;
     MEM32(edi) = MEM32(esi); esi += 4; edi += 4; /* movsd */
     MEM32(ecx + 0x1B4) = MEM32(ecx + 0x1B4) | 0x40;
     /* cmp MEM32(esp + 0x10), 0 - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(esp + 0x10), 0));  /* DOA3 bug #14: the guest sets these flags at 001C8DCE and the branch at 001C8DD5 reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
-    if (CMP_EQ(MEM32(esp + 0x10), 0)) goto loc_001C8DDE; /* je: equal / zero */
+    if (_rcc) goto loc_001C8DDE; /* je: equal / zero */
 
 loc_001C8DD7: ;
     PUSH32(esp, 0);
@@ -4585,6 +4593,7 @@ loc_001C8DDE: ;
  */
 void sub_001C8DE3(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001C8DE3: ;
@@ -4599,9 +4608,10 @@ loc_001C8DE3: ;
     esi += ecx * 4; edi += ecx * 4; ecx = 0; /* rep movsd */
     MEM16(eax + 0x1B4) = MEM16(eax + 0x1B4) | 0x180;
     /* cmp MEM32(esp + 0x10), 0 - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(esp + 0x10), 0));  /* DOA3 bug #14: the guest sets these flags at 001C8DFF and the branch at 001C8E06 reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
-    if (CMP_EQ(MEM32(esp + 0x10), 0)) goto loc_001C8E11; /* je: equal / zero */
+    if (_rcc) goto loc_001C8E11; /* je: equal / zero */
 
 loc_001C8E08: ;
     PUSH32(esp, 0);
@@ -11169,6 +11179,7 @@ loc_001CB45C: ;
  */
 void sub_001CB461(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001CB461: ;
@@ -11181,9 +11192,10 @@ loc_001CB461: ;
     MEM32(edi) = MEM32(esi); esi += 4; edi += 4; /* movsd */
     MEM8(ecx + 0x80) = MEM8(ecx + 0x80) | 0xFF;
     /* cmp MEM32(esp + 0x10), 0 - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(esp + 0x10), 0));  /* DOA3 bug #14: the guest sets these flags at 001CB474 and the branch at 001CB47B reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
-    if (CMP_EQ(MEM32(esp + 0x10), 0)) goto loc_001CB484; /* je: equal / zero */
+    if (_rcc) goto loc_001CB484; /* je: equal / zero */
 
 loc_001CB47D: ;
     PUSH32(esp, 0);
@@ -11203,6 +11215,7 @@ loc_001CB484: ;
  */
 void sub_001CB489(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001CB489: ;
@@ -11215,9 +11228,10 @@ loc_001CB489: ;
     MEM32(edi) = MEM32(esi); esi += 4; edi += 4; /* movsd */
     MEM32(ecx + 0x80) = MEM32(ecx + 0x80) | 0x40;
     /* cmp MEM32(esp + 0x10), 0 - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(esp + 0x10), 0));  /* DOA3 bug #14: the guest sets these flags at 001CB49C and the branch at 001CB4A3 reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
-    if (CMP_EQ(MEM32(esp + 0x10), 0)) goto loc_001CB4AC; /* je: equal / zero */
+    if (_rcc) goto loc_001CB4AC; /* je: equal / zero */
 
 loc_001CB4A5: ;
     PUSH32(esp, 0);
@@ -15600,6 +15614,7 @@ loc_001CCCE1: ;
  */
 void sub_001CCCE8_gen(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001CCCE8: ;
@@ -15608,9 +15623,10 @@ loc_001CCCE8: ;
 
 loc_001CCCF2: ;
     /* cmp MEM32(esp + 8), 0x80000000u - flags set for next jcc */
+    _rcc = (CMP_NE(MEM32(esp + 8), 0x80000000u));  /* DOA3 bug #14: the guest sets these flags at 001CCCF2 and the branch at 001CCCFD reads them; esp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     PUSH32(esp, 0x12);
     POP32(esp, eax);
-    if (CMP_NE(MEM32(esp + 8), 0x80000000u)) goto loc_001CCD0B; /* jne: not equal / not zero */
+    if (_rcc) goto loc_001CCD0B; /* jne: not equal / not zero */
 
 loc_001CCCFF: ;
     PUSH32(esp, 0x10);
@@ -19855,6 +19871,7 @@ loc_001CE4B4: ;
  */
 void sub_001CE4B6(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
 
@@ -19896,9 +19913,10 @@ loc_001CE4ED: ;
 
 loc_001CE4F3: ;
     /* cmp MEM32(ebp + -8), edi - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(ebp + -8), edi));  /* DOA3 bug #14: the guest sets these flags at 001CE4F3 and the branch at 001CE4F8 reads them; edi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
-    if (CMP_EQ(MEM32(ebp + -8), edi)) goto loc_001CE503; /* je: equal / zero */
+    if (_rcc) goto loc_001CE503; /* je: equal / zero */
 
 loc_001CE4FA: ;
     SET_LO8(ecx, MEM8(ebp + -4));
@@ -20612,6 +20630,7 @@ loc_001CE852: ;
  */
 void sub_001CE856(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
 
@@ -20681,10 +20700,11 @@ loc_001CE8B1: ;
 
 loc_001CE8B7: ;
     /* cmp MEM32(ebp + -8), ebx - flags set for next jcc */
+    _rcc = (CMP_EQ(MEM32(ebp + -8), ebx));  /* DOA3 bug #14: the guest sets these flags at 001CE8B7 and the branch at 001CE8BD reads them; ebx is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, edi);
     POP32(esp, esi);
     POP32(esp, ebx);
-    if (CMP_EQ(MEM32(ebp + -8), ebx)) goto loc_001CE8C8; /* je: equal / zero */
+    if (_rcc) goto loc_001CE8C8; /* je: equal / zero */
 
 loc_001CE8BF: ;
     SET_LO8(ecx, MEM8(ebp + -4));
@@ -31695,6 +31715,7 @@ loc_001E7619: ;
  */
 void sub_001E761A(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001E761A: ;
@@ -31702,8 +31723,9 @@ loc_001E761A: ;
     ecx = MEM32(edx + 8);
     eax = MEM32(ecx);
     /* test MEM8(ecx + 0xA2), 1 - flags set for next jcc */
+    _rcc = (TEST_NZ(MEM8(ecx + 0xA2), 1));  /* DOA3 bug #14: the guest sets these flags at 001E7623 and the branch at 001E762E reads them; ecx is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     ecx = MEM32(esp + 4);
-    if (TEST_NZ(MEM8(ecx + 0xA2), 1)) goto loc_001E7636; /* jne: not equal / not zero */
+    if (_rcc) goto loc_001E7636; /* jne: not equal / not zero */
 
 loc_001E7630: ;
     if (TEST_Z(MEM8(eax + 4), 2)) goto loc_001E763D; /* je: equal / zero */
@@ -41914,6 +41936,7 @@ loc_001EB09E: ;
  */
 void sub_001EB0A2(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
 
@@ -41954,9 +41977,10 @@ loc_001EB0D2: ;
 
 loc_001EB0DF: ;
     /* test MEM8(esi), 8 - flags set for next jcc */
+    _rcc = (TEST_Z(MEM8(esi), 8));  /* DOA3 bug #14: the guest sets these flags at 001EB0DF and the branch at 001EB0E4 reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, esi);
     POP32(esp, ebx);
-    if (TEST_Z(MEM8(esi), 8)) goto loc_001EB0EE; /* je: equal / zero */
+    if (_rcc) goto loc_001EB0EE; /* je: equal / zero */
 
 loc_001EB0E6: ;
     PUSH32(esp, MEM32(ebp + 8));
@@ -45007,6 +45031,7 @@ loc_001EC1E5: ;
  */
 void sub_001EC1E9(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -45080,8 +45105,9 @@ loc_001EC25F: ;
     eax = 0; /* xor self */
     MEM32(ebx + 0x430) = ebp;
     /* test ebp, ebp - flags set for next jcc */
+    _rcc = (TEST_NZ(ebp, ebp));  /* DOA3 bug #14: the guest sets these flags at 001EC267 and the branch at 001EC26A reads them; ebp is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, ebp);
-    SET_LO8(eax, (TEST_NZ(ebp, ebp)) ? 1 : 0); /* setne */
+    SET_LO8(eax, (_rcc) ? 1 : 0); /* setne */
     POP32(esp, ebx);
     POP32(esp, ecx);
     esp += 4; return; /* ret */
@@ -46692,6 +46718,7 @@ loc_001ECB0F: ;
  */
 void sub_001ECB12(void)
 {
+    int _rcc = 0; /* DOA3 bug #14: condition evaluated at the compare */
     int _flags = 0; /* fallback flag var */
 
 loc_001ECB12: ;
@@ -46720,8 +46747,9 @@ loc_001ECB39: ;
 
 loc_001ECB3A: ;
     /* cmp MEM8(esi + 0x11), 0 - flags set for next jcc */
+    _rcc = (CMP_NE(MEM8(esi + 0x11), 0));  /* DOA3 bug #14: the guest sets these flags at 001ECB3A and the branch at 001ECB3F reads them; esi is overwritten in between, so the condition is evaluated here, where x86 evaluates it. */
     POP32(esp, esi);
-    if (CMP_NE(MEM8(esi + 0x11), 0)) goto loc_001ECB44; /* jne: not equal / not zero */
+    if (_rcc) goto loc_001ECB44; /* jne: not equal / not zero */
 
 loc_001ECB41: ;
     eax = eax + 3;

@@ -23,8 +23,8 @@
  * - Stack and heap use normal Windows allocation
  */
 
-#ifndef BURNOUT3_XBOX_MEMORY_LAYOUT_H
-#define BURNOUT3_XBOX_MEMORY_LAYOUT_H
+#ifndef DOA3_XBOX_MEMORY_LAYOUT_H
+#define DOA3_XBOX_MEMORY_LAYOUT_H
 
 #include <windows.h>
 #include <stdint.h>
@@ -238,4 +238,4 @@ HANDLE xbox_GetMappingHandle(void);
 }
 #endif
 
-#endif /* BURNOUT3_XBOX_MEMORY_LAYOUT_H */
+#endif /* DOA3_XBOX_MEMORY_LAYOUT_H */
