@@ -17,6 +17,7 @@ ID3D11RenderTargetView *d3d8_GetDefaultRTV(void);
 HWND                    d3d8_GetHWND(void);
 UINT                    d3d8_GetBackbufferWidth(void);
 UINT                    d3d8_GetBackbufferHeight(void);
+void                    d3d8_RestoreDefaultTarget(void);
 unsigned int            doa3_dbg_read32(unsigned int va);
 unsigned int            doa3_dbg_read8(unsigned int va);
 }
@@ -325,6 +326,13 @@ extern "C" void doa3_ui_render(void)
     ID3D11RenderTargetView *rtv = d3d8_GetDefaultRTV();
     if (!ctx || !rtv) return;
 
+    /* The overlay replaces the output-merger targets and the viewport below.
+     * Save the viewport: the guest only re-sets its own when it calls
+     * SetViewport, not once a frame. */
+    D3D11_VIEWPORT prev_vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT prev_nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    ctx->RSGetViewports(&prev_nvp, prev_vp);
+
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -345,4 +353,9 @@ extern "C" void doa3_ui_render(void)
     ctx->RSSetViewports(1, &vp);
 
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    /* Hand the output merger back with the depth buffer attached. The bind
+     * above passes a null depth-stencil view; leaving that bound means every
+     * guest draw afterwards runs with no depth test and no depth writes. */
+    d3d8_RestoreDefaultTarget();
+    if (prev_nvp) ctx->RSSetViewports(prev_nvp, prev_vp);
 }
