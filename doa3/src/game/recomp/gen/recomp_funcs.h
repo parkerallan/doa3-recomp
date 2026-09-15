@@ -1339,6 +1339,15 @@ void sub_0004A490(void);
 void sub_0004A542(void);
 void sub_0004A567(void);
 void sub_0004A5DF(void);
+/* attract-flow function-pointer targets (recomp_seedattract.c) */
+void sub_0004A630(void);
+void sub_0004A6E0(void);
+void sub_0004A930(void);
+void sub_0004A960(void);
+void sub_0004BBB0(void);
+void sub_0004C040(void);
+void sub_0004C930(void);
+void sub_0004CA10(void);
 void sub_0004A790(void);
 void sub_0004A842(void);
 void sub_0004A867(void);

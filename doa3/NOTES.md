@@ -307,6 +307,142 @@ than one frame (all in `src/nv2a/nv2a_pgraph_d3d11.c` / `src/d3d/d3d8_device.c`)
   position) was tested and is wrong: the game's own w sign is correct.
 
 
+### Deferred compares whose operands are overwritten before the branch
+
+The screen-ready wait above was one instance of a class. The lifter emits
+`cmp`/`test` as a comment and re-evaluates the operand EXPRESSIONS at the
+conditional branch, so any write to an operand register in between makes the
+branch test the wrong values. `tools/recomp/fix_deferred_cmp.py` finds and
+repairs them; it rewrites a site to the `_rccf` form:
+
+```c
+/* test LO8(edx), LO8(edx) - flags set for next jcc */
+_rccf = (TEST_NZ(LO8(edx), LO8(edx)));   /* evaluated where x86 evaluates it */
+SET_LO8(edx, MEM8(esp + 0x10));
+if (_rccf) goto loc_X;
+```
+
+Nothing is rewritten on the C text alone. Each candidate is checked against
+the guest disassembly and the C-to-guest mapping has to be unambiguous:
+
+- the comment and the branch must be in the same straight-line run (the scan
+  stops at a `loc_` label, a bare `goto`, a `return` and at the next compare
+  comment) -- past any of those the branch can be reached with other flags;
+- the block must hold exactly one candidate in the C and exactly one
+  qualifying compare in the guest;
+- the guest compare must be the same kind, carry the same literal operand when
+  there is one, and reach its branch with no other flag-writing instruction,
+  no `call` and no branch target in between.
+
+Run applied 271 rewrites across 20 generated units and skipped 5 ambiguous
+blocks. `FIX_DRYRUN=1` lists candidates without writing. Re-run after any
+re-emission; the rewrite is idempotent.
+
+Do not "simplify" the tool to a text substitution. An earlier version paired a
+comment with a consumer past a label and produced a wrong rewrite in
+`sub_000F2506` (two `fnstsw`/`test` pairs in a row); the straight-line-run rule
+is what stops that.
+
+### Attract-flow targets reached only through a function-pointer table
+
+Eight entry points in the screen/demo cluster were never emitted, because the
+only references to them are in a dispatch table the detector cannot follow:
+`0x0004A630`, `0x0004A6E0`, `0x0004A930`, `0x0004A960`, `0x0004BBB0`,
+`0x0004C040`, `0x0004C930`, `0x0004CA10`. Every call through them resolved to
+nothing and returned 0 -- `[ICALL-CENSUS]` counted 816 failed calls each in a
+single attract cycle. They sit inside larger detected functions, so the code
+was already present; what was missing was an entry point at the table's
+address.
+
+They are seeded into `tools/disasm/output/functions.json` as `link_seed`
+entries and emitted into `src/game/recomp/gen/recomp_seedattract.c`
+(`tools.recomp -f`), declared in `recomp_funcs.h` and registered in
+`recomp_dispatch.c`. Distinct unresolved indirect-call targets fell from 65 to
+46 in an attract cycle.
+
+`g_recomp_table` must stay sorted -- `recomp_lookup` binary-searches it -- and
+`g_recomp_table_size` must be bumped for every entry inserted before the
+prefix it covers. Note that the constant (11927) is smaller than the number of
+entries in the array (12144): the last 217, from VA `0x001E938E` up, are not
+searched. That predates this work and is left alone deliberately; making them
+resolvable changes behaviour for 217 functions and wants its own measurement.
+
+### The attract loop's screen-ready wait, and two general compare defects
+
+After the opening movie the attract flow runs a demo fight (screen id
+`0x484C49` = 12), then asks the screen manager for the next screen. The port
+used to stop there: the picture went black except the corner logo, and the
+fight tasks stayed suspended forever. Three defects were in the way; the first
+two are lifting bugs of a general class, the third an ABI leak.
+
+**1. A deferred `test` whose operand was overwritten before the branch.**
+`sub_0007BBA0` sets the requested screen id and then spins until the screen's
+resources are resident:
+
+```
+loc_7BC60: if (sub_0007ED10(slot, id, sub) == 0xFF) goto wait;
+           if (sub_0007ED80(slot, id, 0xFF) != 0xFF) return;   /* ready */
+wait:      sub_00081240();      /* suspend the fight tasks   */
+           sub_0009E562(1);     /* sleep one frame           */
+           sub_00081270();      /* resume them               */
+           goto loc_7BC60;
+```
+
+`sub_0007ED80` tests the slot state byte and then reloads `dl` with its third
+argument before the `jne` consumes the flags (`test dl,dl` at 0x0007ED95,
+`mov dl,[esp+0x10]` at 0x0007ED97, `jne` at 0x0007ED9B). The lifter emits the
+compare as a comment and re-evaluates the operands at the branch, so the
+branch tested the *third argument* (0xFF) instead of the state byte, skipped
+the matching slot, and returned 0xFF forever. The wait loop therefore never
+exited: screen 20 stayed current, tasks 1/5/6/7/8 stayed suspended (the
+scheduler `sub_0009E67B` skips flag bit 0x20), and only the 2D overlay task
+kept drawing -- the black screen with the logo. `sub_0007ED10` has the same
+pattern and was only accidentally right because its caller passes 0 there.
+
+Both are fixed in `src/game/recomp/gen/recomp_0002.c` with the `_rcc` form the
+pipeline already uses elsewhere: evaluate the condition at the compare.
+**There are 284 more sites in `src/game/recomp/gen/` where a register the
+compare reads is written before the branch that consumes its flags**; a scan
+for them is worth re-running when a branch looks impossible.
+
+**2. Unsigned compares were evaluated at 32 bits.**
+x86 sign-extends a byte immediate to the operand size, so
+`cmp word ptr [m], -1` compares the 16-bit value against 0xFFFF. The lifter
+writes that immediate already sign-extended (`0xFFFFFFFFu`) and `CMP_EQ`/
+`CMP_NE`/`CMP_B`/`CMP_A`/`CMP_AE`/`CMP_BE` compared a zero-extended
+`uint16_t` against it, so the equality was permanently false. 61 sites in the
+tree compare an 8- or 16-bit operand against an immediate that does not fit
+that width, and every one of them was a dead branch.
+
+The character animation event loop is one: `sub_0008C420` runs
+`cmp word ptr [esi*2+0x4BADEC], -1; jne loop`, which never terminated once
+the attract flow advanced to its second fight. `RC_ZXB` in
+`recomp_types.h` now narrows the right operand to the left operand's width,
+the same way `RC_SXB` already did for the signed conditions. Operands that
+already fit compare exactly as before, so the only behaviour that changes is
+the 61 provably-wrong sites.
+
+**3. `sub_001C6B7C` (IDirectSoundBuffer::Release adjustor) leaks the guest
+stack and loses esi.**
+The release chain below it (`sub_001C792E` -> `sub_001C6BEF` -> the class
+destructor through vtable[0]) returns 4 to 8 bytes low, and `sub_001C6BEF`'s
+`pop edi; pop esi` then reads the wrong slots. Measured at the call site:
+`esi 006A69E8 -> 00000002`, esp delta 0 where +4 is correct. The screen-14
+setup sweeps the voice table in `sub_0009F400`
+(`for esi = 0x6A69E8; esi < 0x6A78E8; esi += 0x60`) and releases every voice
+of a group; with esi destroyed the sweep restarted from a wild pointer
+instead of advancing, and the guest stack marched down megabytes a second
+until the host APU refused another voice (`apu_vp.c` voice assert).
+`recomp_manual.c` now ABI-enforces it (`ret 4`, ebx/esi/edi callee-saved),
+the same way `sub_001BCC00` and `sub_001BC260` are enforced.
+
+Measured after the three fixes (Release build, no input): screen ids run
+0 -> 12 -> 20 -> 14 -> 9 -> 8 -> 11 -> 5 -> 20 -> 24 -> ..., each demo fight
+renders its own stage and characters, no watchdog stall, no crash over an
+eight-minute soak. Cxbx-Reloaded on the same XBE runs 0 -> 12 -> 20 -> 14 ->
+9 -> 1 -> 9 -> 8 -> 11, so the order matches the hardware oracle. The opening
+movie is unchanged at 568 presented frames.
+
 ### Callee-saved ABI leak in the texture-stage applier's callees
 
 `sub_001BCC00` (`ret 0xC`) and `sub_001BC260` (`ret 0x10`), both called from
@@ -439,7 +575,12 @@ After regeneration:
    forms (the lifter now does this) and that `sub_0018DF33` still preserves
    `g_seh_ebp` across `sub_00191848` -- a fragment-boundary fix the lifter
    does not yet make on its own.
-6. Build Release and run the opening movie before accepting regenerated output.
+6. Re-run `py -3 -m tools.recomp.fix_deferred_cmp` (deferred compares whose
+   operands are overwritten before the branch) -- 271 sites.
+7. Re-seed the eight attract-flow function-pointer targets and re-emit
+   `recomp_seedattract.c`; confirm `recomp_dispatch.c` stays sorted and its
+   size constant covers the new entries.
+8. Build Release and run the opening movie before accepting regenerated output.
 
 Do not edit generated files casually. When a generated correction is general,
 implement it in the lifter/translator as well; keep a local generated patch only
@@ -458,6 +599,8 @@ must be recreated or preserved during regeneration:
    function boundaries.
 - `recomp_mwply.c` and `recomp_psgsfd.c` contain CRI movie functions emitted
    from the non-main XBE code sections.
+- `recomp_seedattract.c` carries the eight attract-flow entry points that only
+   a function-pointer table references.
 
 Do not treat these files as disposable build products. A regeneration is not
 complete until their symbols and behavior are represented in the new output.
@@ -495,17 +638,6 @@ written through the wrong cursor -- with runs of small integers around it.
 `src/game/main.c` carries an opt-in write watch (`DOA3_WATCHVA=<hex guest VA>`,
 `DOA3_WATCHLEN=<hex>`) that reports the writing RIP; it is armed post-movie and
 has not yet been pointed at the list pages.
-
-### Character state is frozen after the movie
-
-The character position table at `0x004BB950 + 16*i` reads identical
-bit-for-bit across samples seconds apart while the camera is clearly moving,
-with both fighters at x = z = 0. The base positions at `0x004BAFD0 + 0xE8*k`
-are loaded and finite, and `sub_000910B9` (the fragment that writes the table)
-does run after the movie -- with zero movement deltas on the x87 stack and a
-base position at the origin. So the models are loaded but never stepped or
-placed, which is why no fighters appear and why the attract camera has nothing
-to follow.
 
 ### The pixel pipeline is fixed-function only
 

@@ -87,7 +87,7 @@ def main():
         added += 1
 
     funcs.sort(key=lambda f: int(f["start"], 16))
-    json.dump(funcs, open(FUNCTIONS_PATH, "w"))
+    json.dump(funcs, open(FUNCTIONS_PATH, "w"), indent=1)   # keep the file's formatting
     print(f"added={added} skipped={skipped} total_now={len(funcs)}")
 
 

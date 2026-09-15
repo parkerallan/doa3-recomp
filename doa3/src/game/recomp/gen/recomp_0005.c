@@ -53691,6 +53691,7 @@ loc_000F3E85: ;
  */
 void sub_000F3E8A_oldfpu(void)
 {
+    int _rccf = 0; /* DOA3: deferred condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     int _cf = 0; /* carry flag */
@@ -53704,8 +53705,9 @@ void sub_000F3E8A_oldfpu(void)
 
 loc_000F3E8A: ;
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
+    _rccf = (TEST_NZ(LO8(ecx), LO8(ecx)));  /* DOA3: x86 latched these flags at the compare above and the branch below reads them, but an operand is overwritten in between -- evaluate the condition where the guest does. */
     SET_LO8(ecx, MEM8(0x479CD0));
-    if (TEST_NZ(LO8(ecx), LO8(ecx))) goto loc_000F3EB1; /* jne: not equal / not zero */
+    if (_rccf) goto loc_000F3EB1; /* jne: not equal / not zero */
 
 loc_000F3E94: ;
     SET_LO8(edx, MEM8(esi + 0x82));

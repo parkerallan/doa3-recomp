@@ -7523,6 +7523,35 @@ void sub_001664D6(void)
     esp += 28;                          /* pop dummy return (4) + 6 args (24) */
 }
 
+/* sub_001C6B7C -- IDirectSoundBuffer::Release() adjustor thunk
+ * (`push eax; call [vtbl+8]; ret 4`, so __stdcall with one argument and
+ * ebx/esi/edi callee-saved).
+ *
+ * The release chain under it (sub_001C792E -> sub_001C6BEF -> the class
+ * destructor through vtable[0]) returns with the guest stack 4 to 8 bytes
+ * low, and sub_001C6BEF's `pop edi; pop esi` epilogue then loads the wrong
+ * slots -- measured directly at the call site: esi 006A69E8 -> 00000002,
+ * esp delta 0 where +4 is correct.
+ *
+ * That lands in the attract flow: the screen-14 setup sweeps the voice table
+ * in sub_0009F400 (`for esi = 0x6A69E8; esi < 0x6A78E8; esi += 0x60`) and
+ * calls this Release for every voice of the group. With esi destroyed the
+ * sweep restarts from a wild pointer instead of advancing, calls Release on
+ * garbage forever, and the guest stack marches down megabytes a second until
+ * the host APU refuses another voice.
+ *
+ * Enforce the ABI the hardware guarantees, the same way sub_001BCC00 and
+ * sub_001BC260 are enforced above. */
+void sub_001C6B7C_gen(void);
+void sub_001C6B7C(void)
+{
+    uint32_t ei = esp;
+    uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    sub_001C6B7C_gen();
+    edi = s_edi; esi = s_esi; ebx = s_ebx;
+    esp = ei + 4 + 4;   /* dummy return slot + one argument (ret 4) */
+}
+
 /* ICALL failure diagnostic (rate-limited).
  * Called by the RECOMP_ICALL macros when an indirect-call target resolves to
  * neither a generated function, a manual override, nor a kernel thunk. */

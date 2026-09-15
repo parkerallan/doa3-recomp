@@ -302,13 +302,30 @@ static __forceinline uint32_t xmm_movmskps(xmm128_t a) {
  *   cmp a, b; jcc target → if (COND(a, b)) goto target;
  */
 
-/* Unsigned comparison conditions (from CMP a, b → a - b) */
-#define CMP_EQ(a, b)  ((uint32_t)(a) == (uint32_t)(b))
-#define CMP_NE(a, b)  ((uint32_t)(a) != (uint32_t)(b))
-#define CMP_B(a, b)   ((uint32_t)(a) <  (uint32_t)(b))   /* below (CF=1) */
-#define CMP_AE(a, b)  ((uint32_t)(a) >= (uint32_t)(b))   /* above or equal */
-#define CMP_BE(a, b)  ((uint32_t)(a) <= (uint32_t)(b))   /* below or equal */
-#define CMP_A(a, b)   ((uint32_t)(a) >  (uint32_t)(b))   /* above */
+/* Unsigned comparison conditions (from CMP a, b → a - b)
+ *
+ * Like the signed conditions below, these must be evaluated at the OPERAND
+ * width. x86 sign-extends a byte immediate to the operand size and compares
+ * there, so `cmp word ptr [m], -1` tests the 16-bit value against 0xFFFF --
+ * but the lifter writes that immediate out already sign-extended to 32 bits
+ * (`0xFFFFFFFFu`). Comparing a zero-extended uint16_t against it made the
+ * equality permanently false, so `je` was never taken and `jne` always was.
+ *
+ * That is not academic either: it is why the character animation event loop
+ * in sub_0008C420 (`cmp word ptr [esi*2+0x4BADEC], -1; jne loop`) never
+ * terminated once the attract demo advanced to its second fight.
+ *
+ * RC_ZXB narrows the right operand to the left operand's width, exactly as
+ * RC_SXB does for the signed conditions. 32-bit operands are unaffected, and
+ * an immediate that already fits the operand width compares the same as
+ * before. */
+#define RC_ZXB(a, b) (sizeof(a) == 1 ? (uint32_t)(uint8_t)(b) :                       sizeof(a) == 2 ? (uint32_t)(uint16_t)(b) : (uint32_t)(b))
+#define CMP_EQ(a, b)  ((uint32_t)(a) == RC_ZXB(a, b))
+#define CMP_NE(a, b)  ((uint32_t)(a) != RC_ZXB(a, b))
+#define CMP_B(a, b)   ((uint32_t)(a) <  RC_ZXB(a, b))    /* below (CF=1) */
+#define CMP_AE(a, b)  ((uint32_t)(a) >= RC_ZXB(a, b))    /* above or equal */
+#define CMP_BE(a, b)  ((uint32_t)(a) <= RC_ZXB(a, b))    /* below or equal */
+#define CMP_A(a, b)   ((uint32_t)(a) >  RC_ZXB(a, b))    /* above */
 
 /* Signed comparison conditions */
 /* Signed comparisons must be evaluated at the OPERAND width, not at 32 bits.

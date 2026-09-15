@@ -78013,6 +78013,7 @@ loc_001B9E17: ;
  */
 void sub_001B9E1E(void)
 {
+    int _rccf = 0; /* DOA3: deferred condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -78023,8 +78024,9 @@ loc_001B9E1E: ;
 
     SET_LO8(eax, MEM8(esp + 4));
     /* test LO8(eax), LO8(eax) - flags set for next jcc */
+    _rccf = (TEST_Z(LO8(eax), LO8(eax)));  /* DOA3: x86 latched these flags at the compare above and the branch below reads them, but an operand is overwritten in between -- evaluate the condition where the guest does. */
     eax = MEM32(esp + 4);
-    if (TEST_Z(LO8(eax), LO8(eax))) { g_seh_ebp = ebp; sub_001B9DBE(); return; } /* je: equal / zero */
+    if (_rccf) { g_seh_ebp = ebp; sub_001B9DBE(); return; } /* je: equal / zero */
 
 loc_001B9E31: ;
     ecx = MEM32(ecx + 0xC);

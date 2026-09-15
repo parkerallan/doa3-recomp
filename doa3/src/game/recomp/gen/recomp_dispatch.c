@@ -1440,10 +1440,14 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x0004A542u, (recomp_func_t)sub_0004A542 },
     { 0x0004A567u, (recomp_func_t)sub_0004A567 },
     { 0x0004A5DFu, (recomp_func_t)sub_0004A5DF },
+    { 0x0004A630u, (recomp_func_t)sub_0004A630 },
+    { 0x0004A6E0u, (recomp_func_t)sub_0004A6E0 },
     { 0x0004A790u, (recomp_func_t)sub_0004A790 },
     { 0x0004A842u, (recomp_func_t)sub_0004A842 },
     { 0x0004A867u, (recomp_func_t)sub_0004A867 },
     { 0x0004A8DFu, (recomp_func_t)sub_0004A8DF },
+    { 0x0004A930u, (recomp_func_t)sub_0004A930 },
+    { 0x0004A960u, (recomp_func_t)sub_0004A960 },
     { 0x0004AD40u, (recomp_func_t)sub_0004AD40 },
     { 0x0004AD75u, (recomp_func_t)sub_0004AD75 },
     { 0x0004AD88u, (recomp_func_t)sub_0004AD88 },
@@ -1463,13 +1467,17 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x0004B920u, (recomp_func_t)sub_0004B920 },
     { 0x0004B95Du, (recomp_func_t)sub_0004B95D },
     { 0x0004B984u, (recomp_func_t)sub_0004B984 },
+    { 0x0004BBB0u, (recomp_func_t)sub_0004BBB0 },
     { 0x0004BFA0u, (recomp_func_t)sub_0004BFA0 },
+    { 0x0004C040u, (recomp_func_t)sub_0004C040 },
     { 0x0004C420u, (recomp_func_t)sub_0004C420 },
     { 0x0004C4C0u, (recomp_func_t)sub_0004C4C0 },
     { 0x0004C560u, (recomp_func_t)sub_0004C560 },
     { 0x0004C580u, (recomp_func_t)sub_0004C580 },
     { 0x0004C59Au, (recomp_func_t)sub_0004C59A },
     { 0x0004C59Cu, (recomp_func_t)sub_0004C59C },
+    { 0x0004C930u, (recomp_func_t)sub_0004C930 },
+    { 0x0004CA10u, (recomp_func_t)sub_0004CA10 },
     { 0x0004CB80u, (recomp_func_t)sub_0004CB80 },
     { 0x0004CBF0u, (recomp_func_t)sub_0004CBF0 },
     { 0x0004CC54u, (recomp_func_t)sub_0004CC54 },
@@ -12221,7 +12229,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x001ED09Cu, (recomp_func_t)sub_001ED09C },
 };
 
-static const size_t g_recomp_table_size = 11919;
+static const size_t g_recomp_table_size = 11927;
 
 /* Binary search for a function by Xbox VA */
 recomp_func_t recomp_lookup(uint32_t xbox_va)

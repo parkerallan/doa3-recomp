@@ -259,6 +259,7 @@ loc_00154584: ;
  */
 void sub_001545C0(void)
 {
+    int _rccf = 0; /* DOA3: deferred condition evaluated at the compare */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     xmm128_t xmm0, xmm1, xmm2, xmm3;
@@ -268,8 +269,9 @@ loc_001545C0: ;
     ebp = esp;
     eax = 0x90FAA0;
     /* test LO8(eax), 0xF - flags set for next jcc */
+    _rccf = (TEST_NZ(LO8(eax), 0xF));  /* DOA3: x86 latched these flags at the compare above and the branch below reads them, but an operand is overwritten in between -- evaluate the condition where the guest does. */
     eax = MEM32(ebp + 8);
-    if (TEST_NZ(LO8(eax), 0xF)) { g_seh_ebp = ebp; sub_001545FB(); return; } /* jne: not equal / not zero */
+    if (_rccf) { g_seh_ebp = ebp; sub_001545FB(); return; } /* jne: not equal / not zero */
 
 loc_001545CF: ;
     if (TEST_NZ(LO8(eax), 0xF)) { g_seh_ebp = ebp; sub_001545FB(); return; } /* jne: not equal / not zero */
