@@ -5,6 +5,8 @@ that compiles and runs on Windows. No emulation, just recompiled functions
 running as a native x86-64 executable, with the Xbox kernel, D3D8 and NV2A GPU replaced by host
 layers.
 
+<img width="639" height="510" alt="Screenshot 2026-09-14 191920" src="https://github.com/user-attachments/assets/108cf4d7-8010-4148-91cf-b1179a2715e6" />
+
 ## Building
 
 Needs Visual Studio 2022 (C11) and CMake 3.20+.
