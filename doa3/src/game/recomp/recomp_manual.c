@@ -7325,6 +7325,86 @@ void sub_001B8970(void)
             }
             fflush(stderr);
         }
+        /* ---- frame pacing: 60 Hz -----------------------------------------
+         * D3DDevice_Swap (0x001B5850) is the game's frame gate.  It blocks in
+         * the spin at 0x001B8690 while swaps submitted (dev+0x2B60) minus
+         * swaps completed (dev+0x2518) is >= 2, and on hardware the GPU
+         * advances "completed" once per retired flip -- the game asks for
+         * D3DPRESENT_INTERVAL_ONE (dev+0x2B64 reads 1), so that gate paces the
+         * whole loop at 60 Hz.  The only CPU write to dev+0x2518 in the XBE is
+         * 0x001B895F, the simulate-the-GPU path; the real one is a GPU-written
+         * location registered at 0x001B99A1.
+         *
+         * The kickoff override publishes completed = submitted on every kick
+         * (the FIFO and fence spins need that), so the gate never blocks and
+         * the loop free-ran: 59-204 swaps/s measured after the intro movie.
+         * Every per-frame game counter follows the swap count 1:1 (72.0/s
+         * measured against 69-77 presents/s), so character and camera motion
+         * surged and dragged with scene load.  Hold the frame here until the
+         * next 60 Hz deadline instead.
+         *
+         * Movie playback keeps its own verified timing and is never paced. */
+        {
+            extern volatile int g_doa3_post_movie;
+            static LONGLONG s_qpf, s_next;
+            static HANDLE s_timer;
+            static int s_init;
+            if (!g_doa3_post_movie) {
+                s_next = 0;
+            } else {
+                LARGE_INTEGER now;
+                LONGLONG period;
+                if (!s_init) {
+                    LARGE_INTEGER f;
+                    s_init = 1;
+                    QueryPerformanceFrequency(&f);
+                    s_qpf = f.QuadPart;
+                    /* Sleep() rounds up to the system timer tick, which is
+                     * 15.6 ms unless something is holding it down -- the APU
+                     * does (timeBeginPeriod(1)), but nothing in this file may
+                     * depend on that.  A high-resolution waitable timer is not
+                     * tied to the tick at all.  Measured frame interval with
+                     * it: p50 16.67 ms, exactly the period.  Systems without
+                     * it fall back to the ordinary timer. */
+                    s_timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002,
+                                                     TIMER_MODIFY_STATE | SYNCHRONIZE);
+                    if (!s_timer)
+                        s_timer = CreateWaitableTimerExW(NULL, NULL, 0,
+                                                     TIMER_MODIFY_STATE | SYNCHRONIZE);
+                }
+                period = s_qpf / 60;
+                QueryPerformanceCounter(&now);
+                if (!s_next) s_next = now.QuadPart;
+                s_next += period;
+                /* A frame that overran its slot leaves the deadline in the
+                 * past, and the next frames then run without waiting until the
+                 * schedule is met again.  The catch-up is bounded to 8 frames:
+                 * beyond that the hitch is written off and the clock
+                 * re-anchors, so a long stall can never be repaid by a long
+                 * sprint (that sprint is the speed surge this change removes).
+                 * Refusing to catch up at all was measured far worse -- every
+                 * overshoot became permanent and the rate fell to 48 fps. */
+                if (now.QuadPart - s_next > period * 8) s_next = now.QuadPart;
+                for (;;) {
+                    LONGLONG rem;
+                    QueryPerformanceCounter(&now);
+                    rem = s_next - now.QuadPart;
+                    if (rem <= 0) break;
+                    if (s_timer && rem * 2000 > s_qpf) {
+                        /* wait all but the last 0.5 ms, then spin it out so
+                         * the timer's wake-up slop cannot overshoot */
+                        LARGE_INTEGER due;
+                        due.QuadPart = -((rem - s_qpf / 2000) * 10000000 / s_qpf);
+                        if (SetWaitableTimer(s_timer, &due, 0, NULL, NULL, FALSE))
+                            WaitForSingleObject(s_timer, 20);
+                        else
+                            Sleep(0);
+                    } else {
+                        YieldProcessor();
+                    }
+                }
+            }
+        }
     }
     esi = _sv_esi; edi = _sv_edi; ebx = _sv_ebx;
 }
