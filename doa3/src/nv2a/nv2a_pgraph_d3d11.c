@@ -263,7 +263,6 @@ static struct {
         uint32_t off, w, h, fmt, levels;
         uint32_t pal;       /* palette register this upload was expanded with */
         int uploaded;       /* immutable source already uploaded */
-        uint32_t sum;       /* checksum of the guest source when uploaded */
     } texcache[TEXCACHE_N];
     uint32_t texcache_next;
 
@@ -565,20 +564,6 @@ static void nv_apply_tex_address(IDirect3DDevice8 *dev, int stage)
     dev->lpVtbl->SetTextureStageState(dev, stage, 14 /*ADDRESSV*/, nv_d3d_address(a >> 8));
 }
 
-/* Cheap checksum of a guest texture source: 64 samples spread over the data.
- * Used only to detect the cache serving an image the game has since replaced. */
-static uint32_t nv_tex_checksum(const uint8_t *src, size_t bytes)
-{
-    uint32_t h = 2166136261u;
-    size_t step = (bytes > 256) ? bytes / 64 : 4;
-    size_t i;
-    for (i = 0; i + 4 <= bytes; i += step) {
-        uint32_t v; memcpy(&v, src + i, 4);
-        h = (h ^ v) * 16777619u;
-    }
-    return h ^ (uint32_t)bytes;
-}
-
 static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
 {
     uint32_t fmtreg = g_pg.tex[0].format;
@@ -742,27 +727,6 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
          * draw costs far more than the whole rest of the frame. Linear
          * surfaces (the movie frame, render targets) do change in place, so
          * those are always re-uploaded. */
-        {   /* DOA3 DIAG: is the cached image still what the guest holds? */
-            extern volatile int g_doa3_post_movie;
-            static DWORD s_next = 0; static uint32_t s_hit, s_stale, s_miss;
-            size_t bytes = compressed ? (size_t)pitch * ((h + 3) / 4)
-                                      : (size_t)pitch * h;
-            uint32_t now = nv_tex_checksum(
-                (const uint8_t *)((uintptr_t)off + g_xbox_mem_offset), bytes);
-            if (g_pg.texcache[slot].uploaded) {
-                s_hit++;
-                if (now != g_pg.texcache[slot].sum) s_stale++;
-            } else {
-                s_miss++;
-            }
-            g_pg.texcache[slot].sum = now;
-            if (g_doa3_post_movie && GetTickCount() >= s_next) {
-                s_next = GetTickCount() + 2000;
-                fprintf(stderr, "  [TEXSTALE] cache hits=%u of which stale=%u, uploads=%u\n",
-                        s_hit, s_stale, s_miss);
-                fflush(stderr); s_hit = s_stale = s_miss = 0;
-            }
-        }
         if ((swizzled || compressed) && g_pg.texcache[slot].uploaded)
             return g_pg.dyn_tex;
         g_pg.texcache[slot].uploaded = (swizzled || compressed);
@@ -1245,9 +1209,17 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                                 uint32_t out_vert_count)
 {
     int diffuse_all_zero = 1;
+    /* The fade-to-black quad carries an OPAQUE BLACK diffuse (0xFF000000) with
+     * the stage disabled; diffuse_all_zero compares the whole 32-bit colour, so
+     * that read as a valid diffuse and the fade took its alpha from whatever
+     * texture was still bound -- the character's hair. */
+    int diffuse_rgb_black = 1;
     uint32_t _i;
-    for (_i = 0; _i < out_vert_count; _i++)
-        if (out[_i].color != 0) { diffuse_all_zero = 0; break; }
+    for (_i = 0; _i < out_vert_count; _i++) {
+        if (out[_i].color != 0) diffuse_all_zero = 0;
+        if (out[_i].color & 0x00FFFFFFu) diffuse_rgb_black = 0;
+        if (!diffuse_all_zero && !diffuse_rgb_black) break;
+    }
 
     /* Alpha blending stays on for the 2D menu path. Depth follows the
      * guest: DOA3's 3D screens draw with SET_DEPTH_TEST_ENABLE and rely on
@@ -1444,14 +1416,20 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
          * memory the game pointed SET_TEXTURE_OFFSET at (the movie frame
          * surface, loading screens, etc.). Vertex-color-only when absent. */
         IDirect3DTexture8 *dtex;
-        {   /* The reflective floor samples the reflection render target. Its
-             * guest memory is never written (the pass rendered on the host),
-             * so bind the host offscreen texture instead of uploading RAM. */
-            extern uint32_t g_doa3_offrt_off; extern int d3d8_BindOffscreenTexture(UINT stage);
-            if (g_doa3_offrt_off && g_pg.tex[0].offset == g_doa3_offrt_off && !d3d8_OffscreenTargetActive()) {
+        {   /* A draw that samples a surface the game itself rendered into
+             * reads the HOST target that owns that guest offset -- the floor's
+             * reflection pass, the attract sequence's captured frames -- since
+             * the guest memory behind it is never written. Matching on the key
+             * matters: these surfaces used to share one host texture selected
+             * by whichever was most recent, which handed a fullscreen quad the
+             * reflection pass and drew the stage over the whole screen. */
+            extern int d3d8_BindOffscreenTexture(uint32_t key, UINT stage);
+            extern int d3d8_HasOffscreenTexture(uint32_t key);
+            if (g_pg.tex[0].offset && !d3d8_OffscreenTargetActive() &&
+                d3d8_HasOffscreenTexture(g_pg.tex[0].offset)) {
                 int use_diffuse = !diffuse_all_zero;
                 dev->lpVtbl->SetTexture(dev, 0, NULL);
-                if (d3d8_BindOffscreenTexture(0)) {
+                if (d3d8_BindOffscreenTexture(g_pg.tex[0].offset, 0)) {
                     dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, use_diffuse ? 4 : 2);
                     dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
                     dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
@@ -1463,6 +1441,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             }
         }
         dtex = get_dynamic_texture(dev);
+        if (!g_pg.tex[0].enabled && diffuse_rgb_black) dtex = NULL;
         if (dtex) {
             /* DOA3 configures the pixel pipeline through the register
              * combiners, which this translator does not implement; it
@@ -1716,7 +1695,7 @@ static void nv_fit_to_backbuffer(OutputVertex *out, uint32_t n)
 
 static void nv_sync_render_target(void)
 {
-    extern int  d3d8_SetOffscreenTarget(unsigned w, unsigned h);
+    extern int  d3d8_SetOffscreenTarget(uint32_t key, unsigned w, unsigned h);
     extern void d3d8_RestoreDefaultTarget(void);
     /* Frame buffers are 720 px wide (pitch 0xC00); the reflection texture is
      * 256. A learned "widest seen" bound was poisoned once by a wider
@@ -1743,7 +1722,7 @@ static void nv_sync_render_target(void)
             if (w < 16 || w > 2048) w = pw;
             if (h < 16 || h > 2048) h = w;
             if (w >= 512) { w = d3d8_GetBackbufferWidth(); h = d3d8_GetBackbufferHeight(); }
-            d3d8_SetOffscreenTarget(w, h);
+            d3d8_SetOffscreenTarget(g_pg_surf_coff, w, h);
         }
         return;
     }
@@ -1751,7 +1730,7 @@ static void nv_sync_render_target(void)
         if (d3d8_OffscreenTargetActive()) d3d8_RestoreDefaultTarget();
     } else {
         if (h < 16 || h > 2048) h = pw;
-        d3d8_SetOffscreenTarget(pw, h);
+        d3d8_SetOffscreenTarget(g_pg_surf_coff, pw, h);
     }
 }
 

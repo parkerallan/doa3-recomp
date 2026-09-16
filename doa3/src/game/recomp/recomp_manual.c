@@ -3741,7 +3741,6 @@ void sub_001B1350_gen(void);
  * keys on the colour offsets recorded here (D3DResource.Data & 0x03FFFFFF,
  * which is what SET_SURFACE_COLOR_OFFSET carries). */
 uint32_t g_doa3_fb_offs[4]; int g_doa3_fb_n;
-uint32_t g_doa3_offrt_off;           /* the most recent texture surface */
 uint32_t g_doa3_offrt_offs[8]; int g_doa3_offrt_n;   /* every texture surface seen */
 void sub_001B1350(void)
 {
@@ -3755,7 +3754,6 @@ void sub_001B1350(void)
             if (!seen && g_doa3_fb_n < 4) g_doa3_fb_offs[g_doa3_fb_n++] = data;
         } else {
             int k, seen = 0;
-            g_doa3_offrt_off = data;
             for (k = 0; k < g_doa3_offrt_n; k++) if (g_doa3_offrt_offs[k] == data) seen = 1;
             if (!seen && g_doa3_offrt_n < 8) g_doa3_offrt_offs[g_doa3_offrt_n++] = data;
         }

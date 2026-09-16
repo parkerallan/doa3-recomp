@@ -5175,6 +5175,14 @@ loc_0019AFF6: ;
     PUSH32(esp, 0xFFFFEB18u);
     PUSH32(esp, 0); sub_001557A0(); /* call 0x001557A0 */
 
+    /* DOA3: restored dropped fall-through to sub_0019B000.  NOTES.md lists this
+     * boundary among four that "target padding"; it does not.  The split
+     * falls in the MIDDLE of one constructor call's argument pushes, so the
+     * continuation is live code.  Truncated, this CRT static initializer
+     * returns with its pushes still on the guest stack (and sub_001A3BC0
+     * also with esi = 0, which runs the _initterm walk off its own table),
+     * and only 32 of the 320 objects at 0x378BD8 ever get a vtable. */
+    sub_0019B000(); return;
 }
 
 
@@ -14383,6 +14391,14 @@ loc_001A1A13: ;
     PUSH32(esp, 0);
     PUSH32(esp, 0); sub_00155800(); /* call 0x00155800 */
 
+    /* DOA3: restored dropped fall-through to sub_001A1A1A.  NOTES.md lists this
+     * boundary among four that "target padding"; it does not.  The split
+     * falls in the MIDDLE of one constructor call's argument pushes, so the
+     * continuation is live code.  Truncated, this CRT static initializer
+     * returns with its pushes still on the guest stack (and sub_001A3BC0
+     * also with esi = 0, which runs the _initterm walk off its own table),
+     * and only 32 of the 320 objects at 0x378BD8 ever get a vtable. */
+    sub_001A1A1A(); return;
 }
 
 
@@ -14839,6 +14855,14 @@ loc_001A3FF2: ;
     PUSH32(esp, edx);
     PUSH32(esp, edx);
 
+    /* DOA3: restored dropped fall-through to sub_001A4000.  NOTES.md lists this
+     * boundary among four that "target padding"; it does not.  The split
+     * falls in the MIDDLE of one constructor call's argument pushes, so the
+     * continuation is live code.  Truncated, this CRT static initializer
+     * returns with its pushes still on the guest stack (and sub_001A3BC0
+     * also with esi = 0, which runs the _initterm walk off its own table),
+     * and only 32 of the 320 objects at 0x378BD8 ever get a vtable. */
+    sub_001A4000(); return;
 }
 
 

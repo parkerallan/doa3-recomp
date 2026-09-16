@@ -627,40 +627,102 @@ static HRESULT __stdcall dev_EndScene(IDirect3DDevice8 *self)
  * of the surface-clip size while a non-backbuffer surface is bound. Until
  * this existed every such pass -- including its clear -- landed on the swap
  * chain and wiped the scene drawn just before it. */
-static ID3D11Texture2D        *g_off_tex;
-static ID3D11RenderTargetView *g_off_rtv;
-static ID3D11Texture2D        *g_off_depth;
-static ID3D11DepthStencilView *g_off_dsv;
-static UINT g_off_w, g_off_h;
+/* DOA3: one host colour target PER GUEST OFFSCREEN SURFACE.
+ *
+ * There used to be a single g_off_tex shared by every render-to-texture pass,
+ * and nv_apply_draw_state bound it to any draw whose texture offset matched
+ * whichever surface the game had rendered into MOST RECENTLY.
+ * DOA3 uses four of these (0x01728980 is the floor's reflection; the attract
+ * sequence adds 0x01847680, 0x019D8F80 and 0x03D25000), so a fullscreen quad
+ * sampling its own captured frame at 0x03D25000 was handed the reflection
+ * pass instead and rasterised the stage -- palm fronds and all -- across the
+ * whole screen, randomly, for the rest of the attract loop.
+ *
+ * Key each target by the guest colour offset that owns it, so a pass renders
+ * into its own texture and a later draw samples back exactly that one. */
+#define OFFRT_N 8
+typedef struct {
+    uint32_t key;                       /* guest SET_SURFACE_COLOR_OFFSET */
+    ID3D11Texture2D           *tex;
+    ID3D11RenderTargetView    *rtv;
+    ID3D11Texture2D           *depth;
+    ID3D11DepthStencilView    *dsv;
+    ID3D11ShaderResourceView  *srv;
+    UINT w, h;
+} OffRT;
+static OffRT g_offrt[OFFRT_N];
+static int   g_off_cur = -1;            /* slot currently bound for rendering */
 
-static ID3D11RenderTargetView *cur_rtv(void) { return g_off_active ? g_off_rtv : g_device_state.default_rtv; }
-static ID3D11DepthStencilView *cur_dsv(void) { return g_off_active ? g_off_dsv : g_device_state.default_dsv; }
+static ID3D11RenderTargetView *cur_rtv(void)
+{
+    return (g_off_active && g_off_cur >= 0) ? g_offrt[g_off_cur].rtv
+                                            : g_device_state.default_rtv;
+}
+static ID3D11DepthStencilView *cur_dsv(void)
+{
+    return (g_off_active && g_off_cur >= 0) ? g_offrt[g_off_cur].dsv
+                                            : g_device_state.default_dsv;
+}
 
-int d3d8_SetOffscreenTarget(UINT w, UINT h)
+static void offrt_free(OffRT *s)
+{
+    if (s->srv)   { ID3D11ShaderResourceView_Release(s->srv);   s->srv = NULL; }
+    if (s->rtv)   { ID3D11RenderTargetView_Release(s->rtv);     s->rtv = NULL; }
+    if (s->tex)   { ID3D11Texture2D_Release(s->tex);            s->tex = NULL; }
+    if (s->dsv)   { ID3D11DepthStencilView_Release(s->dsv);     s->dsv = NULL; }
+    if (s->depth) { ID3D11Texture2D_Release(s->depth);          s->depth = NULL; }
+}
+
+/* Slot for `key`, creating or resizing its textures as needed. */
+static int offrt_slot(uint32_t key, UINT w, UINT h)
 {
     ID3D11Device *dev = g_device_state.d3d11_device;
-    if (!dev || !w || !h) return 0;
-    if (!g_off_rtv || g_off_w != w || g_off_h != h) {
+    int i, slot = -1;
+    for (i = 0; i < OFFRT_N; i++)
+        if (g_offrt[i].tex && g_offrt[i].key == key) { slot = i; break; }
+    if (slot < 0)
+        for (i = 0; i < OFFRT_N; i++)
+            if (!g_offrt[i].tex) { slot = i; break; }
+    if (slot < 0) {
+        /* Full: reuse the last slot rather than grow without bound. */
+        slot = OFFRT_N - 1;
+        offrt_free(&g_offrt[slot]);
+    }
+    if (slot < 0) return -1;
+    if (!g_offrt[slot].rtv || g_offrt[slot].w != w || g_offrt[slot].h != h) {
         D3D11_TEXTURE2D_DESC td; HRESULT hr;
-        if (g_off_rtv)   { ID3D11RenderTargetView_Release(g_off_rtv);   g_off_rtv = NULL; }
-        if (g_off_tex)   { ID3D11Texture2D_Release(g_off_tex);          g_off_tex = NULL; }
-        if (g_off_dsv)   { ID3D11DepthStencilView_Release(g_off_dsv);   g_off_dsv = NULL; }
-        if (g_off_depth) { ID3D11Texture2D_Release(g_off_depth);        g_off_depth = NULL; }
+        offrt_free(&g_offrt[slot]);
         memset(&td, 0, sizeof td);
         td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
-        td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &g_off_tex);
-        if (FAILED(hr)) return 0;
-        hr = ID3D11Device_CreateRenderTargetView(dev, (ID3D11Resource *)g_off_tex, NULL, &g_off_rtv);
-        if (FAILED(hr)) { ID3D11Texture2D_Release(g_off_tex); g_off_tex = NULL; return 0; }
-        td.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; td.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-        hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &g_off_depth);
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &g_offrt[slot].tex);
+        if (FAILED(hr)) return -1;
+        hr = ID3D11Device_CreateRenderTargetView(dev,
+                (ID3D11Resource *)g_offrt[slot].tex, NULL, &g_offrt[slot].rtv);
+        if (FAILED(hr)) { offrt_free(&g_offrt[slot]); return -1; }
+        td.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        td.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+        hr = ID3D11Device_CreateTexture2D(dev, &td, NULL, &g_offrt[slot].depth);
         if (SUCCEEDED(hr))
-            ID3D11Device_CreateDepthStencilView(dev, (ID3D11Resource *)g_off_depth, NULL, &g_off_dsv);
-        g_off_w = w; g_off_h = h;
+            ID3D11Device_CreateDepthStencilView(dev,
+                (ID3D11Resource *)g_offrt[slot].depth, NULL, &g_offrt[slot].dsv);
+        g_offrt[slot].w = w; g_offrt[slot].h = h;
     }
-    ID3D11DeviceContext_OMSetRenderTargets(g_device_state.d3d11_context, 1, &g_off_rtv, g_off_dsv);
+    g_offrt[slot].key = key;
+    return slot;
+}
+
+int d3d8_SetOffscreenTarget(uint32_t key, UINT w, UINT h)
+{
+    int slot;
+    if (!g_device_state.d3d11_device || !w || !h) return 0;
+    slot = offrt_slot(key, w, h);
+    if (slot < 0) return 0;
+    ID3D11DeviceContext_OMSetRenderTargets(g_device_state.d3d11_context, 1,
+                                           &g_offrt[slot].rtv, g_offrt[slot].dsv);
+    g_off_cur = slot;
     g_off_active = 1;
     return 1;
 }
@@ -680,18 +742,33 @@ int d3d8_OffscreenTargetActive(void) { return g_off_active; }
  * BIND_SHADER_RESOURCE above; the view is made on first use and dropped when
  * the target is recreated. Refuses while the target is still bound for
  * rendering, which D3D11 would silently unbind. */
-static ID3D11ShaderResourceView *g_off_srv;
-static ID3D11Texture2D *g_off_srv_tex;
-int d3d8_BindOffscreenTexture(UINT stage)
+/* Is there a host target for this guest surface, ready to be sampled? */
+int d3d8_HasOffscreenTexture(uint32_t key)
 {
-    if (!g_off_tex || g_off_active || !g_device_state.d3d11_device) return 0;
-    if (g_off_srv && g_off_srv_tex != g_off_tex) { ID3D11ShaderResourceView_Release(g_off_srv); g_off_srv = NULL; }
-    if (!g_off_srv) {
-        if (FAILED(ID3D11Device_CreateShaderResourceView(g_device_state.d3d11_device, (ID3D11Resource *)g_off_tex, NULL, &g_off_srv)))
-            { g_off_srv = NULL; return 0; }
-        g_off_srv_tex = g_off_tex;
+    int i;
+    for (i = 0; i < OFFRT_N; i++)
+        if (g_offrt[i].tex && g_offrt[i].key == key)
+            return !(g_off_active && g_off_cur == i);
+    return 0;
+}
+
+int d3d8_BindOffscreenTexture(uint32_t key, UINT stage)
+{
+    int i, slot = -1;
+    if (!g_device_state.d3d11_device) return 0;
+    for (i = 0; i < OFFRT_N; i++)
+        if (g_offrt[i].tex && g_offrt[i].key == key) { slot = i; break; }
+    if (slot < 0) return 0;
+    /* Refuse while this very target is still bound for rendering: D3D11 would
+     * silently unbind it and the draw would sample nothing. */
+    if (g_off_active && g_off_cur == slot) return 0;
+    if (!g_offrt[slot].srv) {
+        if (FAILED(ID3D11Device_CreateShaderResourceView(g_device_state.d3d11_device,
+                (ID3D11Resource *)g_offrt[slot].tex, NULL, &g_offrt[slot].srv)))
+            { g_offrt[slot].srv = NULL; return 0; }
     }
-    ID3D11DeviceContext_PSSetShaderResources(g_device_state.d3d11_context, stage, 1, &g_off_srv);
+    ID3D11DeviceContext_PSSetShaderResources(g_device_state.d3d11_context, stage, 1,
+                                             &g_offrt[slot].srv);
     return 1;
 }
 
@@ -806,6 +883,7 @@ static HRESULT __stdcall dev_GetTextureStageState(IDirect3DDevice8 *self, DWORD 
     }
     return S_OK;
 }
+
 
 static HRESULT __stdcall dev_SetTexture(IDirect3DDevice8 *self, DWORD Stage, IDirect3DBaseTexture8 *pTexture)
 {
