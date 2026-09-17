@@ -219,6 +219,7 @@ static struct {
     uint32_t alpha_func;   /* NV097_SET_ALPHA_FUNC, GL constant 0x200..0x207 */
     uint32_t alpha_ref;    /* NV097_SET_ALPHA_REF, 0..255 */
     uint32_t color_mask;
+    uint32_t comb_factor0[8];
 
     /* Viewport */
     float vp_offset[4];
@@ -1275,6 +1276,16 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
     {
         DWORD sf = (g_pg.stencil_func >= 0x200 && g_pg.stencil_func <= 0x207)
                  ? (g_pg.stencil_func - 0x200) + 1 : 8 /*ALWAYS*/;
+        {   /* Stencil shadows build their volume with colour writes off
+             * (half the shadow draws); unapplied, the volume rasterised. */
+            uint32_t cm = g_pg.color_mask;
+            DWORD cwe = 0;
+            if (cm & NV097_SET_COLOR_MASK_RED_WRITE_ENABLE)   cwe |= 1;
+            if (cm & NV097_SET_COLOR_MASK_GREEN_WRITE_ENABLE) cwe |= 2;
+            if (cm & NV097_SET_COLOR_MASK_BLUE_WRITE_ENABLE)  cwe |= 4;
+            if (cm & NV097_SET_COLOR_MASK_ALPHA_WRITE_ENABLE) cwe |= 8;
+            dev->lpVtbl->SetRenderState(dev, D3DRS_COLORWRITEENABLE, cwe);
+        }
         dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILENABLE, g_pg.stencil_enable ? TRUE : FALSE);
         dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILFUNC, sf);
         dev->lpVtbl->SetRenderState(dev, D3DRS_STENCILREF, g_pg.stencil_ref & 0xFF);
@@ -1416,6 +1427,22 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
          * memory the game pointed SET_TEXTURE_OFFSET at (the movie frame
          * surface, loading screens, etc.). Vertex-color-only when absent. */
         IDirect3DTexture8 *dtex;
+        {   /* sub_0004E9A0 draws the shadows as SELECTARG1(D3DTA_TFACTOR),
+             * no texture, factor = opacity << 24. Otherwise the stage keeps
+             * the last draw's texture. Pure-alpha only: the fade quad also
+             * disables the stage but colours from the diffuse. */
+            uint32_t tf = g_pg.comb_factor0[0];
+            if (!g_pg.tex[0].enabled && (tf & 0x00FFFFFFu) == 0 &&
+                tf != 0xFFFFFFFFu) {
+                dev->lpVtbl->SetTexture(dev, 0, NULL);
+                dev->lpVtbl->SetRenderState(dev, D3DRS_TEXTUREFACTOR, tf);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/,   2 /*SELECTARG1*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 3 /*D3DTA_TFACTOR*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/,   2 /*SELECTARG1*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, 3 /*D3DTA_TFACTOR*/);
+                return;
+            }
+        }
         {   /* A draw that samples a surface the game itself rendered into
              * reads the HOST target that owns that guest offset -- the floor's
              * reflection pass, the attract sequence's captured frames -- since
@@ -2308,6 +2335,11 @@ static void submit_draw(void)
 
 int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
 {
+    /* Combiner factors: recorded, not executed. */
+    if (method >= 0x0A60 && method <= 0x0A7C) {
+        g_pg.comb_factor0[(method - 0x0A60) >> 2] = param;
+        return 1;
+    }
     if (!g_pg.initialized)
         return 0;
 
