@@ -5374,6 +5374,39 @@ ESP_FIX(sub_001BB770, 0)
 ESP_FIX(sub_001BB256, 4)
 ESP_FIX(sub_001BB66A, 0xC)
 ESP_FIX(sub_001B8EE0, 0)
+
+/* D3DDevice_CreateDevice tail (0x001B4F60) and the state-block writer
+ * (0x001B52E0) are both split by the detector, so their pushes are popped in a
+ * successor fragment the taken path never reaches. Enforcing each one's fixed
+ * ret size is correct at every call site. Without the 0x001B52E0 fix the frame
+ * under sub_001B5618 was shifted and D3DDevice_SetViewport was handed a stack
+ * local that read back as device memory, which produced 14 garbage viewports a
+ * frame. */
+ESP_FIX(sub_001B4F60, 0x10)
+ESP_FIX(sub_001B52E0, 16)
+
+/* sub_001B5618 and sub_001B58AD are link_seed fragments of split parents
+ * (0x001B5580 and 0x001B58A8), not callees, so they must be plain
+ * pass-throughs.
+ *
+ * ESP_PROBE/ESP_FIX save edi/esi/ebx across the callee and write them back to
+ * "enforce the callee-saved ABI". That is right for a real function and wrong
+ * for a fragment, because a fragment is the tail of its parent and the pops it
+ * runs ARE the parent's register restore. D3DDevice_Present's supersample
+ * path leaves ebx = D3DRS_MultiSampleType & 0xF (2 on character select) in
+ * sub_001B5580 and jumps into sub_001B5618, which correctly pops ebx = 0 --
+ * and a wrapper then put the 2 straight back. That leaked ebx = 2 out of
+ * Present into sub_00153DA0, whose multisample-enable path ends with
+ * MEM8(0x90F4E5) = LO8(ebx) to clear the deferred-reset flag. The flag stayed
+ * raised, the next frame took the disable branch, and the 1440x960
+ * supersampled frame buffer the game had just asked for was rebuilt at
+ * 720x480. Every 1440-wide viewport was then clamped to half by
+ * sub_001B18A0 and the composite matrix came out exactly half of cxbx's. */
+void sub_001B5618_gen(void);
+void sub_001B5618(void) { sub_001B5618_gen(); }
+void sub_001B58AD_gen(void);
+void sub_001B58AD(void) { sub_001B58AD_gen(); }
+
 ESP_FIX(sub_001B9130, 4)
 ESP_FIX(sub_001BEA38, 4)   /* D3DDevice_ApplyStateBlock(handle), ret 4 */
 ESP_FIX(sub_001BEBC0, 4)   /* D3DDevice_CaptureStateBlock(handle), ret 4 */

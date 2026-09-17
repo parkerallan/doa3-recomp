@@ -62,6 +62,14 @@ extern "C" {
 #define XBOX_TOTAL_RAM          (64 * 1024 * 1024)  /* 64 MB */
 #define XBOX_GPU_RESERVED       (4 * 1024 * 1024)   /* ~4 MB for GPU */
 
+/* NV2A GPU register aperture. Emulated by faulting (see the VEH in main.c and
+ * nv2a_hook_handle_mmio), so it must stay reserved-but-uncommitted: a host
+ * allocation landing here turns it into ordinary RAM and every GPU status
+ * register reads 0. xbox_MemoryLayoutInit reserves it before anything else
+ * allocates. */
+#define XBOX_NV2A_MMIO_BASE     0xFD000000u
+#define XBOX_NV2A_MMIO_SIZE     0x01000000u  /* 16 MB */
+
 /* End of mapped sections */
 #define XBOX_MAP_END            (XBOX_DATA_VA + XBOX_DATA_SIZE)
 
@@ -151,10 +159,20 @@ ptrdiff_t xbox_GetMemoryOffset(void);
  *  across frames). Trimmed back to 2 MB because the movie player needs the
  *  low (GPU-addressable, <64 MB) heap space: the Sofdec intro allocates a ring
  *  of 720x480 frame surfaces (~1.3 MB each) that exhausted the 43 MB heap. */
-#define XBOX_STACK_SIZE     (1 * 1024 * 1024)   /* was 2 MB; deepest main-thread esp ever logged is ~4 KB below the top, and
+#define XBOX_STACK_SIZE     (256 * 1024)             /* was 1 MB, before that 2 MB; deepest main-thread esp ever logged is ~4 KB below the top, and
                                                  * the audio path (DSOUND regions + ADX movie voices) needs the low heap
                                                  * headroom: the ADX voice-open hit "out of memory (requested 65536)" at
-                                                 * 51,105,792/51,118,080 with the 2 MB stack. */
+                                                 * 51,105,792/51,118,080 with the 2 MB stack.
+                                                 *
+                                                 * Trimmed again to 256 KB. Fibers take their stacks from the guest heap
+                                                 * (xbox_fiber_create_dormant), so this region only ever carries the main
+                                                 * thread, whose deepest esp measured across a full boot + mode select +
+                                                 * character select run is 0x00D3EF34 -- 0x10CC below the top, i.e. ~4 KB
+                                                 * of the 1 MB in use. The 768 KB reclaimed goes to the low heap, which
+                                                 * was running 346 KB short at the character-select reset: the 1.38 MB
+                                                 * render-target allocation failed, sub_001B9260 bailed before filling the
+                                                 * surface descriptors, and SetViewport then clamped the viewport against
+                                                 * a surface it computed as one pixel wide. */
 
 /** Base VA of the stack area (above last XBE section).
  *  DOA3's image (incl. BSS, DOLBY, $$XTIMAGE) extends to ~0x00C31500, so the

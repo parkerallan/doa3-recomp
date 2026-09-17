@@ -14,6 +14,28 @@ typedef void (*recomp_func_t)(void);
  * rather than in recomp_funcs.h, which every generated unit includes. */
 void sub_000318D0(void);
 void sub_00079CE0(void);
+/* per-screen-state draw routines, see recomp_screendraw.c */
+void sub_000C88D0(void);
+void sub_000C8900(void);
+void sub_000CB480(void);
+void sub_000CD280(void);
+/* icall-only targets, see recomp_icall2.c */
+void sub_000458A0(void);
+void sub_000E15E0(void);
+void sub_001193E0(void);
+void sub_001240D0(void);
+void sub_001240E0(void);
+void sub_00124100(void);
+void sub_00124110(void);
+void sub_00124130(void);
+void sub_00124140(void);
+void sub_00124160(void);
+void sub_00124170(void);
+void sub_001250A0(void);
+void sub_00134CC0(void);
+void sub_001359A0(void);
+void sub_0018DA90(void);
+void sub_001CDCA9(void);
 void sub_000745A0(void);
 void sub_000C7420(void);
 void sub_000C7830(void);
@@ -1305,6 +1327,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x000456B0u, (recomp_func_t)sub_000456B0 },
     { 0x000456F5u, (recomp_func_t)sub_000456F5 },
     { 0x00045700u, (recomp_func_t)sub_00045700 },
+    { 0x000458A0u, (recomp_func_t)sub_000458A0 },
     { 0x00045980u, (recomp_func_t)sub_00045980 },
     { 0x00045AE0u, (recomp_func_t)sub_00045AE0 },
     { 0x00045C70u, (recomp_func_t)sub_00045C70 },
@@ -4731,6 +4754,8 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x000C8856u, (recomp_func_t)sub_000C8856 },
     { 0x000C8879u, (recomp_func_t)sub_000C8879 },
     { 0x000C889Eu, (recomp_func_t)sub_000C889E },
+    { 0x000C88D0u, (recomp_func_t)sub_000C88D0 },
+    { 0x000C8900u, (recomp_func_t)sub_000C8900 },
     { 0x000C8920u, (recomp_func_t)sub_000C8920 },
     { 0x000C89A0u, (recomp_func_t)sub_000C89A0 },
     { 0x000C89C0u, (recomp_func_t)sub_000C89C0 },
@@ -4793,6 +4818,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x000CB2C0u, (recomp_func_t)sub_000CB2C0 },
     { 0x000CB360u, (recomp_func_t)sub_000CB360 },
     { 0x000CB456u, (recomp_func_t)sub_000CB456 },
+    { 0x000CB480u, (recomp_func_t)sub_000CB480 },
     { 0x000CB4A0u, (recomp_func_t)sub_000CB4A0 },
     { 0x000CB660u, (recomp_func_t)sub_000CB660 },
     { 0x000CB820u, (recomp_func_t)sub_000CB820 },
@@ -4818,6 +4844,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x000CD20Cu, (recomp_func_t)sub_000CD20C },
     { 0x000CD213u, (recomp_func_t)sub_000CD213 },
     { 0x000CD21Bu, (recomp_func_t)sub_000CD21B },
+    { 0x000CD280u, (recomp_func_t)sub_000CD280 },
     { 0x000CD390u, (recomp_func_t)sub_000CD390 },
     { 0x000CD593u, (recomp_func_t)sub_000CD593 },
     { 0x000CD5A0u, (recomp_func_t)sub_000CD5A0 },
@@ -5435,6 +5462,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x000E1520u, (recomp_func_t)sub_000E1520 },
     { 0x000E1540u, (recomp_func_t)sub_000E1540 },
     { 0x000E1590u, (recomp_func_t)sub_000E1590 },
+    { 0x000E15E0u, (recomp_func_t)sub_000E15E0 },
     { 0x000E1630u, (recomp_func_t)sub_000E1630 },
     { 0x000E1660u, (recomp_func_t)sub_000E1660 },
     { 0x000E16F0u, (recomp_func_t)sub_000E16F0 }, /* DOA3 extra2 */
@@ -6623,6 +6651,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x00119370u, (recomp_func_t)sub_00119370 },
     { 0x00119390u, (recomp_func_t)sub_00119390 },
     { 0x00119392u, (recomp_func_t)sub_00119392 },
+    { 0x001193E0u, (recomp_func_t)sub_001193E0 },
     { 0x001193F0u, (recomp_func_t)sub_001193F0 },
     { 0x00119400u, (recomp_func_t)sub_00119400 },
     { 0x00119465u, (recomp_func_t)sub_00119465 },
@@ -6826,6 +6855,14 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x00123FB0u, (recomp_func_t)sub_00123FB0 },
     { 0x00123FC3u, (recomp_func_t)sub_00123FC3 },
     { 0x00123FC8u, (recomp_func_t)sub_00123FC8 },
+    { 0x001240D0u, (recomp_func_t)sub_001240D0 },
+    { 0x001240E0u, (recomp_func_t)sub_001240E0 },
+    { 0x00124100u, (recomp_func_t)sub_00124100 },
+    { 0x00124110u, (recomp_func_t)sub_00124110 },
+    { 0x00124130u, (recomp_func_t)sub_00124130 },
+    { 0x00124140u, (recomp_func_t)sub_00124140 },
+    { 0x00124160u, (recomp_func_t)sub_00124160 },
+    { 0x00124170u, (recomp_func_t)sub_00124170 },
     { 0x00124190u, (recomp_func_t)sub_00124190 },
     { 0x001241E4u, (recomp_func_t)sub_001241E4 },
     { 0x00124216u, (recomp_func_t)sub_00124216 },
@@ -6846,6 +6883,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x00124D40u, (recomp_func_t)sub_00124D40 },
     { 0x00124ED0u, (recomp_func_t)sub_00124ED0 },
     { 0x00125040u, (recomp_func_t)sub_00125040 },
+    { 0x001250A0u, (recomp_func_t)sub_001250A0 },
     { 0x001250F0u, (recomp_func_t)sub_001250F0 },
     { 0x001251ACu, (recomp_func_t)sub_001251AC },
     { 0x001251B2u, (recomp_func_t)sub_001251B2 },
@@ -7130,6 +7168,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x00134BF0u, (recomp_func_t)sub_00134BF0 },
     { 0x00134C38u, (recomp_func_t)sub_00134C38 },
     { 0x00134CA1u, (recomp_func_t)sub_00134CA1 },
+    { 0x00134CC0u, (recomp_func_t)sub_00134CC0 },
     { 0x00134D30u, (recomp_func_t)sub_00134D30 },
     { 0x00134DF0u, (recomp_func_t)sub_00134DF0 },
     { 0x00134E06u, (recomp_func_t)sub_00134E06 },
@@ -7153,6 +7192,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x001358B2u, (recomp_func_t)sub_001358B2 },
     { 0x00135919u, (recomp_func_t)sub_00135919 },
     { 0x00135930u, (recomp_func_t)sub_00135930 },
+    { 0x001359A0u, (recomp_func_t)sub_001359A0 },
     { 0x001359C0u, (recomp_func_t)sub_001359C0 },
     { 0x00135A10u, (recomp_func_t)sub_00135A10 },
     { 0x00135A30u, (recomp_func_t)sub_00135A30 },
@@ -10082,6 +10122,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x0018D597u, (recomp_func_t)sub_0018D597 },
     { 0x0018D5A3u, (recomp_func_t)sub_0018D5A3 },
     { 0x0018D5A6u, (recomp_func_t)sub_0018D5A6 },
+    { 0x0018DA90u, (recomp_func_t)sub_0018DA90 },
     { 0x0018DA91u, (recomp_func_t)sub_0018DA91 },
     { 0x0018DAC9u, (recomp_func_t)sub_0018DAC9 }, /* seeded icall target */
     { 0x0018DAD6u, (recomp_func_t)sub_0018DAD6 },
@@ -11742,6 +11783,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x001CDC69u, (recomp_func_t)sub_001CDC69 },
     { 0x001CDC98u, (recomp_func_t)sub_001CDC98 },
     { 0x001CDC9Cu, (recomp_func_t)sub_001CDC9C },
+    { 0x001CDCA9u, (recomp_func_t)sub_001CDCA9 },
     { 0x001CDCDDu, (recomp_func_t)sub_001CDCDD },
     { 0x001CDD28u, (recomp_func_t)sub_001CDD28 },
     { 0x001CDD3Du, (recomp_func_t)sub_001CDD3D },

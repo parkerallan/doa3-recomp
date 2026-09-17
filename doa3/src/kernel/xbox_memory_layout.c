@@ -205,6 +205,53 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     }
 
     /*
+     * Reserve the NV2A MMIO aperture (Xbox VA 0xFD000000-0xFDFFFFFF).
+     *
+     * The GPU registers are emulated by faulting: the VEH in main.c catches an
+     * access in this window and routes it to nv2a_hook_handle_mmio, which reads
+     * and writes the NV2A register state machine. That only works while the
+     * window is INACCESSIBLE, so the access raises the exception.
+     *
+     * Nothing used to hold the window, and every host allocation in the port
+     * (xbox_HeapAlloc, the kernel Mm* bridges, the CRT) calls VirtualAlloc with
+     * a NULL base, letting the OS pick. A multi-megabyte allocation landed on
+     * 0x11C000000 -- Xbox VA 0xFC000000 -- and ran straight through the whole
+     * aperture, leaving it committed PAGE_READWRITE. From then on GPU register
+     * accesses no longer faulted: they read plain zeroed RAM, so every status
+     * register answered 0.
+     *
+     * That is fatal to the D3D FIFO-idle wait (sub_001BB705). It spins until
+     * NV_PFIFO_CACHE1_STATUS and NV_PFIFO_RUNOUT_STATUS both report LOW_MARK
+     * (bit 4). pfifo_read answers both correctly, but with the aperture backed
+     * by RAM it was never consulted, the bits read 0, and the loop never
+     * exited -- the game hung with the last frame still on screen.
+     *
+     * Reserving without committing does both jobs: it keeps every later
+     * VirtualAlloc(NULL, ...) out of the window, and a reserved page is
+     * inaccessible, so accesses still fault into the emulator. Do it here,
+     * before the heap and the kernel bridges allocate anything.
+     */
+    {
+        void *mmio = (void *)((uintptr_t)XBOX_NV2A_MMIO_BASE + g_memory_offset);
+        LPVOID r = VirtualAlloc(mmio, XBOX_NV2A_MMIO_SIZE,
+                                MEM_RESERVE, PAGE_NOACCESS);
+        if (r == mmio) {
+            fprintf(stderr, "xbox_MemoryLayoutInit: NV2A MMIO aperture reserved "
+                            "at %p (Xbox VA 0x%08X, %u MB)\n",
+                    mmio, (unsigned)XBOX_NV2A_MMIO_BASE,
+                    (unsigned)(XBOX_NV2A_MMIO_SIZE / (1024 * 1024)));
+        } else {
+            /* Loud: without it the GPU status registers silently read 0 and
+             * the first FIFO-idle wait hangs the game. */
+            fprintf(stderr, "xbox_MemoryLayoutInit: WARNING could not reserve the "
+                            "NV2A MMIO aperture at %p (got %p, error %lu) -- GPU "
+                            "register emulation will not trap\n",
+                    mmio, r, GetLastError());
+            if (r) VirtualFree(r, 0, MEM_RELEASE);
+        }
+    }
+
+    /*
      * Helper macro: convert Xbox VA to actual mapped address.
      * When g_memory_offset == 0 (ideal case), this is identity.
      */
@@ -574,22 +621,74 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
      * resulting in zero-size allocations. With a bump allocator, these all
      * return the same address, causing overlapping structures. Enforce a
      * minimum of 4096 bytes so each allocation gets its own memory. */
-    if (size < 4096) size = 4096;
+    /* Zero-size requests must still get their own block: the Xbox D3D8 code
+     * computes some resource sizes from GPU capabilities that read back 0
+     * here, and with a bump allocator those would all share one address and
+     * overlap. That is what the 4096 floor was for -- but applying it to
+     * every small request wasted ~0.86 MB across 221 allocations, and the
+     * heap runs out by the character-select reset (49.5 MB of 50.75 MB),
+     * which is what starves the frame-buffer allocation. Keep the guard for
+     * the zero case and use a small granularity otherwise; every allocation
+     * still gets a distinct, non-overlapping block. */
+    if (size == 0) size = 4096;
+    else if (size < 64) size = 64;
 
-    /* Reuse a freed block first (must satisfy the alignment naturally). */
-    for (int i = 0; i < g_heap_track_n; i++) {
-        if (g_heap_track[i].free && g_heap_track[i].size >= size &&
-            g_heap_track[i].size <= size * 2 &&
-            (g_heap_track[i].va & (alignment - 1)) == 0) {
-            g_heap_track[i].free = 0;
-            memset((void *)((uintptr_t)g_heap_track[i].va + g_memory_offset), 0,
-                   g_heap_track[i].size);
+    /* Reuse a freed block first: BEST FIT over every free block that is big
+     * enough and naturally aligned, splitting the remainder back in.
+     *
+     * This used to refuse any block more than twice the request, so an
+     * ordinary allocation could not swallow a huge one. Without splitting
+     * that was the only protection available, but it also let the bump
+     * pointer keep advancing while large freed blocks sat unused -- and the
+     * bump never rewinds. By the character-select reset the heap stood at
+     * 51.3 MB of 52.1 MB with ~20 MB free but unusable, so the frame-buffer
+     * allocations failed and the surface descriptors were left empty. Best
+     * fit plus splitting bounds the waste without stranding memory. */
+    {
+        /* A free block whose START is not aligned can still hold an aligned
+         * sub-range; rejecting it outright stranded usable memory. Align up
+         * inside the block and require the aligned range to fit. */
+        int best = -1;
+        uint32_t best_va = 0;
+        for (int i = 0; i < g_heap_track_n; i++) {
+            uint32_t va, end;
+            if (!g_heap_track[i].free || !g_heap_track[i].size) continue;
+            va  = (g_heap_track[i].va + alignment - 1) & ~(alignment - 1);
+            end = g_heap_track[i].va + g_heap_track[i].size;
+            if (va < g_heap_track[i].va || va + size > end) continue;
+            if (best < 0 || g_heap_track[i].size < g_heap_track[best].size) {
+                best = i; best_va = va;
+            }
+        }
+        if (best >= 0) {
+            uint32_t take;
+            /* Split off any head skipped for alignment so it stays usable. */
+            if (best_va != g_heap_track[best].va && g_heap_track_n < HEAP_TRACK_MAX) {
+                g_heap_track[g_heap_track_n].va   = g_heap_track[best].va;
+                g_heap_track[g_heap_track_n].size = best_va - g_heap_track[best].va;
+                g_heap_track[g_heap_track_n].free = 1;
+                g_heap_track_n++;
+                g_heap_track[best].size -= (best_va - g_heap_track[best].va);
+                g_heap_track[best].va    = best_va;
+            }
+            take = (size + 4095u) & ~4095u;
+            if (g_heap_track[best].size >= take + 0x10000u &&
+                g_heap_track_n < HEAP_TRACK_MAX) {
+                g_heap_track[g_heap_track_n].va   = g_heap_track[best].va + take;
+                g_heap_track[g_heap_track_n].size = g_heap_track[best].size - take;
+                g_heap_track[g_heap_track_n].free = 1;
+                g_heap_track_n++;
+                g_heap_track[best].size = take;
+            }
+            g_heap_track[best].free = 0;
+            memset((void *)((uintptr_t)g_heap_track[best].va + g_memory_offset), 0,
+                   g_heap_track[best].size);
             g_heap_alloc_count++;
-            fprintf(stderr, "  [HEAP] #%d: size=%u align=%u -> 0x%08X (REUSED %u)\n",
-                    g_heap_alloc_count, size, alignment, g_heap_track[i].va,
-                    g_heap_track[i].size);
+            fprintf(stderr, "  [HEAP] #%d: size=%u align=%u -> 0x%08X (REUSED %u)%c",
+                    g_heap_alloc_count, size, alignment, g_heap_track[best].va,
+                    g_heap_track[best].size, 10);
             fflush(stderr);
-            return g_heap_track[i].va;
+            return g_heap_track[best].va;
         }
     }
 
@@ -597,6 +696,60 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
     result = (g_heap_next + alignment - 1) & ~(alignment - 1);
 
     if (result + size > g_heap_limit) {
+        /* The bump pointer is out of room. Before failing, take ANY free
+         * block that is big enough and correctly aligned -- best fit, so
+         * as little as possible is wasted.
+         *
+         * The tight-fit pass above deliberately refuses a block more than
+         * twice the request, so an ordinary allocation does not eat a huge
+         * one. That heuristic must not become an outright failure. Entering
+         * character select the game tears down its frame buffers (freeing
+         * 14 MB + 2.8 MB) and asks for a 5.9 MB multisampled one; the 14 MB
+         * block was the only fit and was rejected, so
+         * MmAllocateContiguousMemoryEx returned 0. sub_001B9260 then bails
+         * before filling the implicit surface descriptors at device+0x2150
+         * and +0x2168, leaving Format and Size zero -- and SetViewport
+         * clamps every viewport against a surface it then computes as one
+         * pixel wide. The 720x480 request became 1x1, the
+         * projection-viewport matrix collapsed, and transformed vertices
+         * came out with a negative w: the smeared geometry on that screen.
+         *
+         * This runs only where the allocator previously returned 0, so it
+         * cannot alter any allocation that already succeeds. */
+        int best = -1;
+        for (int i = 0; i < g_heap_track_n; i++) {
+            if (!g_heap_track[i].free) continue;
+            if (g_heap_track[i].size < size) continue;
+            if (g_heap_track[i].va & (alignment - 1)) continue;
+            if (best < 0 || g_heap_track[i].size < g_heap_track[best].size)
+                best = i;
+        }
+        if (best >= 0) {
+            /* Split the remainder back into the free list, otherwise a single
+             * oversized block satisfies one request and the rest is lost. The
+             * character-select reset asks for the 5.9 MB multisampled frame
+             * buffer TWICE; without splitting, the first took the whole 14 MB
+             * block and the second still failed. */
+            uint32_t take = (size + 4095u) & ~4095u;
+            if (g_heap_track[best].size >= take + 0x10000u &&
+                g_heap_track_n < HEAP_TRACK_MAX) {
+                g_heap_track[g_heap_track_n].va   = g_heap_track[best].va + take;
+                g_heap_track[g_heap_track_n].size = g_heap_track[best].size - take;
+                g_heap_track[g_heap_track_n].free = 1;
+                g_heap_track_n++;
+                g_heap_track[best].size = take;
+            }
+            g_heap_track[best].free = 0;
+            memset((void *)((uintptr_t)g_heap_track[best].va + g_memory_offset), 0,
+                   g_heap_track[best].size);
+            g_heap_alloc_count++;
+            fprintf(stderr, "  [HEAP] #%d: size=%u align=%u -> 0x%08X "
+                            "(REUSED OVERSIZED %u, bump exhausted)%c",
+                    g_heap_alloc_count, size, alignment,
+                    g_heap_track[best].va, g_heap_track[best].size, 10);
+            fflush(stderr);
+            return g_heap_track[best].va;
+        }
         fprintf(stderr, "xbox_HeapAlloc: out of memory (requested %u, used %u/%u)\n",
                 size, g_heap_next - XBOX_HEAP_BASE,
                 g_heap_limit - XBOX_HEAP_BASE);
@@ -631,12 +784,41 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
     return result;
 }
 
+/* Merge every run of adjacent free blocks into one.
+ *
+ * The tracker is a flat list, so a block freed next to another stays a
+ * separate entry and only the largest single entry can ever satisfy a big
+ * request. Tearing down the frame buffers on the character-select reset frees
+ * four blocks, two of which are contiguous (0x01278000 + 1474560 ==
+ * 0x013E0000); without merging them the following 5.9 MB requests could not
+ * all be met and the surface descriptors were left unfilled. */
+static void heap_coalesce(void)
+{
+    int merged = 1;
+    while (merged) {
+        merged = 0;
+        for (int i = 0; i < g_heap_track_n; i++) {
+            if (!g_heap_track[i].free || !g_heap_track[i].size) continue;
+            for (int j = 0; j < g_heap_track_n; j++) {
+                if (i == j || !g_heap_track[j].free || !g_heap_track[j].size) continue;
+                if (g_heap_track[i].va + g_heap_track[i].size != g_heap_track[j].va)
+                    continue;
+                g_heap_track[i].size += g_heap_track[j].size;
+                g_heap_track[j].size = 0;      /* retired: size 0 never matches */
+                g_heap_track[j].free = 0;
+                merged = 1;
+            }
+        }
+    }
+}
+
 void xbox_HeapFree(uint32_t xbox_va)
 {
     if (!xbox_va) return;
     for (int i = 0; i < g_heap_track_n; i++) {
         if (g_heap_track[i].va == xbox_va && !g_heap_track[i].free) {
             g_heap_track[i].free = 1;
+            heap_coalesce();
             fprintf(stderr, "  [HEAP] freed 0x%08X (%u bytes)\n",
                     xbox_va, g_heap_track[i].size);
             fflush(stderr);

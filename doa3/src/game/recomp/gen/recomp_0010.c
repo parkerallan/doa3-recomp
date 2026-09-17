@@ -68191,7 +68191,7 @@ loc_001B4F4D: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B4F60(void)
+void sub_001B4F60_gen(void)
 {
     uint32_t ebp;
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -68621,7 +68621,7 @@ loc_001B52CB: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B52E0(void)
+void sub_001B52E0_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -69001,6 +69001,13 @@ loc_001B560E: ;
 
 loc_001B5613: ;
     edx = 5;
+    /* DOA3: restored dropped fall-through to sub_001B5618.
+     * `mov edx, 5` at 0x001B5613 is five bytes and ends exactly at
+     * 0x001B5618, so the guest runs straight on into it. Without this the
+     * edx==5 path returned here and the whole state restore below
+     * (sub_001B51C0, which re-applies the render target, textures and the
+     * saved viewport from state+0x14) never ran. */
+    sub_001B5618(); return;
 
 }
 
@@ -69010,7 +69017,7 @@ loc_001B5613: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B5618(void)
+void sub_001B5618_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
@@ -69323,7 +69330,7 @@ loc_001B58A8: ;
  * CC: cdecl, 0 params, returns int_or_void
  * Frame: fpo_leaf
  */
-void sub_001B58AD(void)
+void sub_001B58AD_gen(void)
 {
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */

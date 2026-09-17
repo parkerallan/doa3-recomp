@@ -1612,7 +1612,20 @@ static int nv_clip_triangle(const ClipVert in[3], OutputVertex *dst)
 {
     ClipVert a[8], b[8];
     int n;
-    n = nv_clip_plane(in, 3, 0, 1e-6f, a);         /* W > 0 */
+    /* Clip against W > NEAR_EPS, not W > 0.
+     *
+     * nv_clip_to_out divides by W, so a vertex interpolated exactly onto a
+     * W>1e-6 plane comes out at x/1e-6 -- millions of pixels -- and the
+     * rasteriser stretches it across the frame. That is the smeared geometry
+     * on the character-select screen: [CLIP] showed inputs with w = -0.0006
+     * producing clipped outputs at x = 3.7e6.
+     *
+     * W here is view-space z (the composite's row 3 is the camera forward axis
+     * plus distance), and DOA3's projection carries a near plane of ~0.3, so
+     * anything nearer than this epsilon is already behind the near plane and
+     * must not survive the divide. Kept well under the real near distance so
+     * only genuinely degenerate vertices are removed. */
+    n = nv_clip_plane(in, 3, 0, 1e-2f, a);         /* W > near epsilon */
     if (n < 3) return 0;
     n = nv_clip_plane(a, n, 1, 0.0f, b);           /* Z >= 0 */
     if (n < 3) return 0;
