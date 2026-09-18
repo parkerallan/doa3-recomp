@@ -2497,13 +2497,7 @@ static const recomp_entry_t g_recomp_table[] = {
     { 0x00079CAEu, (recomp_func_t)sub_00079CAE },
     { 0x00079CB3u, (recomp_func_t)sub_00079CB3 },
     { 0x00079CB8u, (recomp_func_t)sub_00079CB8 },
-    /* sub_00079CE0: the task sub_00083A90 creates at 0x00083B66 when the
-     * title screen advances to mode 1. Seeded and generated (with its callee
-     * sub_000745A0), but enabling it runs on state the screen has not built
-     * yet -- it starts calling through corrupted pointers (icall targets
-     * 0x7F, 0x300) and faults. Out of the table until the screen object is
-     * populated far enough; an unresolved icall here is a no-op skip. */
-    /* { 0x00079CE0u, (recomp_func_t)sub_00079CE0 }, */
+    { 0x00079CE0u, (recomp_func_t)sub_00079CE0 },
     { 0x00079D20u, (recomp_func_t)sub_00079D20 },
     { 0x00079D6Fu, (recomp_func_t)sub_00079D6F },
     { 0x00079D80u, (recomp_func_t)sub_00079D80 },
