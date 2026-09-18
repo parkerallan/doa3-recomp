@@ -1503,7 +1503,7 @@ loc_0004C96A: ;
     if (CMP_L(LO16(edx), LO16(eax))) goto loc_0004C98D; /* jl: less (signed <) */
 
 loc_0004C988: ;
-    if (CMP_GE(LO16(eax) & LO16(eax), 0)) goto loc_0004C991; /* jge: greater or equal (signed >=) */
+    if (CMP_GE(LO16(eax), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004C991; /* jge: greater or equal (signed >=) */
 
 loc_0004C98D: ;
     MEM16(ecx + 4) = LO16(edx);
@@ -1602,7 +1602,7 @@ loc_0004CA4A: ;
     if (CMP_L(LO16(edx), LO16(eax))) goto loc_0004CA73; /* jl: less (signed <) */
 
 loc_0004CA6E: ;
-    if (CMP_GE(LO16(eax) & LO16(eax), 0)) goto loc_0004CA77; /* jge: greater or equal (signed >=) */
+    if (CMP_GE(LO16(eax), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004CA77; /* jge: greater or equal (signed >=) */
 
 loc_0004CA73: ;
     MEM16(ecx + 4) = LO16(edx);

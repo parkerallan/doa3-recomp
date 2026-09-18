@@ -2490,7 +2490,7 @@ loc_000C74E1: ;
     goto loc_000C74F7;
 
 loc_000C74ED: ;
-    if (CMP_GE(LO8(eax) & LO8(eax), 0)) goto loc_000C74F7; /* jge: greater or equal (signed >=) */
+    if (CMP_GE(LO8(eax), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_000C74F7; /* jge: greater or equal (signed >=) */
 
 loc_000C74F1: ;
     SET_LO8(eax, LO8(eax) + LO8(ecx));
@@ -2537,7 +2537,7 @@ loc_000C7526: ;
     goto loc_000C753E;
 
 loc_000C7534: ;
-    if (CMP_GE(LO8(ebx) & LO8(ebx), 0)) goto loc_000C753E; /* jge: greater or equal (signed >=) */
+    if (CMP_GE(LO8(ebx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_000C753E; /* jge: greater or equal (signed >=) */
 
 loc_000C7538: ;
     SET_LO8(ebx, LO8(ebx) + LO8(ecx));

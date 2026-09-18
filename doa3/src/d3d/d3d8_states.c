@@ -123,6 +123,19 @@ static DWORD hash_raster_states(const DWORD *rs)
  * State object creation
  * ================================================================ */
 
+static D3D11_BLEND d3d11_blend_alpha_equiv(D3D11_BLEND f)
+{
+    switch (f) {
+    case D3D11_BLEND_SRC_COLOR:      return D3D11_BLEND_SRC_ALPHA;
+    case D3D11_BLEND_INV_SRC_COLOR:  return D3D11_BLEND_INV_SRC_ALPHA;
+    case D3D11_BLEND_DEST_COLOR:     return D3D11_BLEND_DEST_ALPHA;
+    case D3D11_BLEND_INV_DEST_COLOR: return D3D11_BLEND_INV_DEST_ALPHA;
+    case D3D11_BLEND_SRC1_COLOR:     return D3D11_BLEND_SRC1_ALPHA;
+    case D3D11_BLEND_INV_SRC1_COLOR: return D3D11_BLEND_INV_SRC1_ALPHA;
+    default: return f;
+    }
+}
+
 static void update_blend_state(const DWORD *rs)
 {
     DWORD hash = hash_blend_states(rs);
@@ -142,8 +155,14 @@ static void update_blend_state(const DWORD *rs)
     bd.RenderTarget[0].SrcBlend = d3d8_to_d3d11_blend(rs[D3DRS_SRCBLEND]);
     bd.RenderTarget[0].DestBlend = d3d8_to_d3d11_blend(rs[D3DRS_DESTBLEND]);
     bd.RenderTarget[0].BlendOp = d3d8_to_d3d11_blendop(rs[D3DRS_BLENDOP] ? rs[D3DRS_BLENDOP] : 1);
-    bd.RenderTarget[0].SrcBlendAlpha = bd.RenderTarget[0].SrcBlend;
-    bd.RenderTarget[0].DestBlendAlpha = bd.RenderTarget[0].DestBlend;
+    /* D3D11 rejects the colour-only factors (SRC_COLOR, INV_SRC_COLOR,
+     * DEST_COLOR, INV_DEST_COLOR) in the alpha slots: CreateBlendState
+     * returned E_INVALIDARG, the state stayed NULL and the draw went out
+     * unblended. DOA3's round-start/KO messages blend with
+     * INVDESTCOLOR/INVSRCALPHA and came out as solid white. Use the alpha
+     * counterpart of each colour factor, which is what D3D8/D3D9 do. */
+    bd.RenderTarget[0].SrcBlendAlpha = d3d11_blend_alpha_equiv(bd.RenderTarget[0].SrcBlend);
+    bd.RenderTarget[0].DestBlendAlpha = d3d11_blend_alpha_equiv(bd.RenderTarget[0].DestBlend);
     bd.RenderTarget[0].BlendOpAlpha = bd.RenderTarget[0].BlendOp;
     bd.RenderTarget[0].RenderTargetWriteMask = (UINT8)(rs[D3DRS_COLORWRITEENABLE] & 0x0F);
 

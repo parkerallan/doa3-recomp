@@ -1237,6 +1237,8 @@ static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
  * stale dynamic texture for them sampled texel (0,0) and multiplied them away.
  * The array path leaves this set, so only the inline path can clear it. */
 static int g_nv_draw_has_uv = 1;
+/* DOA3: 1 while submit_draw (the inline 2D path) is applying state. */
+static int g_nv_draw_inline = 0;
 static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                                 uint32_t out_vert_count)
 {
@@ -1499,7 +1501,15 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             }
         }
         dtex = get_dynamic_texture(dev);
-        if (!g_pg.tex[0].enabled && (diffuse_rgb_black || !g_nv_draw_has_uv)) dtex = NULL;
+        /* DOA3: a 2D draw whose texture stage is DISABLED is flat colour,
+         * whatever its vertex layout carries. The fight UI submits its
+         * health-bar fills, the pause menu's highlight bar and title box
+         * and the button backings as 13-dword vertices (a texcoord slot
+         * present) with the stage off; binding the previous draw's
+         * texture here modulated every one of them away. Only rgb-black
+         * quads survived, which is why the dark rows showed and the
+         * coloured ones did not. The array (3D) path keeps its rule. */
+        if (!g_pg.tex[0].enabled && (diffuse_rgb_black || !g_nv_draw_has_uv || g_nv_draw_inline)) dtex = NULL;
         if (dtex) {
             /* DOA3 configures the pixel pipeline through the register
              * combiners, which this translator does not implement; it
@@ -2017,6 +2027,7 @@ static void submit_array_draw(void)
     }
 
     g_nv_draw_has_uv = 1;            /* array path: unchanged */
+    g_nv_draw_inline = 0;
     nv_apply_draw_state(dev, out, out_n);
     nv_fit_to_backbuffer(out, out_n, 0);
 
@@ -2411,7 +2422,9 @@ static void submit_draw(void)
     if (!dev) return;
 
     g_nv_draw_has_uv = (lay_uv >= 0);
+    g_nv_draw_inline = 1;
     nv_apply_draw_state(dev, out, out_vert_count);
+    g_nv_draw_inline = 0;
     nv_fit_to_backbuffer(out, out_vert_count, 1);
     /* Begin scene if needed */
     dev->lpVtbl->BeginScene(dev);

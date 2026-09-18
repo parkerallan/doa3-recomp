@@ -2278,7 +2278,7 @@ loc_0004D58D: ;
 loc_0004D594: ;
     SET_LO8(ecx, MEM8(eax + 2));
     esi = 0; /* xor self */
-    if (CMP_LE(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D5A7; /* jle: less or equal (signed <=) */
+    if (CMP_LE(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D5A7; /* jle: less or equal (signed <=) */
 
 loc_0004D59D: ;
     SET_LO8(ecx, LO8(ecx) - 1);
@@ -2290,7 +2290,7 @@ loc_0004D5A7: ;
     SET_LO8(ecx, LO8(ecx) - 1);
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM8(eax + 1) = LO8(ecx);
-    if (CMP_G(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D723; /* jg: greater (signed >) */
+    if (CMP_G(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D723; /* jg: greater (signed >) */
 
 loc_0004D5B7: ;
     fp_push((double)SMEM32(esp + 0x18)); /* fild */
@@ -2338,7 +2338,7 @@ loc_0004D636: ;
     SET_LO8(ecx, LO8(ecx) - 1);
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM8(eax + 1) = LO8(ecx);
-    if (CMP_G(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D723; /* jg: greater (signed >) */
+    if (CMP_G(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D723; /* jg: greater (signed >) */
 
 loc_0004D648: ;
     SET_LO8(ecx, MEM8(esp + 0x14));
@@ -2352,7 +2352,7 @@ loc_0004D65A: ;
     SET_LO8(ecx, LO8(ecx) - 1);
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM8(eax + 1) = LO8(ecx);
-    if (CMP_G(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D6A8; /* jg: greater (signed >) */
+    if (CMP_G(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D6A8; /* jg: greater (signed >) */
 
 loc_0004D666: ;
     SET_LO8(ecx, MEM8(edx + 0x24));
@@ -2387,7 +2387,7 @@ loc_0004D6A8: ;
     SET_LO8(ecx, LO8(ecx) - 1);
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM8(eax + 1) = LO8(ecx);
-    if (CMP_G(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D723; /* jg: greater (signed >) */
+    if (CMP_G(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D723; /* jg: greater (signed >) */
 
 loc_0004D6B6: ;
     SET_LO8(ecx, MEM8(edx + 0x24));
@@ -2426,7 +2426,7 @@ loc_0004D715: ;
     SET_LO8(ecx, LO8(ecx) - 1);
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM8(eax + 1) = LO8(ecx);
-    if (CMP_LE(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D723; /* jle: less or equal (signed <=) */
+    if (CMP_LE(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D723; /* jle: less or equal (signed <=) */
 
 loc_0004D721: ;
     esi = 0; /* xor self */
@@ -2467,7 +2467,7 @@ loc_0004D760: ;
     SET_LO8(ecx, LO8(ecx) - 1);
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM8(eax + 1) = LO8(ecx);
-    if (CMP_G(LO8(ecx) & LO8(ecx), 0)) goto loc_0004D721; /* jg: greater (signed >) */
+    if (CMP_G(LO8(ecx), 0) /* DOA3: x&x promoted to int, sign lost at width */) goto loc_0004D721; /* jg: greater (signed >) */
 
 loc_0004D76C: ;
     MEM8(eax) = 0;

@@ -52443,14 +52443,19 @@ loc_00081A40: ;
 loc_00081A47: ;
     edx = ZX8(MEM8(ebx + 0x2FD550));
     edx = (uint32_t)((int32_t)edx * (int32_t)0x2C);
-    /* test MEM8(edx + 0x5E5EE0), 0x10 - flags set for next jcc */
-    goto loc_00081A61;
+    /* DOA3: the jne at 0x00081A61 has TWO flag producers -- the START-edge
+     * test here (pad present) and the cmp at 0x00081A5A (pad absent). The
+     * lift evaluated only the cmp, so with a pad present the fight requested
+     * a pause on every frame it was not already paused and never looked at
+     * the START edge: fights loaded straight into the pause menu and START
+     * could not close it. Evaluate each producer on its own path. */
+    if (TEST_NZ(MEM8(edx + 0x5E5EE0), 0x10)) goto loc_00081AC9; /* jne after test: START edge */
+    goto loc_00081A63;
 
 loc_00081A5A: ;
-    /* cmp MEM8(0x48A470), 1 - flags set for next jcc */
+    if (CMP_NE(MEM8(0x48A470), 1)) goto loc_00081AC9; /* jne after cmp: not already paused */
 
 loc_00081A61: ;
-    if (CMP_NE(MEM8(0x48A470), 1)) goto loc_00081AC9; /* jne: not equal / not zero */
 
 loc_00081A63: ;
     SET_LO8(eax, MEM8(0x48E612));
