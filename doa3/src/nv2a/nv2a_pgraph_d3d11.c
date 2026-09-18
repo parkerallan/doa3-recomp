@@ -224,6 +224,12 @@ static struct {
     /* Viewport */
     float vp_offset[4];
     float vp_scale[4];
+    /* NV097_SET_WINDOW_CLIP_* (0x02B4/0x02C0/0x02E0): the hardware scissor.
+     * DOA3 programs it ~18.8k times per 2 s and it is what confines the
+     * character-select portrait to its window. */
+    uint32_t window_clip_type;
+    uint32_t window_clip_h[8];
+    uint32_t window_clip_v[8];
     uint32_t surface_clip_h;
     uint32_t surface_clip_v;
     /* DOA3: depth range the fixed-function output is normalised with.
@@ -986,8 +992,26 @@ static void nv_transform_clip(const float in[4], OutputVertex *v,
          * coordinates as NDC (x ~ 340,000): that was the black screen after
          * the title showcase reload. */
         float zrange = (((g_pg.surface_fmt >> 4) & 0xF) == 1) ? 65535.0f : 16777215.0f;
-        v->x   = c[0] * inv;
-        v->y   = c[1] * inv;
+        /* The composite carries the viewport's SCALE but not its ORIGIN: the
+         * device's projection-viewport matrix (dev+0x5A0) has m03 = m13 = 0,
+         * verified identical in cxbx. NV097_SET_VIEWPORT_OFFSET supplies the
+         * origin, and ignoring it drew character select's portrait relative to
+         * the surface instead of its window -- measured 96 surface units left
+         * and 146 up, against a portrait viewport origin of (94,154) and an
+         * offset register reading (95,155). Scale was already correct: the
+         * face measures 0.380 of the window in both the port and cxbx.
+         *
+         * Guarded, because DOA3 overwrites these registers mid-scene with
+         * zeros and unit vectors -- only a plausible on-surface origin is
+         * applied, and (0,0) costs nothing. */
+        {   float ox = g_pg.vp_offset[0], oy = g_pg.vp_offset[1];
+            unsigned sw = (g_pg.surface_clip_h >> 16) & 0xFFFF;
+            unsigned sh = (g_pg.surface_clip_v >> 16) & 0xFFFF;
+            if (!(ox >= 0.0f && oy >= 0.0f && sw && sh &&
+                  ox < (float)sw && oy < (float)sh)) { ox = 0.0f; oy = 0.0f; }
+            v->x   = c[0] * inv + ox;
+            v->y   = c[1] * inv + oy;
+        }
         v->z   = (c[2] * inv) / zrange;
         v->rhw = inv;
         return;
@@ -1206,6 +1230,13 @@ static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
  *
  * Factored out of submit_draw so the vertex-array path applies exactly the
  * same state; it previously existed only on the inline path. */
+/* Does the draw in front of us have a texcoord attribute at all? An inline
+ * vertex whose SET_VERTEX_DATA_ARRAY_FORMAT declares no texcoord slot cannot
+ * be textured: DOA3's character-select panel borders, window backing quad and
+ * background gradient are position+diffuse only (5 dwords), and binding the
+ * stale dynamic texture for them sampled texel (0,0) and multiplied them away.
+ * The array path leaves this set, so only the inline path can clear it. */
+static int g_nv_draw_has_uv = 1;
 static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                                 uint32_t out_vert_count)
 {
@@ -1468,7 +1499,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             }
         }
         dtex = get_dynamic_texture(dev);
-        if (!g_pg.tex[0].enabled && diffuse_rgb_black) dtex = NULL;
+        if (!g_pg.tex[0].enabled && (diffuse_rgb_black || !g_nv_draw_has_uv)) dtex = NULL;
         if (dtex) {
             /* DOA3 configures the pixel pipeline through the register
              * combiners, which this translator does not implement; it
@@ -1714,7 +1745,88 @@ extern int  d3d8_OffscreenTargetActive(void);
  * fell off the screen -- which is why the "3" of the corner logo was missing.
  * Scale here, where the guest surface size is known, rather than changing what
  * XYZRHW means to the D3D8 layer. */
-static void nv_fit_to_backbuffer(OutputVertex *out, uint32_t n)
+/* Per-vertex dword count for an INLINE_ARRAY, summed from the attribute
+ * slots the guest enabled through SET_VERTEX_DATA_ARRAY_FORMAT. This is
+ * what the hardware itself unpacks the array with, so it is layout truth
+ * for the draw in front of us rather than whatever a previous draw left
+ * in vert_stride. Slot format: type bits 0-3, component count bits 4-7
+ * (0 = slot disabled). Returns 0 if no slot is enabled. */
+static uint32_t nv_inline_layout_from_attrs(int *pos_dw, int *uv_off, int *color_off)
+{
+    uint32_t off = 0; int slot;
+    if (pos_dw)    *pos_dw = 2;
+    if (uv_off)    *uv_off = -1;
+    if (color_off) *color_off = -1;
+    for (slot = 0; slot < 16; slot++) {
+        uint32_t fmt = g_pg.attr_fmt[slot];
+        uint32_t type = fmt & 0xFu, count = (fmt >> 4) & 0xFu, dw;
+        if (count == 0) continue;
+        switch (type) {
+        case 2:  dw = count;            break;   /* float per component */
+        case 0:                                 /* UB_D3D  (4 bytes)   */
+        case 4:  dw = 1;                break;   /* UB_OGL  (4 bytes)   */
+        case 1:                                 /* S1  short normalised */
+        case 5:  dw = (count + 1) / 2;  break;   /* S32K short          */
+        case 6:  dw = 1;                break;   /* CMP packed          */
+        default: dw = count;            break;
+        }
+        /* Slot 0 is position, 3 diffuse, 9 texcoord0 -- the same slot
+         * semantics the recompiled DrawVerticesUP wrapper walks. */
+        if      (slot == 0) { if (pos_dw)    *pos_dw    = (int)dw;  }
+        else if (slot == 3) { if (color_off) *color_off = (int)off; }
+        else if (slot == 9) { if (uv_off)    *uv_off    = (int)off; }
+        off += dw;
+    }
+    return off;
+}
+
+/* Hand NV097_SET_WINDOW_CLIP to the host as a scissor rectangle.
+ *
+ * This is the NV2A's hardware scissor and DOA3 leans on it: character select
+ * programs 94,154-701,625 for the portrait pass and 0,0-1439,959 for the 2D
+ * layer. The rect is in SURFACE pixels -- 1440x960 while the 2x2 supersampled
+ * frame buffer is bound -- so it maps onto the back buffer exactly the way
+ * nv_fit_to_backbuffer maps the vertices. Ignoring it let the portrait spill
+ * across the whole screen instead of sitting inside its window.
+ *
+ * XMAX/YMAX are inclusive. Type 1 is an exclusion rectangle, which nothing
+ * here needs; leave the scissor wide open rather than guess at it.
+ * Returns 1 if a rect narrower than the whole target was set. */
+static int nv_apply_window_clip(void)
+{
+    extern void d3d8_SetScissorRect(int x, int y, int w, int h);
+    unsigned gw = (g_pg.surface_clip_h >> 16) & 0xFFFF;
+    unsigned gh = (g_pg.surface_clip_v >> 16) & 0xFFFF;
+    unsigned bw = d3d8_GetBackbufferWidth(), bh = d3d8_GetBackbufferHeight();
+    uint32_t hz = g_pg.window_clip_h[0], vt = g_pg.window_clip_v[0];
+    unsigned x0, y0, x1, y1;
+    int sx0, sy0, sx1, sy1;
+
+    if (g_pg.window_clip_type != 0) return 0;
+    if (!gw || !gh || !bw || !bh) return 0;
+    x0 =  hz        & 0xFFFu; x1 = (hz >> 16) & 0xFFFu;
+    y0 =  vt        & 0xFFFu; y1 = (vt >> 16) & 0xFFFu;
+    if (x1 <= x0 || y1 <= y0) return 0;                 /* never programmed */
+    if (x0 == 0 && y0 == 0 && x1 + 1 >= gw && y1 + 1 >= gh) return 0;  /* whole surface */
+
+    sx0 = (int)((float)x0 * (float)bw / (float)gw);
+    sy0 = (int)((float)y0 * (float)bh / (float)gh);
+    sx1 = (int)(((float)x1 + 1.0f) * (float)bw / (float)gw);
+    sy1 = (int)(((float)y1 + 1.0f) * (float)bh / (float)gh);
+    if (sx1 <= sx0 || sy1 <= sy0) return 0;
+    d3d8_SetScissorRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+    return 1;
+}
+
+/* `screen_space` marks the inline 2D layer, whose vertices the game submits
+ * pre-transformed in DISPLAY pixels. Those are not the pixels of the surface
+ * that happens to be bound: on character select the game turns on 2x2
+ * supersampling and the frame buffer becomes 1440x960, so dividing the
+ * overlay by SET_SURFACE_CLIP put the whole UI at half scale in the top-left
+ * quadrant. Array-path vertices go through the composite matrix, which
+ * already carries the (supersampled) NV2A viewport, so they keep mapping
+ * from the clip. */
+static void nv_fit_to_backbuffer(OutputVertex *out, uint32_t n, int screen_space)
 {
     unsigned gw = (g_pg.surface_clip_h >> 16) & 0xFFFF;
     unsigned gh = (g_pg.surface_clip_v >> 16) & 0xFFFF;
@@ -1722,6 +1834,14 @@ static void nv_fit_to_backbuffer(OutputVertex *out, uint32_t n)
     unsigned bh = d3d8_GetBackbufferHeight();
     float sx, sy;
     uint32_t i;
+
+    /* Only for the swap chain: an offscreen target really is the size of the
+     * clip that made it, so its draws must keep using the clip. */
+    if (screen_space && !d3d8_OffscreenTargetActive()) {
+        extern int doa3_guest_display_size(unsigned *w, unsigned *h);
+        unsigned dw, dh;
+        if (doa3_guest_display_size(&dw, &dh)) { gw = dw; gh = dh; }
+    }
 
     if (!gw || !gh || !bw || !bh) return;
     if (gw == bw && gh == bh) return;
@@ -1896,8 +2016,9 @@ static void submit_array_draw(void)
         }
     }
 
+    g_nv_draw_has_uv = 1;            /* array path: unchanged */
     nv_apply_draw_state(dev, out, out_n);
-    nv_fit_to_backbuffer(out, out_n);
+    nv_fit_to_backbuffer(out, out_n, 0);
 
     if ((prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
         nv_batch_needs_clip(out, out_n)) {
@@ -1925,12 +2046,14 @@ static void submit_array_draw(void)
     }
 
     {   DWORD prev_vs = 0;
+        int clipped = nv_apply_window_clip();
         HRESULT got = dev->lpVtbl->GetVertexShader(dev, &prev_vs);
         dev->lpVtbl->SetVertexShader(dev,
             D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
         dev->lpVtbl->BeginScene(dev);
         dev->lpVtbl->DrawPrimitiveUP(dev, (D3DPRIMITIVETYPE)prim,
                                      prim_count, out, sizeof(OutputVertex));
+        if (clipped) { extern void d3d8_ResetScissorRect(void); d3d8_ResetScissorRect(); }
         if (got == 0) dev->lpVtbl->SetVertexShader(dev, prev_vs);
     }
     g_pg.stats.draw_calls++;
@@ -1941,6 +2064,23 @@ static void submit_array_draw(void)
 uint32_t g_dbail[8];        /* 0=calls 1=no-inline 2=no-stride 3=too-few 4=drawn 5=movie-gate */
 uint32_t g_dbail_lastic, g_dbail_lastst;
 
+/* Screen-space z for the inline 2D layer, clamped just inside the clip range.
+ *
+ * These vertices are pre-transformed, so the shader emits them as
+ * (z, w) = (z, 1) and D3D11 clips anything outside 0 <= z <= w. DOA3
+ * submits its character-select backing quad and panel borders at exactly
+ * z = 1.0 -- the far plane -- and every one of them was being discarded on
+ * that boundary. The NV2A clamps here rather than clipping, so nudge the
+ * far end inside the range instead of turning depth clipping off for the
+ * whole device, which would change the 3D path as well. 0.9999 still sorts
+ * behind the 3D scene (the portrait sits around z = 0.82). */
+static float nv_clamp_screen_z(float z)
+{
+    if (!(z == z)) return 0.0f;            /* NaN */
+    if (z < 0.0f)    return 0.0f;
+    if (z > 0.9999f) return 0.9999f;
+    return z;
+}
 static void submit_draw(void)
 {
     nv_sync_render_target();
@@ -1973,11 +2113,19 @@ static void submit_draw(void)
         }
     }
 
-    {   /* DOA3: correct the per-vertex stride from the guest's own vertex
-         * count. The 2D overlay quad pushes 11 dwords per vertex while the
-         * API stride says 7, so the parser read 6 vertices of scrambled data
-         * and the corner logo never rasterised. Only ever narrows the guess
-         * when the count divides the payload exactly. */
+    /* Per-draw vertex layout. NOTHING derived here is written back into
+     * g_pg.*: those persist between draws, so a 5-dword untextured line
+     * deriving its own layout would poison the next 13-dword textured panel.
+     * That is what blanked the character portrait and then striped it.
+     * Only the hint path below still updates the globals, exactly as it
+     * always did, because the corner-logo quad depends on that. */
+    uint32_t stride  = g_pg.vert_stride;
+    int      lay_uv  = g_pg.layout_uv_off;
+    int      lay_col = g_pg.layout_color_off;
+    int      lay_pos = g_pg.layout_pos_dw;
+
+    {   /* The guest's own vertex count, when it gave us one: an exact
+         * division beats every other source. */
         uint32_t hv = g_pg.hint_verts;
         g_pg.hint_verts = 0;
         if (hv && g_pg.inline_count && (g_pg.inline_count % hv) == 0) {
@@ -1988,12 +2136,59 @@ static void submit_draw(void)
                     g_pg.layout_uv_off = (int)g_pg.hint_declared_dw;
                 g_pg.vert_stride = hs;
             }
+            stride = g_pg.vert_stride; lay_uv = g_pg.layout_uv_off;
+        }
+        /* No hint, and the stride in force does not divide the payload, so it
+         * provably is not this draw's -- it is whatever the last draw left.
+         * SET_VERTEX_DATA_ARRAY_FORMAT is what the hardware itself unpacks an
+         * INLINE_ARRAY with, and DOA3 does emit it (all 16 slots).
+         *
+         * Measured against cxbx at character select: of 2180 DrawVerticesUP
+         * calls, 1672 are 2-vertex LINELIST at a 20-byte (5-dword) stride --
+         * position + diffuse, no texcoords. Those are the panel borders
+         * (0x0006DB1D, colour 80C8C8C8) and the background gradient
+         * (0x000C9A9A / 0x000C9B4A, FF0A0A0A..FF282828 across the full 720).
+         * Against the 13-dword stride of the textured panel before them they
+         * parsed as zero vertices and every one was dropped. */
+        else if (g_pg.inline_count && stride &&
+                 (g_pg.inline_count % stride) != 0) {
+            int a_pos = 2, a_uv = -1, a_col = -1;
+            uint32_t adw = nv_inline_layout_from_attrs(&a_pos, &a_uv, &a_col);
+            if (adw >= 2 && adw <= 16 && (g_pg.inline_count % adw) == 0) {
+                stride = adw;
+                /* Take the derived offsets only when this draw's vertex is NOT
+                 * the size the CPU side declared -- then the CPU layout cannot
+                 * describe it. When they agree the CPU layout is the better
+                 * one; overriding it there sampled the textured panels at the
+                 * wrong texcoord and striped them over the portrait. */
+                if (adw != g_pg.hint_declared_dw) { lay_uv = a_uv; lay_col = a_col; lay_pos = a_pos; }
+            } else if (g_pg.hint_declared_dw >= 2 && g_pg.hint_declared_dw <= 16 &&
+                       (g_pg.inline_count % g_pg.hint_declared_dw) == 0) {
+                stride = g_pg.hint_declared_dw;
+            }
         }
     }
 
-    uint32_t num_verts = g_pg.inline_count / g_pg.vert_stride;
-    if (num_verts < 3) { g_dbail[3]++; g_dbail_lastic = g_pg.inline_count;
-                         g_dbail_lastst = g_pg.vert_stride; return; }
+    uint32_t num_verts = g_pg.inline_count / stride;
+    {   /* How many vertices this primitive actually needs. A flat 3 dropped
+         * every LINE draw in the game -- and cxbx says 77% of this screen's
+         * draws are 2-vertex LINELIST. */
+        uint32_t min_verts;
+        switch (g_pg.draw_mode) {
+        case 1:  min_verts = 1; break;              /* POINTS               */
+        case 2:                                     /* LINES                */
+        case 3:                                     /* LINE_LOOP            */
+        case 4:  min_verts = 2; break;              /* LINE_STRIP           */
+        case 8:                                     /* QUADS                */
+        case 9:  min_verts = 4; break;              /* QUAD_STRIP           */
+        default: min_verts = 3; break;              /* triangles / polygon  */
+        }
+        if (num_verts < min_verts) {
+            g_dbail[3]++; g_dbail_lastic = g_pg.inline_count;
+            g_dbail_lastst = stride;
+            return;
+        }
+    }
     g_dbail[4]++;
 
     {   /* DOA3 DIAG: one-shot dump of a program-mode draw. */
@@ -2004,7 +2199,7 @@ static void submit_draw(void)
             fprintf(stderr, "[VPDUMP] xform_mode=%u attr_fmt_seen=%d stride=%u "
                             "inline_dw=%u vp_scale=(%.2f %.2f %.2f %.2f) "
                             "vp_off=(%.2f %.2f %.2f %.2f)\n",
-                    g_pg.xform_mode, g_pg.attr_fmt_seen, g_pg.vert_stride,
+                    g_pg.xform_mode, g_pg.attr_fmt_seen, stride,
                     g_pg.inline_count,
                     g_pg.vp_scale[0], g_pg.vp_scale[1], g_pg.vp_scale[2], g_pg.vp_scale[3],
                     g_pg.vp_offset[0], g_pg.vp_offset[1], g_pg.vp_offset[2], g_pg.vp_offset[3]);
@@ -2029,10 +2224,11 @@ static void submit_draw(void)
 
     {   /* DOA3 DIAG: per-draw-mode tally (count, last vert count, stride). */
             int dm = g_pg.draw_mode & 15;
-        g_dstat[dm][0]++; g_dstat[dm][1] = num_verts; g_dstat[dm][2] = g_pg.vert_stride;
+        g_dstat[dm][0]++; g_dstat[dm][1] = num_verts; g_dstat[dm][2] = stride;
     }
 
     const uint32_t *src = g_pg.inline_data;
+
 
     {   /* DOA3 DIAG: census of post-FMV draws -- what is actually being
          * submitted, and why none of it reaches the screen. */
@@ -2042,14 +2238,14 @@ static void submit_draw(void)
             int all_zero_col = 1, any_alpha = 0;
             float mnx = 1e9f, mxx = -1e9f, mny = 1e9f, mxy = -1e9f;
             for (uint32_t i = 0; i < nv && i < 64; i++) {
-                uint32_t b = i * g_pg.vert_stride;
+                uint32_t b = i * stride;
                 float x = u2f(src[b + 0]), y = u2f(src[b + 1]);
                 if (x < mnx) mnx = x;
                 if (x > mxx) mxx = x;
                 if (y < mny) mny = y;
                 if (y > mxy) mxy = y;
-                if (g_pg.layout_color_off >= 0) {
-                    uint32_t c = src[b + g_pg.layout_color_off];
+                if (lay_col >= 0) {
+                    uint32_t c = src[b + lay_col];
                     if (c) all_zero_col = 0;
                     if (c >> 24) any_alpha = 1;
                 }
@@ -2090,22 +2286,28 @@ static void submit_draw(void)
         case D3DPT_LINESTRIP:     prim_count = out_vert_count - 1; break;
         default: prim_count = out_vert_count / 3; break;
     }
-    if (prim_count == 0)
+    if (prim_count == 0) {
         return;
+    }
 
     /* Convert inline vertices to OutputVertex (28 bytes) */
     OutputVertex *out = (OutputVertex *)_alloca(out_vert_count * sizeof(OutputVertex));
 
     /* Helper to convert one inline vertex */
     #define CONVERT_VERT(dst_idx, src_idx) do { \
-        uint32_t _b = (src_idx) * g_pg.vert_stride; \
+        uint32_t _b = (src_idx) * stride; \
         out[dst_idx].x     = u2f(src[_b + 0]); \
         out[dst_idx].y     = u2f(src[_b + 1]); \
-        out[dst_idx].z     = 0.0f; \
+        /* The guest's own z. Hardcoding 0 put every 2D draw on the NEAR plane: \
+         * character select submits its window backing quad at z = 1.0 with \
+         * depth test and write on, so at z = 0 it stamped the near plane over \
+         * the window and the character behind it (z ~ 0.82) failed LEQUAL and \
+         * vanished. Only read it when the position actually carries one. */ \
+        out[dst_idx].z     = nv_clamp_screen_z((lay_pos >= 3) ? u2f(src[_b + 2]) : 0.0f); \
         out[dst_idx].rhw   = 1.0f; \
-        out[dst_idx].u     = (g_pg.layout_uv_off >= 0) ? u2f(src[_b + g_pg.layout_uv_off]) : 0.0f; \
-        out[dst_idx].v     = (g_pg.layout_uv_off >= 0) ? u2f(src[_b + g_pg.layout_uv_off + 1]) : 0.0f; \
-        out[dst_idx].color = (g_pg.layout_color_off >= 0) ? src[_b + g_pg.layout_color_off] : 0xFFFFFFFFu; \
+        out[dst_idx].u     = (lay_uv >= 0) ? u2f(src[_b + lay_uv]) : 0.0f; \
+        out[dst_idx].v     = (lay_uv >= 0) ? u2f(src[_b + lay_uv + 1]) : 0.0f; \
+        out[dst_idx].color = (lay_col >= 0) ? src[_b + lay_col] : 0xFFFFFFFFu; \
     } while(0)
 
     if (is_quads) {
@@ -2138,7 +2340,7 @@ static void submit_draw(void)
      * builder (all zeros). When a draw has NO usable texcoords but positions
      * span an area, derive full-range UVs from the position bounding box so
      * the bound dynamic texture (movie frame) maps across the quad. */
-    if (g_pg.layout_uv_off >= 0 && out_vert_count >= 3) {
+    if (lay_uv >= 0 && out_vert_count >= 3) {
         int all_zero = 1;
         for (uint32_t i = 0; i < out_vert_count; i++)
             if (out[i].u != 0.0f || out[i].v != 0.0f) { all_zero = 0; break; }
@@ -2198,7 +2400,7 @@ static void submit_draw(void)
                 g_pg.draw_mode, num_verts, out_vert_count);
         uint32_t show = num_verts < 8 ? num_verts : 8;
         for (uint32_t i = 0; i < show; i++) {
-            uint32_t b = i * g_pg.vert_stride;
+            uint32_t b = i * stride;
             fprintf(stderr, "  [%u] pos=(%.1f, %.1f) uv=(%.3f, %.3f) color=0x%08X\n",
                     i, u2f(src[b+0]), u2f(src[b+1]), u2f(src[b+2]), u2f(src[b+3]), src[b+4]);
         }
@@ -2208,8 +2410,9 @@ static void submit_draw(void)
     IDirect3DDevice8 *dev = xbox_GetD3DDevice();
     if (!dev) return;
 
+    g_nv_draw_has_uv = (lay_uv >= 0);
     nv_apply_draw_state(dev, out, out_vert_count);
-    nv_fit_to_backbuffer(out, out_vert_count);
+    nv_fit_to_backbuffer(out, out_vert_count, 1);
     /* Begin scene if needed */
     dev->lpVtbl->BeginScene(dev);
 
@@ -2245,8 +2448,10 @@ static void submit_draw(void)
         dev->lpVtbl->SetVertexShader(dev,
             D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
 
+        int clipped = nv_apply_window_clip();
         dev->lpVtbl->DrawPrimitiveUP(dev, (D3DPRIMITIVETYPE)g_pg.d3d_prim_type,
                                       prim_count, out, sizeof(OutputVertex));
+        if (clipped) { extern void d3d8_ResetScissorRect(void); d3d8_ResetScissorRect(); }
 
         if (got == 0)
             dev->lpVtbl->SetVertexShader(dev, prev_vs);
@@ -2723,6 +2928,32 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     case 0x1EA4:                       /* SET_TRANSFORM_CONSTANT_LOAD */
         g_pg.vp.const_ld_ptr = param;
         DIAG_VP_PTR("cload", param);
+        return 1;
+
+    case NV097_SET_WINDOW_CLIP_TYPE:
+        g_pg.window_clip_type = param;
+        return 1;
+
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x04:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x08:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x0C:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x10:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x14:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x18:
+    case NV097_SET_WINDOW_CLIP_HORIZONTAL + 0x1C:
+        g_pg.window_clip_h[(method - NV097_SET_WINDOW_CLIP_HORIZONTAL) >> 2] = param;
+        return 1;
+
+    case NV097_SET_WINDOW_CLIP_VERTICAL:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x04:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x08:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x0C:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x10:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x14:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x18:
+    case NV097_SET_WINDOW_CLIP_VERTICAL + 0x1C:
+        g_pg.window_clip_v[(method - NV097_SET_WINDOW_CLIP_VERTICAL) >> 2] = param;
         return 1;
 
     case NV097_SET_SURFACE_CLIP_HORIZONTAL:

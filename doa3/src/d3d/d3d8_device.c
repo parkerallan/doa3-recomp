@@ -223,6 +223,26 @@ IDXGISwapChain      *d3d8_GetSwapChain(void) { return g_device_state.swap_chain;
 ID3D11RenderTargetView *d3d8_GetDefaultRTV(void) { return g_device_state.default_rtv; }
 HWND                 d3d8_GetHWND(void) { return g_device_state.hwnd; }
 UINT                 d3d8_GetBackbufferWidth(void) { return g_device_state.width; }
+/* Host scissor, for the pgraph to hand NV097_SET_WINDOW_CLIP through.
+ * The rasterizer state has ScissorEnable on, so the rect must always be
+ * valid -- a zero or negative one is taken as "the whole target" rather
+ * than clipping everything away. */
+void d3d8_SetScissorRect(int x, int y, int w, int h)
+{
+    D3D11_RECT r;
+    if (!g_device_state.d3d11_context) return;
+    if (w <= 0 || h <= 0 || x < 0 || y < 0) {
+        x = 0; y = 0; w = (int)g_device_state.width; h = (int)g_device_state.height;
+    }
+    r.left = x; r.top = y; r.right = x + w; r.bottom = y + h;
+    ID3D11DeviceContext_RSSetScissorRects(g_device_state.d3d11_context, 1, &r);
+}
+
+void d3d8_ResetScissorRect(void)
+{
+    d3d8_SetScissorRect(0, 0, (int)g_device_state.width, (int)g_device_state.height);
+}
+
 UINT                 d3d8_GetBackbufferHeight(void) { return g_device_state.height; }
 const DWORD         *d3d8_GetRenderStates(void) { return g_device_state.render_states; }
 const DWORD         *d3d8_GetTSS(DWORD stage) { return (stage < MAX_TEXTURE_STAGES) ? g_device_state.tss[stage] : NULL; }
@@ -1608,6 +1628,10 @@ static HRESULT __stdcall d3d8_CreateDevice(IDirect3D8 *self, UINT Adapter, DWORD
         vp.MaxDepth = 1.0f;
         ID3D11DeviceContext_RSSetViewports(g_device_state.d3d11_context, 1, &vp);
     }
+
+    /* Scissoring is enabled in the rasterizer state, so start it at the whole
+     * target; without this the default empty rect would clip every draw. */
+    d3d8_ResetScissorRect();
 
     /* Initialize shader and state subsystems */
     hr = d3d8_shaders_init();

@@ -217,7 +217,11 @@ static void update_rasterizer_state(const DWORD *rs)
 
     rd.FrontCounterClockwise = FALSE;
     rd.DepthClipEnable = TRUE;
-    rd.ScissorEnable = FALSE;
+    /* On, so the pgraph can honour NV097_SET_WINDOW_CLIP (the hardware
+     * scissor that confines the character-select portrait to its window).
+     * The rect is set to the whole target at device creation and restored
+     * after every clipped draw, so nothing outside the pgraph sees it. */
+    rd.ScissorEnable = TRUE;
     rd.MultisampleEnable = FALSE;
     rd.AntialiasedLineEnable = FALSE;
 

@@ -3742,6 +3742,23 @@ void sub_001B1350_gen(void);
  * which is what SET_SURFACE_COLOR_OFFSET carries). */
 uint32_t g_doa3_fb_offs[4]; int g_doa3_fb_n;
 uint32_t g_doa3_offrt_offs[8]; int g_doa3_offrt_n;   /* every texture surface seen */
+
+/* The guest's own D3DPRESENT_PARAMETERS (0x0090F4A8): the DISPLAY resolution,
+ * 720x480, which is the space every 2D overlay coordinate the game submits is
+ * expressed in.  It is NOT the size of the colour surface -- on character
+ * select the game turns on 2x2 supersampling (D3DRS_MultiSampleType 0x2022)
+ * and the frame buffer becomes 1440x960, while the overlay quads keep coming
+ * in at 0..720 / 0..480.  Anything mapping overlay coordinates onto the host
+ * back buffer has to divide by this, not by SET_SURFACE_CLIP.
+ * Returns 0 and leaves the outputs alone if the fields are not plausible
+ * (before CreateDevice they are zero). */
+int doa3_guest_display_size(unsigned *w, unsigned *h)
+{
+    uint32_t dw = MEM32(0x0090F4A8u), dh = MEM32(0x0090F4ACu);
+    if (dw < 64u || dw > 4096u || dh < 64u || dh > 4096u) return 0;
+    *w = (unsigned)dw; *h = (unsigned)dh;
+    return 1;
+}
 void sub_001B1350(void)
 {
     uint32_t arg = MEM32(esp + 4);

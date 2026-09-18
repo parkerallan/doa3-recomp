@@ -65263,6 +65263,18 @@ void sub_001B3D11(void)
 
 loc_001B3D11: ;
     esi = MEM32(esp + 0x10);
+    /* DOA3: DROPPED FALL-THROUGH 0x001B3D11 -> 0x001B3D15.
+     * This fragment is a single 4-byte `mov esi,[esp+0x10]` (8B 74 24 10)
+     * and the next instruction is the loop head at 0x001B3D15, so control
+     * continues there. Without it the push-buffer copy loop in
+     * sub_001B3D15 ran once and, worse, its epilogue at loc_001B3D90 --
+     * which pops edi/esi/ebp/EBX/ecx -- never ran. ebx still held
+     * device+0x18C0 (0x001C20C0), which sub_001B42C0 then passed to
+     * XMETAL_Reserve as the device. Reserve read a null cursor there and
+     * wrapped the write pointer, the parse went out of step, and vertex
+     * index data was decoded as method headers straight through the
+     * render-state block (SET_DEPTH_FUNC came out as 0x03090308). */
+    sub_001B3D15();
 
 }
 
