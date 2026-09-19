@@ -3764,7 +3764,7 @@ void sub_001B1350(void)
     uint32_t arg = MEM32(esp + 4);
     sub_001B1350_gen();
     if (arg >= 0x1000 && arg < 0x08000000u) {
-        uint32_t d = MEM32(0x001C3390), data = MEM32(arg + 4) & 0x03FFFFFFu;
+        uint32_t d = MEM32(0x001C3390), data = MEM32(arg + 4) & 0x07FFFFFFu; /* DOA3: 27-bit, see XBOX_LOW_END */
         if (arg == d + 0x2150 || arg == d + 0x2168) {
             int k, seen = 0;
             for (k = 0; k < g_doa3_fb_n; k++) if (g_doa3_fb_offs[k] == data) seen = 1;
@@ -5858,7 +5858,7 @@ void sub_001B88C0(void)
 {
     { extern void doa3_ptinfo_check(const char *); doa3_ptinfo_check("kickoff-in"); }
     uint32_t ctx = ecx;                              /* this-pointer (device/context) */
-    if (ctx && ctx < 0x04000000u) {
+    if (ctx && ctx < 0x08000000u) {
         /* device[0] = current write cursor; while recording (flag 4) the
          * original reads the parked ring cursor from device+0x400 instead. */
         uint32_t cursor = doa3_pb_recording(ctx) ? MEM32(ctx + 0x400) : MEM32(ctx);
@@ -7855,7 +7855,7 @@ void sub_001797FF(void)
     static int n = 0, bad = 0;
     uint32_t dst = MEM32(esp + 0x20);
     int onstack = (dst >= 0x00C40000u && dst < 0x00E40000u) ||   /* main Xbox stack */
-                  (dst >= 0x00E40000u && dst < 0x04000000u);      /* heap (fiber stacks) */
+                  (dst >= 0x00E40000u && dst < 0x08000000u);      /* heap + high heap (fiber stacks) */
     if (n < 6 || (!onstack && bad < 12)) { n++; if (!onstack) bad++;
         fprintf(stderr, "[TC-97FF] esp=%08X dst=%08X (%s) frame:", esp, dst, onstack ? "stack/heap" : "NOT STACK");
         for (int k = 0; k < 12; k++) fprintf(stderr, " %08X", MEM32(esp + 4u * k));

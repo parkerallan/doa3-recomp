@@ -203,7 +203,14 @@ ptrdiff_t xbox_GetMemoryOffset(void);
  *  must equal 64 MB so the RenderWare engine's memory probing stops at the
  *  correct boundary. On a real Xbox, probing past 64 MB causes a page fault
  *  that the engine catches via SEH to determine available memory. */
-#define XBOX_HEAP_SIZE      (XBOX_TOTAL_RAM - XBOX_HEAP_BASE)  /* ~55.5 MB */
+/* DOA3: the low (GPU/APU-addressable) heap runs to 80 MB, not 64. The
+ * console had ~50 MB for the title; cxbx grants the same game ~62 MB and the
+ * story fight + Continue needs ~53 MB (measured 2026-09-19: the port sat
+ * 40 KB from its cap and any extra voice buffer hung the Continue). Every
+ * 26-bit physical mask in the port (D3D8 lib, APU, NV2A, mirror alias) is
+ * widened to 27 bits to match. */
+#define XBOX_LOW_END        0x05000000u
+#define XBOX_HEAP_SIZE      (XBOX_LOW_END - XBOX_HEAP_BASE)  /* ~67.5 MB */
 
 /** No static mirror/guard region. RAM mirror is handled via file mapping
  *  views that alias the same physical pages as the base 64 MB region. */
@@ -223,8 +230,8 @@ ptrdiff_t xbox_GetMemoryOffset(void);
  * 0x80000000 cached mirror only aliases the low 64 MB, which is correct —
  * the console had nothing to mirror up here.
  * ================================================================ */
-#define XBOX_HIGH_BASE      0x04000000u
-#define XBOX_HIGH_SIZE      (64u * 1024u * 1024u)
+#define XBOX_HIGH_BASE      0x05000000u   /* above XBOX_LOW_END */
+#define XBOX_HIGH_SIZE      (48u * 1024u * 1024u) /* to 128 MB */
 
 /** Allocate CPU-only memory from the high heap (above 64 MB). */
 uint32_t xbox_HeapAllocHigh(uint32_t size, uint32_t alignment);

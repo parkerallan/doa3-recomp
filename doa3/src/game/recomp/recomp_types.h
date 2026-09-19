@@ -150,7 +150,7 @@ static __forceinline uintptr_t xbox_ptr_resolve(uint32_t addr)
 static __forceinline int is_valid_game_ptr(uint32_t val)
 {
     /* Xbox VA range (covers .text, .data, .rdata, heap, stack) */
-    if (val >= 0x10000 && val < 0x4000000)
+    if (val >= 0x10000 && val < 0x8000000) /* DOA3: low heap to 80 MB + high heap to 128 MB */
         return 1;
     /* Native pointer in our mapped region */
     uint32_t offset32 = (uint32_t)g_xbox_mem_offset;
@@ -173,6 +173,8 @@ static __forceinline uint32_t native_to_xbox_va(uint32_t val)
     uint32_t offset32 = (uint32_t)g_xbox_mem_offset;
     if (offset32 != 0 && val >= offset32) {
         uint32_t rel = val - offset32;
+        if (rel < 0x08000000u)
+            return rel;              /* DOA3: the 128 MB base view is not mirrored */
         if (rel < 0x74000000u)
             return rel % 0x04000000u;
     }

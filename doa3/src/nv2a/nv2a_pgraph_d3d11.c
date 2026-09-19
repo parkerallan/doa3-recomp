@@ -581,11 +581,11 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
     uint32_t palreg = g_pg.tex[0].palette;
     D3DFORMAT d3dfmt;
 
-    if (!off || off >= 0x04000000u) return NULL;
+    if (!off || off >= 0x08000000u) return NULL; /* DOA3: guest RAM to 128 MB */
     {   /* DOA3 DIAG: why textures do or do not materialise. */
         extern uint32_t g_texfmt[64], g_texnull[4];
         g_texfmt[nvfmt & 63]++;
-        if (!off || off >= 0x04000000u) g_texnull[0]++;
+        if (!off || off >= 0x08000000u) g_texnull[0]++;
     }
     if (!nv_texture_format(nvfmt, &d3dfmt, &bpp, &swizzled, &compressed,
                            &palettised)) {
@@ -869,10 +869,10 @@ static int nv_fetch_attr(int slot, uint32_t index, float out[4], uint32_t *out_c
     const uint8_t *p;
     uint32_t c;
 
-    if (count == 0 || base == 0 || base >= 0x04000000u)
+    if (count == 0 || base == 0 || base >= 0x08000000u)
         return 0;
     addr = base + index * stride;
-    if (addr + 16u > 0x04000000u)
+    if (addr + 16u > 0x08000000u)
         return 0;
     p = (const uint8_t *)((uintptr_t)addr + g_xbox_mem_offset);
 

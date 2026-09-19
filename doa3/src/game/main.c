@@ -1047,12 +1047,16 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
          * keep this range TIGHT — mapping arbitrary out-of-range faults as RAM would
          * turn a wild/corrupted-pointer write (which must be skipped) into a
          * silently-continued infinite fault loop. */
-        if (fault_xbox_va >= 0x80000000u && fault_xbox_va < 0x84000000u) {
+        /* DOA3: guest RAM runs to 128 MB (low heap to XBOX_LOW_END, high heap
+         * above), so the cached alias covers 0x80000000-0x87FFFFFF and each
+         * 64 MB window maps the matching offset of the section. */
+        if (fault_xbox_va >= 0x80000000u && fault_xbox_va < 0x88000000u) {
             extern HANDLE xbox_GetMappingHandle(void);
             HANDLE h = xbox_GetMappingHandle();
             if (h) {
                 uintptr_t mbase = fault & ~(uintptr_t)(0x4000000u - 1);  /* 64 MB align (host) */
-                LPVOID p = MapViewOfFileEx(h, FILE_MAP_ALL_ACCESS, 0, 0,
+                DWORD sect_off = (DWORD)((fault_xbox_va - 0x80000000u) & ~0x3FFFFFFu);
+                LPVOID p = MapViewOfFileEx(h, FILE_MAP_ALL_ACCESS, 0, sect_off,
                                            0x4000000u, (LPVOID)mbase);
                 if (p) {
                     if (g_fault_logged < 60) {

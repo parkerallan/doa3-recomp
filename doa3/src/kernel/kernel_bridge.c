@@ -541,7 +541,22 @@ static void bridge_NtFreeVirtualMemory(void)
     uint32_t base_ptr = STACK_ARG(0);
     uint32_t size_ptr = STACK_ARG(1);
     uint32_t free_type = STACK_ARG(2);
+    uint32_t base = base_ptr ? BRIDGE_MEM32(base_ptr) : 0;
 
+    /* The region came from xbox_HeapAlloc (see bridge_NtAllocateVirtualMemory),
+     * so it must go back to the guest heap. The old code passed the GUEST VA
+     * to the host VirtualFree, which can never match a guest block, so every
+     * MEM_RELEASE leaked. Only MEM_RELEASE (0x8000) returns the block; a
+     * MEM_DECOMMIT of part of a region is left committed (the guest heap has
+     * no page granularity), which the no-op MEM_COMMIT path already assumes. */
+    if (base >= XBOX_HEAP_BASE && base < XBOX_LOW_END) {
+        if (free_type & 0x8000u) {
+            xbox_HeapFree(base);
+            BRIDGE_MEM32(base_ptr) = 0;
+        }
+        g_eax = 0; /* STATUS_SUCCESS */
+        return;
+    }
     g_eax = (uint32_t)xbox_NtFreeVirtualMemory(
         XBOX_TO_NATIVE(base_ptr), XBOX_TO_NATIVE(size_ptr), free_type);
 }

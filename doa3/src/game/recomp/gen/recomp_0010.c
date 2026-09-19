@@ -60685,7 +60685,7 @@ loc_001B1F66: ;
     ecx = MEM32(esp + 0x24);
     PUSH32(esp, ecx);
     ecx = MEM32(esp + 0x24);
-    ecx = ecx & 0x3FFFFFF;
+    ecx = ecx & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     PUSH32(esp, ecx);
     PUSH32(esp, eax);
     ecx = edx + 0x2308;
@@ -67439,7 +67439,7 @@ loc_001B4A30: ;
     if (CMP_EQ(edx, 0x20000)) goto loc_001B4A52; /* je: equal / zero */
 
 loc_001B4A4D: ;
-    eax = eax & 0x3FFFFFF;
+    eax = eax & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
 
 loc_001B4A52: ;
     MEM32(ecx + 4) = eax;
@@ -67730,7 +67730,7 @@ void sub_001B4C10_gen(void)
 {
 
 loc_001B4C10: ;
-    eax = eax & 0x3FFFFFF;
+    eax = eax & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     MEM32(esi + 4) = eax;
     MEM32(esi) = 0x1040001;
     eax = MEM32(esp + 0x30);
@@ -67809,7 +67809,7 @@ loc_001B4C79: ;
     eax = MEM32(esp + 0x14);
     ecx = MEM32(esp + 8);
     edx = MEM32(esp + 0xC);
-    eax = eax & 0x3FFFFFF;
+    eax = eax & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     MEM32(esi + 4) = eax;
     eax = MEM32(esp + 0x10);
     PUSH32(esp, eax);
@@ -67842,7 +67842,7 @@ loc_001B4CC0: ;
     eax = MEM32(esp + 4);
     ecx = MEM32(esp + 0x10);
     edx = MEM32(esp + 8);
-    ecx = ecx & 0x3FFFFFF;
+    ecx = ecx & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     MEM32(eax + 4) = ecx;
     ecx = MEM32(esp + 0xC);
     MEM32(eax + 0x10) = ecx;
@@ -67916,7 +67916,7 @@ void sub_001B4D3E(void)
 loc_001B4D3E: ;
     edx = eax + 0x40;
     MEM32(eax) = 0x81050001u;
-    edx = edx & 0x3FFFFFF;
+    edx = edx & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     MEM32(eax + 4) = edx;
     ecx = MEM32(esp + 0xC);
     MEM32(eax + 0xC) = ecx;
@@ -74869,7 +74869,7 @@ loc_001B890C: ;
     eax = MEM32(esp);
     eax = MEM32(eax + 0x2304);
     edx = ecx;
-    edx = edx & 0x3FFFFFF;
+    edx = edx & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     MEM32(eax + 0x40) = edx;
     edx = MEM32(esp);
     MEM32(edx + 0x18) = ecx;
@@ -81745,7 +81745,7 @@ loc_001BB574: ;
     g_seh_ebp = ebp; sub_001BB591(); return; /* tail jmp 0x001BB591 */
 
 loc_001BB581: ;
-    eax = eax & 0x3FFFFFF;
+    eax = eax & 0x7FFFFFF; /* DOA3: 27-bit physical mask, guest RAM is 80 MB in the port (was 0x3FFFFFF) */
     MEM32(ecx) = eax;
     eax = MEM32(ebp + 0x10);
     MEM32(eax) = 1;

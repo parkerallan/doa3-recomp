@@ -180,7 +180,7 @@ int xbox_fiber_spawn(uint32_t start_routine, uint32_t ctx1, uint32_t ctx2,
         fprintf(stderr, "[FIBER] CreateFiber failed for 0x%08X\n", start_routine);
         return 0;
     }
-    uint32_t base = xbox_HeapAlloc(WORKER_STACK_SIZE, 16);
+    uint32_t base = xbox_HeapAllocHigh(WORKER_STACK_SIZE, 16); /* DOA3: CPU-only, keep the GPU-addressable low heap for the game */
     f->start_routine = start_routine;
     f->ctx1 = ctx1; f->ctx2 = ctx2;
     f->stack_top = base + WORKER_STACK_SIZE - 16;
@@ -510,7 +510,7 @@ int xbox_fiber_create_dormant(uint32_t routine_va, uint32_t param,
          * 0x1FFF0 -- inside the XBE image -- so the task silently shredded
          * the game's own code and the process died with no exception to
          * catch. Fail the create instead, loudly. */
-        uint32_t base = xbox_HeapAlloc(stack_size, 16);
+        uint32_t base = xbox_HeapAllocHigh(stack_size, 16); /* DOA3: CPU-only stack -> high heap */
         if (!base) {
             fprintf(stderr, "[FIBER] OUT OF GUEST HEAP: cannot allocate %u-byte "
                             "Xbox stack for task routine 0x%08X (slot %d)\n",
