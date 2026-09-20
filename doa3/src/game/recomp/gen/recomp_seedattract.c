@@ -1690,3 +1690,110 @@ loc_0004CB70: ;
 
 }
 
+/* DOA3 2026-09-20: three more function-pointer targets the detector never emitted; they were
+ * reached during the attract montage (~2-3 min in) and each unresolved icall was a silent no-op.
+ * sub_00105AB0 is the canyon stage's third descriptor callback (texture stages 0-3), sub_00108540 is
+ * the explosion effect armed by sub_001095B0 in the cage scene, sub_000DD2E0 is a float-constant getter
+ * installed into [0x868804]. Measured in the port: all three are reached only once the fixed choreography
+ * plays the throws; none of them was the cause of the missing 2D overlay (that was sub_001B29A2/A7). */
+
+/**
+ * sub_00108540
+ * Original: 0x00108540 - 0x0010856F (47 bytes, 11 insns)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_00108540(void)
+{
+    #define fp_push(v) (g_fp_stack[--g_fp_top & 7] = (v))
+    #define fp_pop() (g_fp_top++)
+    #define fp_popp() (fp_pop())
+    #define fp_top() g_fp_stack[g_fp_top & 7]
+    #define fp_st1() g_fp_stack[(g_fp_top + 1) & 7]
+
+loc_00108540: ;
+    fp_push(MEMF(0x1ED6CC)); /* fld float */
+    PUSH32(esp, ecx);
+    fp_top() = fp_top() - (double)MEMF(0x4842A4); /* fsub mem */
+    fp_top() = fp_top() * (double)MEMF(0x1F5204); /* fmul mem */
+    fp_top() = fp_top() * (double)MEMF(0x1ED710); /* fmul mem */
+    MEMF(esp) = (float)fp_top(); fp_popp(); /* fstp */
+    PUSH32(esp, 0x3886E0);
+    PUSH32(esp, 0x388720);
+    PUSH32(esp, 0); sub_000D6AA0(); /* call 0x000D6AA0 */
+
+loc_0010856B: ;
+    esp = esp + 0xC;
+    esp += 4; return; /* ret */
+
+    #undef fp_push
+    #undef fp_pop
+    #undef fp_popp
+    #undef fp_top
+    #undef fp_st1
+}
+
+/**
+ * sub_000DD2E0
+ * Original: 0x000DD2E0 - 0x000DD2E7 (7 bytes, 2 insns)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_000DD2E0(void)
+{
+    #define fp_push(v) (g_fp_stack[--g_fp_top & 7] = (v))
+    #define fp_pop() (g_fp_top++)
+    #define fp_popp() (fp_pop())
+    #define fp_top() g_fp_stack[g_fp_top & 7]
+    #define fp_st1() g_fp_stack[(g_fp_top + 1) & 7]
+
+loc_000DD2E0: ;
+    fp_push(MEMF(0x207584)); /* fld float */
+    esp += 4; return; /* ret */
+
+    #undef fp_push
+    #undef fp_pop
+    #undef fp_popp
+    #undef fp_top
+    #undef fp_st1
+}
+
+/**
+ * sub_00105AB0
+ * Original: 0x00105AB0 - 0x00105AF9 (73 bytes, 19 insns)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_00105AB0(void)
+{
+
+loc_00105AB0: ;
+    eax = ZX8(MEM8(0x48E611));
+    eax = (uint32_t)((int32_t)eax * (int32_t)0x1900);
+    ecx = MEM32(eax + 0x47B220);
+    PUSH32(esp, ecx);
+    PUSH32(esp, 0);
+    PUSH32(esp, 0); sub_001B1CC0(); /* call 0x001B1CC0 */
+
+loc_00105ACB: ;
+    edx = ZX8(MEM8(0x48E611));
+    edx = (uint32_t)((int32_t)edx * (int32_t)0x1900);
+    eax = MEM32(edx + 0x47B110);
+    PUSH32(esp, eax);
+    PUSH32(esp, 1);
+    PUSH32(esp, 0); sub_001B1CC0(); /* call 0x001B1CC0 */
+
+loc_00105AE6: ;
+    PUSH32(esp, 0);
+    PUSH32(esp, 2);
+    PUSH32(esp, 0); sub_001B1CC0(); /* call 0x001B1CC0 */
+
+loc_00105AEF: ;
+    PUSH32(esp, 0);
+    PUSH32(esp, 3);
+    PUSH32(esp, 0); sub_001B1CC0(); /* call 0x001B1CC0 */
+
+loc_00105AF8: ;
+    esp += 4; return; /* ret */
+
+}

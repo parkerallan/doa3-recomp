@@ -92449,7 +92449,7 @@ loc_00095B25: ;
     fp_st1() *= fp_top(); fp_pop(); /* fmul */
     fp_st1() -= fp_top(); fp_pop(); /* fsubp */
     MEMF(esp + 0xC) = (float)fp_top(); fp_popp(); /* fstp */
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_00095B6A; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_00095B6A; /* jns: not sign (positive) */
 
 loc_00095B5B: ;
     eax = MEM32(esp + 0xC);
@@ -108572,7 +108572,7 @@ loc_000B24F6: ;
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM32(esi + 0x14) = eax;
     MEM32(esi + 0x1C) = eax;
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B2519; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B2519; /* jns: not sign (positive) */
 
 loc_000B250B: ;
     SET_LO16(ecx, MEM16(esi + 0x22));
@@ -108731,7 +108731,7 @@ loc_000B2661: ;
 
 loc_000B2665: ;
     SET_LO8(eax, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B26DD; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B26DD; /* jns: not sign (positive) */
 
 loc_000B266C: ;
     if (CMP_NE(MEM8(esi + 0x4B), 1)) goto loc_000B26D3; /* jne: not equal / not zero */

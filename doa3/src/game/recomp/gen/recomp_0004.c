@@ -10058,7 +10058,8 @@ loc_000B1DC8: ;
 loc_000B1DCF: ;
     esp = esp + 8;
     /* cmp LO8(eax), 4 - flags set for next jcc */
-    goto loc_000B1E0C;
+    if (CMP_NE(LO8(eax), 4)) goto loc_000B1E7A; /* DOA3: the jne at 000B1E0C is shared by two producers (cmp al,4 here / cmp al,6 at 000B1E0A); evaluate this one here */
+    goto loc_000B1E0E;
 
 loc_000B1DD6: ;
     if (CMP_NE(eax, 6)) goto loc_000B1E18; /* jne: not equal / not zero */
@@ -10138,7 +10139,8 @@ loc_000B1E5D: ;
 
 loc_000B1E63: ;
     /* cmp MEM8(edi + 0x33), 4 - flags set for next jcc */
-    goto loc_000B1E78;
+    if (CMP_NE(MEM8(edi + 0x33), 4)) { g_seh_ebp = ebp; sub_000B1E83(); return; } /* DOA3: the jne at 000B1E78 is shared by two producers (cmp [edi+0x33],4 here / cmp [edi+0x33],6 at 000B1E74); evaluate this one here */
+    goto loc_000B1E7A;
 
 loc_000B1E69: ;
     if (CMP_NE(eax, 6)) { g_seh_ebp = ebp; sub_000B1E83(); return; } /* jne: not equal / not zero */
@@ -10256,7 +10258,7 @@ loc_000B1F3A: ;
 
 loc_000B1F40: ;
     SET_LO8(ecx, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
 
 loc_000B1F47: ;
     SET_LO16(edx, MEM16(esi + 0x22));
@@ -10420,7 +10422,7 @@ loc_000B2078: ;
 
 loc_000B207C: ;
     SET_LO8(eax, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
 
 loc_000B2083: ;
     if (CMP_NE(MEM8(esi + 0x4B), 1)) goto loc_000B20EA; /* jne: not equal / not zero */
@@ -10579,7 +10581,7 @@ loc_000B1F3A: ;
 
 loc_000B1F40: ;
     SET_LO8(ecx, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
 
 loc_000B1F47: ;
     SET_LO16(edx, MEM16(esi + 0x22));
@@ -10743,7 +10745,7 @@ loc_000B2078: ;
 
 loc_000B207C: ;
     SET_LO8(eax, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
 
 loc_000B2083: ;
     if (CMP_NE(MEM8(esi + 0x4B), 1)) goto loc_000B20EA; /* jne: not equal / not zero */
@@ -11296,7 +11298,7 @@ loc_000B24F6: ;
     /* test LO8(ecx), LO8(ecx) - flags set for next jcc */
     MEM32(esi + 0x14) = eax;
     MEM32(esi + 0x1C) = eax;
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B2519; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B2519; /* jns: not sign (positive) */
 
 loc_000B250B: ;
     SET_LO16(ecx, MEM16(esi + 0x22));
@@ -11455,7 +11457,7 @@ loc_000B2661: ;
 
 loc_000B2665: ;
     SET_LO8(eax, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B26DD; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B26DD; /* jns: not sign (positive) */
 
 loc_000B266C: ;
     if (CMP_NE(MEM8(esi + 0x4B), 1)) goto loc_000B26D3; /* jne: not equal / not zero */

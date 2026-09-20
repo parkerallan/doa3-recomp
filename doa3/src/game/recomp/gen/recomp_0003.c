@@ -4427,7 +4427,8 @@ loc_0008CF72: ;
 
 loc_0008CF79: ;
     /* cmp LO16(esi), 0xAB - flags set for next jcc */
-    goto loc_0008CFAD;
+    if (CMP_NE(LO16(esi), 0xAB)) goto loc_0008CFB4; /* DOA3 shared-jcc repair: the jne at 0008CFAD has several flag producers; this producer is evaluated here */
+    goto loc_0008CFAF;
 
 loc_0008CF80: ;
     if (CMP_NE(MEM8(ecx + 0x32), 1)) goto loc_0008CFB4; /* jne: not equal / not zero */
@@ -16444,6 +16445,8 @@ loc_00092EE8: ;
  */
 void sub_00092EF4(void)
 {
+    uint32_t ebp;
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame (DOA3: the guest ebp is live across this fragment) */
 
 loc_00092EF4: ;
     PUSH32(esp, esi);
@@ -16452,7 +16455,7 @@ loc_00092EF4: ;
 loc_00092EFA: ;
     esp = esp + 4;
 
-    sub_00092EFD(); return; /* DOA3: restored dropped fall-through to sub_00092EFD */
+    g_seh_ebp = ebp; sub_00092EFD(); return; /* DOA3: restored dropped fall-through to sub_00092EFD; ebp re-published because the call above overwrites g_seh_ebp */
 }
 
 /**
@@ -22376,7 +22379,7 @@ loc_00095B25: ;
     fp_st1() *= fp_top(); fp_pop(); /* fmul */
     fp_st1() -= fp_top(); fp_pop(); /* fsubp */
     MEMF(esp + 0xC) = (float)fp_top(); fp_popp(); /* fstp */
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_00095B6A; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_00095B6A; /* jns: not sign (positive) */
 
 loc_00095B5B: ;
     eax = MEM32(esp + 0xC);
@@ -30531,7 +30534,8 @@ loc_00099659: ;
 
 loc_0009965D: ;
     /* cmp MEM32(edi * 4 + 0x4BD960), 1 - flags set for next jcc */
-    goto loc_0009969C;
+    if (CMP_NE(MEM32(edi * 4 + 0x4BD960), 1)) goto loc_000996A0; /* DOA3: the jne at 0009969C is shared by three producers; evaluate this one here */
+    goto loc_0009969E;
 
 loc_00099667: ;
     if (CMP_NE(LO8(eax), 9)) goto loc_00099683; /* jne: not equal / not zero */
@@ -30550,7 +30554,8 @@ loc_00099678: ;
 
 loc_0009967F: ;
     /* cmp LO8(eax), 3 - flags set for next jcc */
-    goto loc_0009969C;
+    if (CMP_NE(LO8(eax), 3)) goto loc_000996A0; /* DOA3: the jne at 0009969C is shared by three producers; evaluate this one here (thrown: +0x46 == 3 means airborne) */
+    goto loc_0009969E;
 
 loc_00099683: ;
     if (CMP_NE(MEM8(esi + 0x33), 0xE)) goto loc_000996A0; /* jne: not equal / not zero */
@@ -46595,7 +46600,8 @@ loc_000A08EA: ;
 
 loc_000A08F8: ;
     /* cmp MEM8(ecx + 0x46), 4 - flags set for next jcc */
-    goto loc_000A0902;
+    if (CMP_NE(MEM8(ecx + 0x46), 4)) goto loc_000A0906; /* DOA3 shared-jcc repair: the jne at 000A0902 has several flag producers; this producer is evaluated here */
+    goto loc_000A0904;
 
 loc_000A08FE: ;
     /* cmp MEM8(ecx + 0x42), 3 - flags set for next jcc */
@@ -64335,6 +64341,7 @@ loc_000A7709: ;
 void sub_000A7710(void)
 {
     uint32_t ebp;
+    int _rcc = 0; /* DOA3: ZF of the xor, evaluated where x86 sets it */
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
 
@@ -64344,8 +64351,9 @@ loc_000A7710: ;
     ecx = (uint32_t)((int32_t)ecx * (int32_t)0x68);
     ecx = ecx + 0x484C48;
     eax = eax ^ 1;
+    _rcc = (eax == 0); /* DOA3: the je at 000A7727 consumes the flags of this xor (player == 1); the mov below does not touch flags */
     eax = MEM32(0x48A2D4);
-    if ((eax == 0)) goto loc_000A7733; /* je: equal / zero */
+    if (_rcc) goto loc_000A7733; /* je: equal / zero */
 
 loc_000A7729: ;
     eax = eax + 0xFFFF8000u;
@@ -65031,7 +65039,8 @@ loc_000A7B38: ;
 
 loc_000A7B3F: ;
     /* cmp LO16(ecx), 0x1C5 - flags set for next jcc */
-    goto loc_000A7B52;
+    if (CMP_A(LO16(ecx), 0x1C5)) goto loc_000A7B56; /* DOA3 shared-jcc repair: the ja at 000A7B52 has several flag producers; this producer is evaluated here */
+    goto loc_000A7B54;
 
 loc_000A7B46: ;
     if (CMP_B(LO16(ecx), 0x188)) goto loc_000A7B56; /* jb: below (unsigned <) */
@@ -79850,7 +79859,8 @@ loc_000ADDA7: ;
     edx++;
     esi = esi & 0xF;
     /* cmp esi, edx - flags set for next jcc */
-    goto loc_000ADDE3;
+    if (CMP_NE(esi, edx)) goto loc_000ADDE7; /* DOA3 shared-jcc repair: the jne at 000ADDE3 has several flag producers; this producer is evaluated here */
+    goto loc_000ADDE5;
 
 loc_000ADDB6: ;
     esi = esi - 0xFD;

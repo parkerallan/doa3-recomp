@@ -374,6 +374,18 @@ _EFLAGS_PRESERVE = frozenset({
 })
 
 
+
+def _sign_cast(expr):
+    """C cast that reproduces the x86 sign flag for the operand width of a lifted
+    expression (DOA3 2026-09-20: `test al,al / jns` was emitted as a 32-bit
+    comparison, so bit 7 of an 8-bit result was never seen as the sign)."""
+    e = expr.lstrip("(")
+    if e.startswith("LO8(") or e.startswith("HI8(") or e.startswith("MEM8("):
+        return "int8_t"
+    if e.startswith("LO16(") or e.startswith("MEM16("):
+        return "int16_t"
+    return "int32_t"
+
 def _make_condition(jcc, flag_setter, flag_ops):
     """
     Generate a C condition expression for a jcc based on what set the flags.
@@ -454,9 +466,9 @@ def _make_condition(jcc, flag_setter, flag_ops):
         if cmp_macro:
             return f"{cmp_macro}({lhs}, {rhs})", desc
         if jcc == "js":
-            return f"((int32_t)({lhs} - {rhs}) < 0)", desc
+            return f"(({_sign_cast(lhs)})({lhs} - {rhs}) < 0)", desc
         if jcc == "jns":
-            return f"((int32_t)({lhs} - {rhs}) >= 0)", desc
+            return f"(({_sign_cast(lhs)})({lhs} - {rhs}) >= 0)", desc
         if jcc in ("jp", "jnp"):
             return f"1 /* {jcc} after cmp - parity */", desc
         return None
@@ -468,9 +480,9 @@ def _make_condition(jcc, flag_setter, flag_ops):
         if cmp_macro:
             return f"{cmp_macro}({lhs} & {rhs}, 0)", desc
         if jcc == "js":
-            return f"((int32_t)({lhs} & {rhs}) < 0)", desc
+            return f"(({_sign_cast(lhs)})({lhs} & {rhs}) < 0)", desc
         if jcc == "jns":
-            return f"((int32_t)({lhs} & {rhs}) >= 0)", desc
+            return f"(({_sign_cast(lhs)})({lhs} & {rhs}) >= 0)", desc
         if jcc == "jo":
             return "0", desc  # OF=0 after test
         if jcc == "jno":

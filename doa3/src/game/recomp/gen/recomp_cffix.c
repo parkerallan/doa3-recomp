@@ -36422,15 +36422,18 @@ loc_000B1213: ;
 
 loc_000B1219: ;
     /* cmp LO16(eax), 3 - flags set for next jcc */
-    goto loc_000B1296;
+    if (CMP_NE(LO16(eax), 3)) goto loc_000B129A; /* DOA3 shared-jcc repair: the jne at 000B1296 has several flag producers; this producer is evaluated here */
+    goto loc_000B1298;
 
 loc_000B121F: ;
     /* cmp MEM16(esi + 0x30), 0xA - flags set for next jcc */
-    goto loc_000B1232;
+    if (CMP_NE(MEM16(esi + 0x30), 0xA)) goto loc_000B129A; /* DOA3 shared-jcc repair: the jne at 000B1232 has several flag producers; this producer is evaluated here */
+    goto loc_000B1234;
 
 loc_000B1226: ;
     /* cmp MEM16(esi + 0x30), 0xB - flags set for next jcc */
-    goto loc_000B1232;
+    if (CMP_NE(MEM16(esi + 0x30), 0xB)) goto loc_000B129A; /* DOA3 shared-jcc repair: the jne at 000B1232 has several flag producers; this producer is evaluated here */
+    goto loc_000B1234;
 
 loc_000B122D: ;
     /* cmp MEM16(esi + 0x30), 0xC - flags set for next jcc */
@@ -36463,11 +36466,13 @@ loc_000B1255: ;
 
 loc_000B125F: ;
     /* cmp LO16(eax), 0x14 - flags set for next jcc */
-    goto loc_000B1296;
+    if (CMP_NE(LO16(eax), 0x14)) goto loc_000B129A; /* DOA3 shared-jcc repair: the jne at 000B1296 has several flag producers; this producer is evaluated here */
+    goto loc_000B1298;
 
 loc_000B1265: ;
     /* cmp MEM16(esi + 0x30), 2 - flags set for next jcc */
-    goto loc_000B1296;
+    if (CMP_NE(MEM16(esi + 0x30), 2)) goto loc_000B129A; /* DOA3 shared-jcc repair: the jne at 000B1296 has several flag producers; this producer is evaluated here */
+    goto loc_000B1298;
 
 loc_000B126C: ;
     SET_LO16(eax, MEM16(esi + 0x30));
@@ -36478,7 +36483,8 @@ loc_000B1276: ;
 
 loc_000B127C: ;
     /* cmp LO16(eax), 0x14 - flags set for next jcc */
-    goto loc_000B1290;
+    if (CMP_EQ(LO16(eax), 0x14)) goto loc_000B1298; /* DOA3 shared-jcc repair: the je at 000B1290 has several flag producers; this producer is evaluated here */
+    goto loc_000B1292;
 
 loc_000B1282: ;
     SET_LO16(eax, MEM16(esi + 0x30));
@@ -36792,7 +36798,8 @@ loc_000B1575: ;
 
 loc_000B157D: ;
     /* cmp MEM16(esi + 0x30), 0xFC - flags set for next jcc */
-    goto loc_000B15CB;
+    if (CMP_EQ(MEM16(esi + 0x30), 0xFC)) goto loc_000B1756; /* DOA3 shared-jcc repair: the je at 000B15CB has several flag producers; this producer is evaluated here */
+    goto loc_000B15D1;
 
 loc_000B1585: ;
     eax = ZX16(MEM16(esi + 0x2E));
@@ -36811,15 +36818,18 @@ loc_000B1593: ;
 
 loc_000B15A1: ;
     /* cmp MEM16(esi + 0x30), 0x102 - flags set for next jcc */
-    goto loc_000B15CB;
+    if (CMP_EQ(MEM16(esi + 0x30), 0x102)) goto loc_000B1756; /* DOA3 shared-jcc repair: the je at 000B15CB has several flag producers; this producer is evaluated here */
+    goto loc_000B15D1;
 
 loc_000B15A9: ;
     /* cmp MEM16(esi + 0x30), 0xF9 - flags set for next jcc */
-    goto loc_000B15CB;
+    if (CMP_EQ(MEM16(esi + 0x30), 0xF9)) goto loc_000B1756; /* DOA3 shared-jcc repair: the je at 000B15CB has several flag producers; this producer is evaluated here */
+    goto loc_000B15D1;
 
 loc_000B15B1: ;
     /* cmp MEM16(esi + 0x30), 0xFA - flags set for next jcc */
-    goto loc_000B15CB;
+    if (CMP_EQ(MEM16(esi + 0x30), 0xFA)) goto loc_000B1756; /* DOA3 shared-jcc repair: the je at 000B15CB has several flag producers; this producer is evaluated here */
+    goto loc_000B15D1;
 
 loc_000B15B9: ;
     SET_LO16(eax, MEM16(esi + 0x30));

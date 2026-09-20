@@ -62098,6 +62098,7 @@ void sub_001B29A2(void)
 
 loc_001B29A2: ;
     edi = 0x8512;
+    sub_001B29A7(); return; /* DOA3 2026-09-20: restored fall-through into 0x001B29A7 (the 5-byte fragment ends without a terminator; the pops + ret 8 live in sub_001B29AC) */
 
 }
 
@@ -62112,6 +62113,7 @@ void sub_001B29A7(void)
 
 loc_001B29A7: ;
     eax = 1;
+    sub_001B29AC(); return; /* DOA3 2026-09-20: restored fall-through into 0x001B29AC (pops ebx/ebp/esi/edi + ret 8) */
 
 }
 

@@ -16298,7 +16298,8 @@ loc_00098E92: ;
     SET_LO8(eax, MEM8(edi + 0x1D));
     esp = esp + 4;
     /* cmp LO8(eax), 2 - flags set for next jcc */
-    goto loc_00099112;
+    if (CMP_NE(LO8(eax), 2)) goto loc_0009911B; /* DOA3 shared-jcc repair: the jne at 00099112 has several flag producers; this producer is evaluated here */
+    goto loc_00099114;
 
 loc_00098E9F: ;
     MEM32(esi * 4 + 0x4BD9E8) = 0xBE19999Au;
@@ -16319,7 +16320,8 @@ loc_00098ED4: ;
     SET_LO8(eax, MEM8(edi + 0x1D));
     esp = esp + 4;
     /* cmp LO8(eax), 2 - flags set for next jcc */
-    goto loc_00099112;
+    if (CMP_NE(LO8(eax), 2)) goto loc_0009911B; /* DOA3 shared-jcc repair: the jne at 00099112 has several flag producers; this producer is evaluated here */
+    goto loc_00099114;
 
 loc_00098EE1: ;
     if (CMP_NE(LO8(eax), 6)) goto loc_00098F30; /* jne: not equal / not zero */
@@ -16362,7 +16364,8 @@ loc_00098F36: ;
     SET_LO8(eax, MEM8(edi + 0x1D));
     esp = esp + 4;
     /* cmp LO8(eax), 2 - flags set for next jcc */
-    goto loc_00099112;
+    if (CMP_NE(LO8(eax), 2)) goto loc_0009911B; /* DOA3 shared-jcc repair: the jne at 00099112 has several flag producers; this producer is evaluated here */
+    goto loc_00099114;
 
 loc_00098F43: ;
     if (CMP_NE(MEM8(0x48E60E), 1)) goto loc_00098F58; /* jne: not equal / not zero */
@@ -17583,7 +17586,7 @@ loc_000B1F3A: ;
 
 loc_000B1F40: ;
     SET_LO8(ecx, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
 
 loc_000B1F47: ;
     SET_LO16(edx, MEM16(esi + 0x22));
@@ -17747,7 +17750,7 @@ loc_000B2078: ;
 
 loc_000B207C: ;
     SET_LO8(eax, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
 
 loc_000B2083: ;
     if (CMP_NE(MEM8(esi + 0x4B), 1)) goto loc_000B20EA; /* jne: not equal / not zero */
@@ -17906,7 +17909,7 @@ loc_000B1F3A: ;
 
 loc_000B1F40: ;
     SET_LO8(ecx, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_000B1F55; /* jns: not sign (positive) */
 
 loc_000B1F47: ;
     SET_LO16(edx, MEM16(esi + 0x22));
@@ -18070,7 +18073,7 @@ loc_000B2078: ;
 
 loc_000B207C: ;
     SET_LO8(eax, MEM8(esi + 0x5A));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
+    if (((int8_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000B20F4; /* jns: not sign (positive) */
 
 loc_000B2083: ;
     if (CMP_NE(MEM8(esi + 0x4B), 1)) goto loc_000B20EA; /* jne: not equal / not zero */
@@ -103259,7 +103262,8 @@ loc_000A4191: ;
 
 loc_000A4195: ;
     /* cmp LO8(eax), 0x4C - flags set for next jcc */
-    goto loc_000A41DB;
+    if (CMP_EQ(LO8(eax), 0x4C)) goto loc_000A41E1; /* DOA3 shared-jcc repair: the je at 000A41DB has several flag producers; this producer is evaluated here */
+    goto loc_000A41DD;
 
 loc_000A4199: ;
     edx = ZX8(MEM8(0x48E611));
