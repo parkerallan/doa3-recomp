@@ -1010,7 +1010,7 @@ static LONG WINAPI crash_veh(PEXCEPTION_POINTERS info)
         uint32_t _xv = (uint32_t)(fault - base);
         extern uint32_t g_blk50380;
         static int s_wild = 0;
-        if (_xv >= 0x04000000u && (_xv & 0xFF000000u) != 0xFD000000u &&
+        if (_xv >= 0x08000000u && (_xv & 0xFF000000u) != 0xFD000000u &&
             g_blk50380 != 0 && s_wild < 12) {
             s_wild++;
             fprintf(stderr, "[WILD] #%d xbva=0x%08X rip=0x%llX blk50380=0x000%05X "

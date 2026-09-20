@@ -469,6 +469,15 @@ static inline uint16_t BSWAP16(uint16_t v) {
     return (v >> 8) | (v << 8);
 }
 
+/* Bit scan (bsf/bsr): index of the lowest / highest set bit. Callers
+ * guarantee a non-zero argument (the lifter tests it first). */
+static inline uint32_t BSF32(uint32_t v) {
+    uint32_t i = 0; while (!(v & 1u)) { v >>= 1; i++; } return i;
+}
+static inline uint32_t BSR32(uint32_t v) {
+    uint32_t i = 0; while (v >>= 1) i++; return i;
+}
+
 /* ── Indirect call dispatch ──────────────────────────────── */
 
 /**

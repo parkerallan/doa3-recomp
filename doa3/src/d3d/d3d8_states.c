@@ -296,11 +296,11 @@ static D3D11_FILTER d3d8_to_d3d11_filter(DWORD mag, DWORD min, DWORD mip)
  * stage states that feed the descriptor. */
 #define D3D8_SAMPCACHE_N 32
 static struct {
-    DWORD key;
+    uint64_t key;
     ID3D11SamplerState *state;
 } g_sampcache[D3D8_SAMPCACHE_N];
 static unsigned g_sampcache_n;
-static DWORD g_sampler_key[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
+static uint64_t g_sampler_key[4] = { ~0ull, ~0ull, ~0ull, ~0ull };
 
 void d3d8_states_release_samplers(void)
 {
@@ -313,7 +313,7 @@ void d3d8_states_release_samplers(void)
     g_sampcache_n = 0;
     for (i = 0; i < 4; i++) {
         g_sampler_states[i] = NULL;
-        g_sampler_key[i] = 0xFFFFFFFFu;
+        g_sampler_key[i] = ~0ull;
     }
 }
 
@@ -322,7 +322,7 @@ void d3d8_states_apply_sampler(DWORD stage)
     const DWORD *tss;
     D3D11_SAMPLER_DESC sd;
     HRESULT hr;
-    DWORD key;
+    uint64_t key;
     unsigned i;
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
 
@@ -330,12 +330,15 @@ void d3d8_states_apply_sampler(DWORD stage)
     tss = d3d8_GetTSS(stage);
     if (!tss) return;
 
-    key = (DWORD)((tss[D3DTSS_MAGFILTER] & 7u)
+    /* MIPMAPLODBIAS (float bits) and MAXMIPLEVEL (-> MinLOD) are sampler state too. */
+    key = (uint64_t)((tss[D3DTSS_MAGFILTER] & 7u)
         | ((tss[D3DTSS_MINFILTER] & 7u) << 3)
         | ((tss[D3DTSS_MIPFILTER] & 7u) << 6)
         | ((tss[D3DTSS_ADDRESSU] & 7u) << 9)
         | ((tss[D3DTSS_ADDRESSV] & 7u) << 12)
-        | ((tss[D3DTSS_MAXANISOTROPY] & 0xFFu) << 15));
+        | ((tss[D3DTSS_MAXANISOTROPY] & 0xFFu) << 15)
+        | ((tss[D3DTSS_MAXMIPLEVEL] & 0xFu) << 23))
+        | ((uint64_t)tss[D3DTSS_MIPMAPLODBIAS] << 32);
 
     if (key == g_sampler_key[stage] && g_sampler_states[stage])
         return;                                  /* already bound on this stage */
@@ -360,6 +363,12 @@ void d3d8_states_apply_sampler(DWORD stage)
     sd.MaxAnisotropy = tss[D3DTSS_MAXANISOTROPY] ? tss[D3DTSS_MAXANISOTROPY] : 1;
     sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
     sd.MaxLOD = D3D11_FLOAT32_MAX;
+    {   DWORD bb = tss[D3DTSS_MIPMAPLODBIAS]; float bias;
+        memcpy(&bias, &bb, sizeof bias);
+        if (!(bias > -16.0f && bias < 16.0f)) bias = 0.0f;
+        sd.MipLODBias = bias;
+        sd.MinLOD = (float)(tss[D3DTSS_MAXMIPLEVEL] & 0xFu);
+    }
 
     {
         ID3D11SamplerState *ss = NULL;

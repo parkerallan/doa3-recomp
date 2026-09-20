@@ -121,10 +121,19 @@ static const char g_vs_source[] =
     "    o.specular = float4(0, 0, 0, 0);\n"
     "\n"
     "    if (Flags & FLAG_PRETRANSFORMED) {\n"
-    "        o.pos.x = (input.pos.x / ScreenSize.x) * 2.0 - 1.0;\n"
-    "        o.pos.y = 1.0 - (input.pos.y / ScreenSize.y) * 2.0;\n"
-    "        o.pos.z = input.pos.z;\n"
-    "        o.pos.w = 1.0;\n"
+    /* DOA3: XYZRHW carries rhw = 1/w of the original clip-space vertex.
+     * Handing D3D11 w = 1 made the rasterizer interpolate texcoords and
+     * colours linearly in screen space (affine mapping): large ground
+     * polygons warped and slid as the camera moved, and the screen-linear
+     * UV derivatives picked a coarser mip than the walls around them.
+     * Re-homogenise with W = 1/rhw so interpolation is perspective-correct,
+     * exactly what the D3D9 runtime does for pre-transformed vertices.
+     * The 2D path emits rhw = 1 and is unchanged. */
+    "        float W = (input.pos.w > 0.0 && isfinite(input.pos.w)) ? (1.0 / input.pos.w) : 1.0;\n"
+    "        o.pos.x = ((input.pos.x / ScreenSize.x) * 2.0 - 1.0) * W;\n"
+    "        o.pos.y = (1.0 - (input.pos.y / ScreenSize.y) * 2.0) * W;\n"
+    "        o.pos.z = input.pos.z * W;\n"
+    "        o.pos.w = W;\n"
     "        o.diffuse = (Flags & FLAG_HAS_DIFFUSE) ? input.diffuse.bgra : float4(1,1,1,1);\n"
     "        if (Flags & FLAG_HAS_SPECULAR) o.specular = input.specular.bgra;\n"
     "        return o;\n"

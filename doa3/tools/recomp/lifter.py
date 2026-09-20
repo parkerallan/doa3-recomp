@@ -921,6 +921,20 @@ class Lifter:
         if m == "bswap" and nops >= 1 and ops[0].type == "reg":
             r = _fmt_reg(ops[0].reg)
             return [f"{r} = BSWAP32({r}); /* bswap */"]
+        if m in ("bsf", "bsr") and nops == 2 and ops[0].type == "reg" \
+                and ops[0].reg in ("eax", "ebx", "ecx", "edx",
+                                   "esi", "edi", "ebp"):
+            # Bit scan: dest = index of the lowest (bsf) / highest (bsr)
+            # set bit. A zero source sets ZF and leaves dest unchanged.
+            # The XDK's log2 helpers (XGSetTextureHeader's size fields) are
+            # a bare `bsf eax, src; ret` -- an unlifted scan left eax as
+            # whatever the caller had, and texture headers were built with
+            # garbage log2 width/height/level fields.
+            dst = _fmt_reg(ops[0].reg)
+            src = _fmt_operand_read(ops[1])
+            fn = "BSF32" if m == "bsf" else "BSR32"
+            return [f"{{ uint32_t _bs = (uint32_t)({src}); "
+                    f"if (_bs) {dst} = {fn}(_bs); }} /* {m} */"]
         if m == "int3":
             return ["__debugbreak(); /* int3 */"]
         if m in ("leave",):

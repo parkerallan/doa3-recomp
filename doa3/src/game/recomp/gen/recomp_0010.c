@@ -77259,7 +77259,7 @@ loc_001B9C30: ;
     PUSH32(esp, ecx);
     MEM32(esp) = ecx;
     ecx = MEM32(esp);
-    /* TODO: bsf eax, ecx */
+    { uint32_t _bs = (uint32_t)(ecx); if (_bs) eax = BSF32(_bs); } /* bsf */
     POP32(esp, ecx);
     esp += 4; return; /* ret */
 
@@ -92883,7 +92883,7 @@ void sub_001C64BC(void)
 loc_001C64BC: ;
     PUSH32(esp, ecx);
     MEM32(esp) = ecx;
-    /* TODO: bsf eax, dword ptr [esp] */
+    { uint32_t _bs = (uint32_t)(MEM32(esp)); if (_bs) eax = BSF32(_bs); } /* bsf */
     POP32(esp, ecx);
     esp += 4; return; /* ret */
 

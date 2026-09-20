@@ -548,6 +548,14 @@ static void nv_apply_tex_address(IDirect3DDevice8 *dev, int stage)
                 memset(s_mip, 0, sizeof s_mip); memset(s_stg, 0, sizeof s_stg);
             }
         }
+        {   /* Filter bits 12:0: mip LOD bias, signed 5.8; control0 bits 29:18:
+             * min-LOD clamp, 5.8. */
+            int bias = (int)(f & 0x1FFF); if (bias & 0x1000) bias -= 0x2000;
+            float fb = (float)bias / 256.0f; DWORD bb; memcpy(&bb, &fb, sizeof bb);
+            uint32_t minlod = (g_pg.tex[stage].control0 >> 18) & 0xFFF;
+            dev->lpVtbl->SetTextureStageState(dev, stage, 19 /*MIPMAPLODBIAS*/, bb);
+            dev->lpVtbl->SetTextureStageState(dev, stage, 20 /*MAXMIPLEVEL*/, minlod >> 8);
+        }
         dev->lpVtbl->SetTextureStageState(dev, stage, 16 /*MAGFILTER*/, mg);
         dev->lpVtbl->SetTextureStageState(dev, stage, 17 /*MINFILTER*/, mn);
         dev->lpVtbl->SetTextureStageState(dev, stage, 18 /*MIPFILTER*/,
@@ -660,7 +668,7 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
             lw = (lw > 1) ? lw / 2 : 1;
             lh = (lh > 1) ? lh / 2 : 1;
         }
-        if ((unsigned long long)off + need > 0x04000000ull) {
+        if ((unsigned long long)off + need > 0x08000000ull) {
             extern uint32_t g_texnull[4];
             g_texnull[3]++;
             return NULL;
@@ -752,7 +760,7 @@ static IDirect3DTexture8 *get_dynamic_texture(IDirect3DDevice8 *dev)
             uint32_t pcount = 256u >> ((palreg >> 2) & 3u);
             uint32_t i;
             if (paloff &&
-                (unsigned long long)paloff + 4ull * pcount <= 0x04000000ull) {
+                (unsigned long long)paloff + 4ull * pcount <= 0x08000000ull) {
                 const uint32_t *ps =
                     (const uint32_t *)((uintptr_t)paloff + g_xbox_mem_offset);
                 for (i = 0; i < pcount; i++) pal[i] = ps[i];
@@ -2315,7 +2323,12 @@ static void submit_draw(void)
          * the window and the character behind it (z ~ 0.82) failed LEQUAL and \
          * vanished. Only read it when the position actually carries one. */ \
         out[dst_idx].z     = nv_clamp_screen_z((lay_pos >= 3) ? u2f(src[_b + 2]) : 0.0f); \
-        out[dst_idx].rhw   = 1.0f; \
+        /* A 4-dword inline position is XYZRHW the game transformed on the \
+         * CPU; its 4th float is 1/w. Forcing 1.0 interpolated the texture of \
+         * every such triangle affinely (ground next to the camera stretched \
+         * and slid as it turned). Honour it, guarded; 2D quads carry 1.0. */ \
+        {   float _rw = (lay_pos >= 4) ? u2f(src[_b + 3]) : 1.0f; \
+            out[dst_idx].rhw = (_rw > 0.0f && _rw < 1e6f) ? _rw : 1.0f; } \
         out[dst_idx].u     = (lay_uv >= 0) ? u2f(src[_b + lay_uv]) : 0.0f; \
         out[dst_idx].v     = (lay_uv >= 0) ? u2f(src[_b + lay_uv + 1]) : 0.0f; \
         out[dst_idx].color = (lay_col >= 0) ? src[_b + lay_col] : 0xFFFFFFFFu; \

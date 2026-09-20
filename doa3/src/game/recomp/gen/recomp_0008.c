@@ -11618,7 +11618,7 @@ void sub_001685D0(void)
 {
 
 loc_001685D0: ;
-    /* TODO: bsf eax, ecx */
+    { uint32_t _bs = (uint32_t)(ecx); if (_bs) eax = BSF32(_bs); } /* bsf */
     esp += 4; return; /* ret */
 
 }
