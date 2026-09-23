@@ -174,6 +174,31 @@ static void set_hrir_coeff_tar(MCPXAPUState *d, int channel, int coeff_idx,
     d->vp.hrtf.entries[entry].hrir[channel][coeff_idx] = int8_to_float(value);
 }
 
+/* Unlink a voice handle from whichever voice list holds it, patching either
+ * the list-top register or the predecessor's NEXT_VOICE_HANDLE. Returns 1 if
+ * the handle was linked. Used when a handle is reused while still linked, and
+ * when the driver cannot service an idle-voice trap (see mcpx_apu_vp_frame). */
+static int voice_list_remove(MCPXAPUState *d, uint16_t handle)
+{
+    for (int list = 0; list < 3; list++) {
+        hwaddr top = voice_list_regs[list].top;
+        uint16_t cur = (uint16_t)d->regs[top], prev = 0xFFFF;
+        for (int i = 0; cur != 0xFFFF && i < MCPX_HW_MAX_VOICES; i++) {
+            uint16_t nxt = (uint16_t)voice_get_mask(d, cur, NV_PAVS_VOICE_TAR_PITCH_LINK,
+                                                    NV_PAVS_VOICE_TAR_PITCH_LINK_NEXT_VOICE_HANDLE);
+            if (nxt == cur) nxt = 0xFFFF;
+            if (cur == handle) {
+                if (prev == 0xFFFF) d->regs[top] = nxt;
+                else voice_set_mask(d, prev, NV_PAVS_VOICE_TAR_PITCH_LINK,
+                                    NV_PAVS_VOICE_TAR_PITCH_LINK_NEXT_VOICE_HANDLE, nxt);
+                return 1;
+            }
+            prev = cur; cur = nxt;
+        }
+    }
+    return 0;
+}
+
 /* ============================================================
  * Front-End method dispatch
  * ============================================================ */
@@ -206,6 +231,13 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
 
         bool locked = is_voice_locked(d, (uint16_t)selected_handle);
         if (!locked) voice_lock(d, (uint16_t)selected_handle, true);
+
+        /* A handle whose previous use ended in VOICE_OFF can still be linked
+         * (its idle-voice trap has not been serviced yet). Linking it again at
+         * the list top would make it its own successor and the walk would mix
+         * it 256 times per frame, which is what the corrupted audio after the
+         * title screen was. */
+        voice_list_remove(d, (uint16_t)selected_handle);
 
         list = GET_MASK(d->regs[NV_PAPU_FEAV], NV_PAPU_FEAV_LST);
         if (list != NV1BA0_PIO_SET_ANTECEDENT_VOICE_LIST_INHERIT) {
@@ -1203,6 +1235,12 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
 {
     memset(d->vp.sample_buf, 0, sizeof(d->vp.sample_buf));
     unsigned active_now = 0;
+    /* Was an idle-voice trap raised by an earlier walk and never cleared?
+     * Sampled once per frame so that a trap raised during this walk still
+     * gives the driver a frame to service it. */
+    int trap_outstanding =
+        (d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE) ==
+        NV_PAPU_FECTL_FEMETHMODE_TRAPPED;
 
     for (int list = 0; list < 3; list++) {
         hwaddr top, current, next;
@@ -1210,27 +1248,52 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
         current = voice_list_regs[list].current;
         next = voice_list_regs[list].next;
 
-        d->regs[current] = d->regs[top];
+        uint16_t cur = (uint16_t)d->regs[top], prev = 0xFFFF;
 
-        for (int i = 0; d->regs[current] != 0xFFFF; i++) {
+        for (int i = 0; cur != 0xFFFF; i++) {
             if (i >= MCPX_HW_MAX_VOICES) {
                 DPRINTF("Voice list contains invalid entry!\n");
                 break;
             }
 
-            uint16_t v = (uint16_t)d->regs[current];
-            d->regs[next] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_PITCH_LINK,
+            uint16_t v = cur;
+            uint16_t nxt = (uint16_t)voice_get_mask(d, v, NV_PAVS_VOICE_TAR_PITCH_LINK,
                                NV_PAVS_VOICE_TAR_PITCH_LINK_NEXT_VOICE_HANDLE);
+            if (nxt == v) nxt = 0xFFFF;   /* self-linked: treat as end of list */
+            d->regs[current] = v;
+            d->regs[next] = nxt;
 
             if (!voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
                                 NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE)) {
-                fe_method(d, SE2FE_IDLE_VOICE, v);
+                if (!trap_outstanding) {
+                    /* Ask the driver to retire it, exactly as the hardware
+                     * does: CVL/NVL name the voice and its successor. */
+                    fe_method(d, SE2FE_IDLE_VOICE, v);
+                    prev = v;
+                } else {
+                    /* The driver was already asked on an earlier frame and did
+                     * not unlink it: its CMcpxVoiceClient is gone, because the
+                     * sound buffer was released before the once-per-rendered-
+                     * frame APU interrupt could run. Retire the voice here and
+                     * clear the trap, which is what the driver would have done.
+                     * Left alone the voice stayed linked forever, re-raising
+                     * the trap every frame and stopping the whole voice
+                     * processor. */
+                    if (prev == 0xFFFF) d->regs[top] = nxt;
+                    else voice_set_mask(d, prev, NV_PAVS_VOICE_TAR_PITCH_LINK,
+                                        NV_PAVS_VOICE_TAR_PITCH_LINK_NEXT_VOICE_HANDLE, nxt);
+                    d->regs[NV_PAPU_FECTL] &= ~NV_PAPU_FECTL_FEMETHMODE;
+                    d->regs[NV_PAPU_FECTL] |= NV_PAPU_FECTL_FEMETHMODE_FREE_RUNNING;
+                    d->regs[NV_PAPU_FECTL] &= ~NV_PAPU_FECTL_FETRAPREASON;
+                    trap_outstanding = 0;
+                }
             } else {
                 /* Process voice directly (single-threaded) */
                 voice_process(d, mixbins, d->vp.sample_buf, v, list);
                 active_now++;
+                prev = v;
             }
-            d->regs[current] = d->regs[next];
+            cur = nxt;
         }
     }
 

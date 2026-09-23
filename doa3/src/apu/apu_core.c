@@ -486,9 +486,16 @@ static void *mcpx_apu_frame_thread(void *arg)
         int xcntmode = GET_MASK(qatomic_read(&d->regs[NV_PAPU_SECTL]),
                                 NV_PAPU_SECTL_XCNTMODE);
         uint32_t fectl = qatomic_read(&d->regs[NV_PAPU_FECTL]);
+        /* FEMETHMODE is a field, not a set of flags: FREE_RUNNING 0x00,
+         * HALTED 0x80, TRAPPED 0xE0. Only HALTED stops the chip. Testing
+         * TRAPPED as a mask also matched HALTED, and more importantly it
+         * stopped the whole voice processor for as long as an idle-voice trap
+         * was outstanding, which from the title screen on was forever: that
+         * was the silence. A trapped front end stops accepting new methods,
+         * it does not stop mixing the voices already in the lists. */
         bool apu_active = (xcntmode != NV_PAPU_SECTL_XCNTMODE_OFF) &&
-                          !(fectl & NV_PAPU_FECTL_FEMETHMODE_TRAPPED) &&
-                          !(fectl & NV_PAPU_FECTL_FEMETHMODE_HALTED);
+                          ((fectl & NV_PAPU_FECTL_FEMETHMODE) !=
+                           NV_PAPU_FECTL_FEMETHMODE_HALTED);
 
         if (apu_active && !g_test_tone.active) {
             /* Full pipeline: VP voices → DSP → monitor → waveOut */
