@@ -9850,7 +9850,7 @@ loc_0006F880: ;
     SET_LO8(edx, MEM8(ecx * 8 + 0x4A03AD));
     /* cmp LO8(eax), 1 - flags set for next jcc */
     SET_LO8(eax, (CMP_NE(LO8(eax), 1)) ? 1 : 0); /* setne */
-    if (((int32_t)(LO8(edx) & LO8(edx)) >= 0)) { g_seh_ebp = ebp; sub_0006F8A1(); return; } /* jns: not sign (positive) */
+    if (((int8_t)LO8(edx) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) { g_seh_ebp = ebp; sub_0006F8A1(); return; } /* jns: not sign (positive) */
 
 loc_0006F89D: ;
     RC_SETF_TEST(LO8(eax), LO8(eax));   /* test LO8(eax), LO8(eax) - flags set for next jcc */
@@ -11504,6 +11504,7 @@ loc_00070402: ;
  */
 void sub_00070410(void)
 {
+    /* DOA3: js/jns after test r8,r8 test bit 7 of the byte; the lift cast the unsigned byte to int32_t (never negative), so flagged voice ids never reached the voice player (0x9CB90/0x9CC70) */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -11526,7 +11527,7 @@ loc_00070433: ;
     if (CMP_EQ(eax, 0xFFFF)) goto loc_000705BD; /* je: equal / zero */
 
 loc_0007043E: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_000705BD; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_000705BD; /* jns: not sign (positive) */
 
 loc_00070446: ;
     SET_LO16(eax, MEM16(esp));
@@ -11557,7 +11558,7 @@ loc_00070487: ;
     if (CMP_EQ(eax, 0xFFFF)) goto loc_000704BE; /* je: equal / zero */
 
 loc_0007048E: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_000704BE; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_000704BE; /* jns: not sign (positive) */
 
 loc_00070492: ;
     edx = MEM32(0x4A04C8);
@@ -11591,7 +11592,7 @@ loc_000704D1: ;
     if (CMP_EQ(eax, 0xFFFF)) goto loc_0007050E; /* je: equal / zero */
 
 loc_000704D8: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_0007050E; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_0007050E; /* jns: not sign (positive) */
 
 loc_000704DC: ;
     ecx = MEM32(0x4A04C8);
@@ -11628,7 +11629,7 @@ loc_00070527: ;
     if (CMP_EQ(eax, 0xFFFF)) goto loc_00070564; /* je: equal / zero */
 
 loc_0007052E: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_00070564; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_00070564; /* jns: not sign (positive) */
 
 loc_00070532: ;
     ecx = MEM32(0x4A04C8);
@@ -11665,7 +11666,7 @@ loc_00070579: ;
     if (CMP_EQ(eax, 0xFFFF)) goto loc_000705BA; /* je: equal / zero */
 
 loc_00070580: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_000705BA; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_000705BA; /* jns: not sign (positive) */
 
 loc_00070584: ;
     ecx = MEM32(0x4A04C8);
@@ -15739,7 +15740,7 @@ loc_00072670: ;
     if (CMP_EQ(LO8(eax), 0xFF)) goto loc_0007269D; /* je: equal / zero */
 
 loc_00072676: ;
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0007269D; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0007269D; /* jns: not sign (positive) */
 
 loc_0007267A: ;
     esi = ZX8(LO8(eax));
@@ -19918,6 +19919,7 @@ loc_0007422C: ;
  */
 void sub_00074240(void)
 {
+    /* DOA3: js/jns after test r8,r8 test bit 7 of the byte; the lift cast the unsigned byte to int32_t (never negative), so flagged voice ids never reached the voice player (0x9CB90/0x9CC70) */
     uint32_t ebp;
     int _flags = 0; /* fallback flag var */
     ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
@@ -19970,7 +19972,7 @@ loc_000742B6: ;
     if (CMP_EQ(eax, 0xFFFFFFFFu)) goto loc_000742CB; /* je: equal / zero */
 
 loc_000742BB: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_000742CB; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_000742CB; /* jns: not sign (positive) */
 
 loc_000742BF: ;
     ecx = ZX16(LO16(esi));
@@ -19993,7 +19995,7 @@ loc_000742E3: ;
     if (CMP_EQ(eax, 0xFFFFFFFFu)) goto loc_0007443B; /* je: equal / zero */
 
 loc_000742EC: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_0007443B; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_0007443B; /* jns: not sign (positive) */
 
 loc_000742F4: ;
     eax = ZX16(LO16(esi));
@@ -20136,7 +20138,7 @@ loc_0007441A: ;
     if (CMP_EQ(eax, 0xFFFF)) goto loc_0007443B; /* je: equal / zero */
 
 loc_00074421: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_0007443B; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0)) goto loc_0007443B; /* jns: not sign (positive) */
 
 loc_00074425: ;
     edx = ZX16(MEM16(esp + 0x12));
@@ -44314,7 +44316,7 @@ loc_0007E735: ;
 
 loc_0007E73E: ;
     eax = MEM32(esp + 0x4C);
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) { g_seh_ebp = ebp; sub_0007E787(); return; } /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) { g_seh_ebp = ebp; sub_0007E787(); return; } /* jns: not sign (positive) */
 
 loc_0007E746: ;
     eax = ZX16(LO16(eax));

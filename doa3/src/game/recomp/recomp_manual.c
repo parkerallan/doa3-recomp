@@ -2937,9 +2937,12 @@ void doa3_apu_deliver_irq(void)
     extern recomp_func_t recomp_lookup(uint32_t xbox_va);
     extern recomp_func_t recomp_lookup_manual(uint32_t xbox_va);
     static unsigned s_isr_calls = 0, s_dpc_calls = 0;
+    static int s_delivering = 0;
     uint32_t obj, routine, ctx, dpc, a1, a2;
     int i;
+    if (s_delivering) return;   /* an interrupt does not preempt its own service routine or DPC */
     if (!mcpx_apu_take_irq()) return;
+    s_delivering = 1;
     for (i = 0; xbox_kernel_get_isr(i, &obj, &routine, &ctx); i++) {
         recomp_func_t fn;
         if (routine < 0x001C0000u || routine >= 0x001E0000u) continue;
@@ -2977,6 +2980,33 @@ void doa3_apu_deliver_irq(void)
         s_dpc_calls++;
         if (s_dpc_calls <= 5 || (s_dpc_calls % 500) == 0) {
             
+        }
+    }
+    s_delivering = 0;
+}
+
+/* DirectSound's retire wait (sub_001C9C92): spin until the buffer's
+ * retire-pending bit (0x10000000) is cleared by the ISR's idle-voice
+ * retirement. Both callers spin at PASSIVE level with the driver's busy
+ * count released, where the hardware interrupt arrives; here it is delivered
+ * from inside the wait. All guest registers are preserved across it. */
+void doa3_apu_wait_retire(uint32_t obj)
+{
+    uint32_t r_eax = eax, r_ecx = ecx, r_edx = edx, r_ebx = ebx, r_esi = esi,
+             r_edi = edi, r_esp = esp, r_seh = g_seh_ebp;
+    DWORD t0 = GetTickCount();
+    int warned = 0;
+    while (MEM32(obj + 8) & 0x10000000u) {
+        doa3_apu_deliver_irq();
+        eax = r_eax; ecx = r_ecx; edx = r_edx; ebx = r_ebx; esi = r_esi;
+        edi = r_edi; esp = r_esp; g_seh_ebp = r_seh;
+        if (!(MEM32(obj + 8) & 0x10000000u)) break;
+        Sleep(1);
+        if (!warned && GetTickCount() - t0 > 500) {
+            warned = 1;
+            fprintf(stderr, "[DSOUND] retire wait on buffer %08X still pending after 500 ms (flags %08X)\n",
+                    obj, MEM32(obj + 8));
+            fflush(stderr);
         }
     }
 }

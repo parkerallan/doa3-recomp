@@ -47,7 +47,7 @@ loc_00011032: ;
     MEM32(esp) = MEM32(esp) | 0x40;
 
 loc_00011037: ;
-    if (((int32_t)(HI8(ebx) & HI8(ebx)) >= 0)) { g_seh_ebp = ebp; sub_00011050(); return; } /* jns: not sign (positive) */
+    if (((int8_t)HI8(ebx) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) { g_seh_ebp = ebp; sub_00011050(); return; } /* jns: not sign (positive) */
 
 loc_0001103B: ;
     eax = ZX8(LO8(ecx));
@@ -140,7 +140,7 @@ loc_000110CC: ;
     SET_LO16(eax, LO16(eax) | MEM16(edx * 4 + 0x2197A6));
 
 loc_000110DA: ;
-    if (((int32_t)(LO8(ebx) & LO8(ebx)) >= 0)) goto loc_000110EC; /* jns: not sign (positive) */
+    if (((int8_t)LO8(ebx) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_000110EC; /* jns: not sign (positive) */
 
 loc_000110DE: ;
     edx = ZX8(LO8(ecx));
@@ -34124,7 +34124,7 @@ loc_0001DE8F: ;
     goto loc_0001DEB7;
 
 loc_0001DEA5: ;
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0001DED1; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0001DED1; /* jns: not sign (positive) */
 
 loc_0001DEA9: ;
     eax = MEM32(0x3C23DC);
@@ -53223,7 +53223,7 @@ void sub_00024920(void)
 
 loc_00024920: ;
     SET_LO8(ecx, MEM8(eax + 0x8F4));
-    if (((int32_t)(LO8(ecx) & LO8(ecx)) >= 0)) goto loc_0002494E; /* jns: not sign (positive) */
+    if (((int8_t)LO8(ecx) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0002494E; /* jns: not sign (positive) */
 
 loc_0002492A: ;
     PUSH32(esp, esi);

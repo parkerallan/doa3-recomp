@@ -3199,7 +3199,7 @@ loc_000AF6D9: ;
 loc_000AF6DF: ;
     esp = esp + 8;
     eax = MEM32(esp + 0x14);
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_000AF72B; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_000AF72B; /* jns: not sign (positive) */
 
 loc_000AF6EA: ;
     PUSH32(esp, 0);
@@ -3331,7 +3331,7 @@ void sub_000AF6E2(void)
 
 loc_000AF6E2: ;
     eax = MEM32(esp + 0x14);
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_000AF72B; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_000AF72B; /* jns: not sign (positive) */
 
 loc_000AF6EA: ;
     PUSH32(esp, 0);

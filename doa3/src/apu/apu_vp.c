@@ -213,8 +213,17 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
     if (g_apu_fe_methods <= 64) {  }
     if (method == NV1BA0_PIO_VOICE_ON) g_apu_voice_on_calls++;
 
-    d->regs[NV_PAPU_FEDECMETH] = method;
-    d->regs[NV_PAPU_FEDECPARAM] = argument;
+    /* The decoded-method latch holds the trapping method while the front end
+     * is trapped (a trapped FE has stopped decoding). The interrupt reaches
+     * the game thread up to a frame later, and the driver keeps writing
+     * SET_CURRENT_VOICE meanwhile: overwriting the latch made DirectSound's
+     * ISR (0x1C9024) read 0x2FC instead of SE2FE_IDLE_VOICE, so it never
+     * retired a voice. */
+    if ((d->regs[NV_PAPU_FECTL] & NV_PAPU_FECTL_FEMETHMODE) !=
+        NV_PAPU_FECTL_FEMETHMODE_TRAPPED) {
+        d->regs[NV_PAPU_FEDECMETH] = method;
+        d->regs[NV_PAPU_FEDECPARAM] = argument;
+    }
     unsigned int selected_handle, list;
 
     switch (method) {
@@ -1271,21 +1280,13 @@ void mcpx_apu_vp_frame(MCPXAPUState *d,
                     fe_method(d, SE2FE_IDLE_VOICE, v);
                     prev = v;
                 } else {
-                    /* The driver was already asked on an earlier frame and did
-                     * not unlink it: its CMcpxVoiceClient is gone, because the
-                     * sound buffer was released before the once-per-rendered-
-                     * frame APU interrupt could run. Retire the voice here and
-                     * clear the trap, which is what the driver would have done.
-                     * Left alone the voice stayed linked forever, re-raising
-                     * the trap every frame and stopping the whole voice
-                     * processor. */
-                    if (prev == 0xFFFF) d->regs[top] = nxt;
-                    else voice_set_mask(d, prev, NV_PAVS_VOICE_TAR_PITCH_LINK,
-                                        NV_PAVS_VOICE_TAR_PITCH_LINK_NEXT_VOICE_HANDLE, nxt);
-                    d->regs[NV_PAPU_FECTL] &= ~NV_PAPU_FECTL_FEMETHMODE;
-                    d->regs[NV_PAPU_FECTL] |= NV_PAPU_FECTL_FEMETHMODE_FREE_RUNNING;
-                    d->regs[NV_PAPU_FECTL] &= ~NV_PAPU_FECTL_FETRAPREASON;
-                    trap_outstanding = 0;
+                    /* A trap is already outstanding: leave the voice linked and
+                     * the trap up until the driver's interrupt handler services
+                     * it (0x1C9024 -> 0x1C8ECB -> retire 0x1C84D0), as the
+                     * hardware does. Retiring it here behind the driver's back
+                     * left the buffer on DirectSound's voice list with its
+                     * retire-pending bit set forever. */
+                    prev = v;
                 }
             } else {
                 /* Process voice directly (single-threaded) */

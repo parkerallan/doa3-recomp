@@ -24908,7 +24908,7 @@ loc_0004039E: ;
     /* test LO8(eax), LO8(eax) - flags set for next jcc */
     esi = MEM32(ebp + -16);
     POP32(esp, edi);
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_000403BB; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_000403BB; /* jns: not sign (positive) */
 
 loc_000403A9: ;
     edx = MEM32(ebp + -12);
@@ -26494,7 +26494,7 @@ loc_0004124B: ;
 
 loc_00041260: ;
     SET_LO8(eax, MEM8(edi + 8));
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0004127C; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0004127C; /* jns: not sign (positive) */
 
 loc_00041267: ;
     edx = MEM32(ebp + 0x1C);
@@ -50903,7 +50903,12 @@ loc_0007C1A0: ;
     /* test LO8(edx), LO8(edx) - flags set for next jcc */
     MEM32(ecx + 8) = eax;
     edx = SX16(LO16(edx));
-    if (((int32_t)(LO8(edx) & LO8(edx)) >= 0)) goto loc_0007C222; /* jns: not sign (positive) */
+    /* DOA3: jns after test dl,dl tests bit 7 of the byte. The lift cast the
+     * unsigned LO8 to int32_t, which is never negative, so every script sound
+     * command flagged 0x80 - the cutscene dialogue lines - went to the effect
+     * table at 0x7C2B4 instead of the dialogue path (0x9FEE0) and was never
+     * played. (movsx above leaves the low byte unchanged.) */
+    if ((int8_t)LO8(edx) >= 0) goto loc_0007C222; /* jns: not sign (positive) */
 
 loc_0007C1C2: ;
     edx = edx & 0xFFFFFF7Fu;

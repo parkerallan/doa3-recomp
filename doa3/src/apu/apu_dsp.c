@@ -49,8 +49,6 @@ void mcpx_apu_update_dsp_preference(MCPXAPUState *d)
     (void)d;
 }
 
-#define APU_OUTPUT_GAIN 8.0f   /* +18 dB, see the output stage below */
-
 void mcpx_apu_dsp_frame(MCPXAPUState *d,
                          float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
 {
@@ -70,17 +68,23 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d,
 
     int off = (d->ep_frame_div % 8) * NUM_SAMPLES_PER_FRAME;
 
+    const float g_front[2] = { (float)(1 << d->vp.submix_headroom[0]),
+                               (float)(1 << d->vp.submix_headroom[1]) };
+    const float g_xtlk = (float)(1 << d->vp.hrtf_headroom);
     if (d->monitor.point != MCPX_APU_DEBUG_MON_VP) {
         for (int i = 0; i < NUM_SAMPLES_PER_FRAME; i++) {
-            /* Clamp to [-1, 1] range */
-            /* Output stage gain. On hardware the DSP output mixer sits here;
-             * without it the raw mixbins reach the speakers at the voice gain
-             * (default -6 dB mixbin volume and 6 dB headroom: a music voice
-             * comes out at ~0.2 of its decoded level, while the host movie
-             * path plays decoded audio at 1.0). +18 dB puts the music above the
-             * movie level (user preference); the clamp below still bounds the result. */
-            float left = mixbins[0][i] * APU_OUTPUT_GAIN;
-            float right = mixbins[1][i] * APU_OUTPUT_GAIN;
+            /* Output stage: undo the headroom each voice was mixed with, as
+             * the hardware's output mixer does, so music, sound effects and
+             * speech keep the balance the game set with its own volumes.
+             * Bins 0/1: 2D voices (the music), divided by 1 << submix
+             * headroom in the VP. Bins 6-9: the XDK crosstalk speaker bins
+             * (DSMIXBIN_XTLK_FRONT_LEFT/RIGHT, BACK_LEFT/RIGHT) that every 3D
+             * voice - sound effects and speech - is sent to, divided by
+             * 1 << hrtf_headroom. The earlier fixed +18 dB on bins 0/1 alone
+             * put the music 12 dB above the game's mix and buried the
+             * dialogue. */
+            float left = mixbins[0][i] * g_front[0] + (mixbins[6][i] + mixbins[8][i]) * g_xtlk;
+            float right = mixbins[1][i] * g_front[1] + (mixbins[7][i] + mixbins[9][i]) * g_xtlk;
             if (left > 1.0f) left = 1.0f;
             if (left < -1.0f) left = -1.0f;
             if (right > 1.0f) right = 1.0f;

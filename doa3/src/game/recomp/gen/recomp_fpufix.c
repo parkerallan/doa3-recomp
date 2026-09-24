@@ -25255,7 +25255,7 @@ loc_000293F8: ;
     goto loc_000293FE;
 
 loc_000293FA: ;
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0002943D; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0002943D; /* jns: not sign (positive) */
 
 loc_000293FE: ;
     esi = MEM32(ebp + 0x10);
@@ -25943,7 +25943,7 @@ loc_000293F8: ;
     goto loc_000293FE;
 
 loc_000293FA: ;
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0002943D; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0002943D; /* jns: not sign (positive) */
 
 loc_000293FE: ;
     esi = MEM32(ebp + 0x10);
@@ -258699,6 +258699,7 @@ void sub_001CCC2D(void)
     #define fp_st1() g_fp_stack[(g_fp_top + 1) & 7]
 
 loc_001CCC2D: ;
+    ebp = g_seh_ebp; /* DOA3: push ebp saves the caller's frame (the carrier), not an uninitialised local; sub_001CCC88's leave hands it back */
     PUSH32(esp, ebp);
     ebp = esp;
     esp = esp - 0xC;

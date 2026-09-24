@@ -74135,7 +74135,7 @@ loc_0015D076: ;
     if (TEST_NZ(LO8(eax), 8)) goto loc_0015D084; /* jne: not equal / not zero */
 
 loc_0015D080: ;
-    if (((int32_t)(HI8(eax) & HI8(eax)) >= 0)) goto loc_0015D0D0; /* jns: not sign (positive) */
+    if (((int8_t)HI8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0015D0D0; /* jns: not sign (positive) */
 
 loc_0015D084: ;
     if (TEST_NZ(MEM8(ebx + 0x5E5ED8), 3)) goto loc_0015D0D0; /* jne: not equal / not zero */

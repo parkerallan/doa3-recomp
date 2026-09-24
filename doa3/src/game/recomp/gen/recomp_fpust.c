@@ -11503,7 +11503,7 @@ loc_000293F8: ;
     goto loc_000293FE;
 
 loc_000293FA: ;
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0002943D; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0002943D; /* jns: not sign (positive) */
 
 loc_000293FE: ;
     esi = MEM32(ebp + 0x10);

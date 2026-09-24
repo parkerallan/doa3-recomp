@@ -44916,12 +44916,13 @@ loc_0009FCF3: ;
  */
 void sub_0009FD00(void)
 {
+    /* DOA3: js/jns after test r8,r8 test bit 7 of the byte; the lift cast the unsigned byte to int32_t (never negative), so flagged voice ids never reached the voice player (0x9CB90/0x9CC70) */
     int _flags = 0; /* fallback flag var */
 
 loc_0009FD00: ;
     ecx = MEM32(esp + 4);
     ecx = ecx & 0xFFFF;
-    if (((int32_t)(HI8(ecx) & HI8(ecx)) >= 0)) { sub_0009FD18(); return; } /* jns: not sign (positive) */
+    if (((int8_t)HI8(ecx) >= 0)) { sub_0009FD18(); return; } /* jns: not sign (positive) */
 
 loc_0009FD0E: ;
     PUSH32(esp, ecx);
@@ -45000,12 +45001,13 @@ loc_0009FD6F: ;
  */
 void sub_0009FD70(void)
 {
+    /* DOA3: js/jns after test r8,r8 test bit 7 of the byte; the lift cast the unsigned byte to int32_t (never negative), so flagged voice ids never reached the voice player (0x9CB90/0x9CC70) */
     int _flags = 0; /* fallback flag var */
 
 loc_0009FD70: ;
     edx = MEM32(esp + 4);
     edx = edx & 0xFFFF;
-    if (((int32_t)(HI8(edx) & HI8(edx)) >= 0)) { sub_0009FD88(); return; } /* jns: not sign (positive) */
+    if (((int8_t)HI8(edx) >= 0)) { sub_0009FD88(); return; } /* jns: not sign (positive) */
 
 loc_0009FD7E: ;
     PUSH32(esp, edx);
@@ -45336,12 +45338,13 @@ loc_0009FF98: ;
  */
 void sub_0009FFA0(void)
 {
+    /* DOA3: js/jns after test r8,r8 test bit 7 of the byte; the lift cast the unsigned byte to int32_t (never negative), so flagged voice ids never reached the voice player (0x9CB90/0x9CC70) */
     int _flags = 0; /* fallback flag var */
 
 loc_0009FFA0: ;
     ecx = MEM32(esp + 4);
     ecx = ecx & 0xFFFF;
-    if (((int32_t)(HI8(ecx) & HI8(ecx)) >= 0)) { sub_0009FFB8(); return; } /* jns: not sign (positive) */
+    if (((int8_t)HI8(ecx) >= 0)) { sub_0009FFB8(); return; } /* jns: not sign (positive) */
 
 loc_0009FFAE: ;
     PUSH32(esp, ecx);
@@ -45427,12 +45430,13 @@ loc_000A001C: ;
  */
 void sub_000A0020(void)
 {
+    /* DOA3: js/jns after test r8,r8 test bit 7 of the byte; the lift cast the unsigned byte to int32_t (never negative), so flagged voice ids never reached the voice player (0x9CB90/0x9CC70) */
     int _flags = 0; /* fallback flag var */
 
 loc_000A0020: ;
     edx = MEM32(esp + 4);
     edx = edx & 0xFFFF;
-    if (((int32_t)(HI8(edx) & HI8(edx)) >= 0)) { sub_000A0038(); return; } /* jns: not sign (positive) */
+    if (((int8_t)HI8(edx) >= 0)) { sub_000A0038(); return; } /* jns: not sign (positive) */
 
 loc_000A002E: ;
     PUSH32(esp, edx);

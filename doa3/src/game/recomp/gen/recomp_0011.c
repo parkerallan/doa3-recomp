@@ -2938,7 +2938,9 @@ loc_001C841E: ;
     ecx = edi + -188;
     eax = MEM32(ecx);
     { uint32_t _icall_esp = g_esp;
+    uint32_t _seh_hold = g_seh_ebp; /* DOA3: ebp survives a call; the callee left its own frame in the carrier, so sub_001C842F/sub_001C8433 read the list counter at the wrong [ebp-4], it never reached 0 and the drain walked off the three voice lists forever */
     PUSH32(esp, 0); RECOMP_ICALL_SAFE(MEM32(eax + 0x14), _icall_esp); /* indirect call */
+    g_seh_ebp = _seh_hold;
     }
 
 loc_001C8429: ;
@@ -3088,8 +3090,11 @@ loc_001C8478: ;
     eax = MEM32(ecx);
 
 loc_001C8492: ;
-    /* TODO: cmpxchg dword ptr [ecx], edx */
-    if ((MEM32(ecx) != eax)) goto loc_001C8492; /* jne: not equal / not zero */
+    /* cmpxchg dword ptr [ecx], edx: equal -> store edx, ZF=1; else eax = [ecx], ZF=0.
+     * DOA3: was a compare with no store, so the ISR status word at mgr+0x5EC was
+     * never cleared and the completion loop at 0x1C8D05 would re-read it forever. */
+    if (MEM32(ecx) == eax) { MEM32(ecx) = edx; }
+    else { eax = MEM32(ecx); goto loc_001C8492; } /* jne */
 
 loc_001C8497: ;
     MEM32(esi + 0x5F4) = MEM32(esi + 0x5F4) | eax;
@@ -4428,14 +4433,18 @@ loc_001C8D1D: ;
 
 loc_001C8D26: ;
     ecx = esi;
+    { uint32_t _seh_hold = g_seh_ebp; /* DOA3: ebp survives a call; keep the carrier across it (the callee leaves its own frame there) */
     PUSH32(esp, 0); sub_001C84A4(); /* call 0x001C84A4 */
+    g_seh_ebp = _seh_hold; }
 
 loc_001C8D2D: ;
     if (TEST_Z(MEM8(esi + 0x5F4), 0x40)) goto loc_001C8D3D; /* je: equal / zero */
 
 loc_001C8D36: ;
     ecx = esi;
+    { uint32_t _seh_hold = g_seh_ebp; /* DOA3: ebp survives a call; keep the carrier across it (the callee leaves its own frame there) */
     PUSH32(esp, 0); sub_001C83EC(); /* call 0x001C83EC */
+    g_seh_ebp = _seh_hold; }
 
 loc_001C8D3D: ;
     MEM32(esi + 0x5F4) = MEM32(esi + 0x5F4) & 0;
@@ -5041,7 +5050,9 @@ void sub_001C8FFE(void)
 {
 
 loc_001C8FFE: ;
+    { uint32_t _seh_hold = g_seh_ebp; /* DOA3: ebp survives a call; keep the carrier across it (the callee leaves its own frame there) */
     PUSH32(esp, 0); sub_001C8EF0(); /* call 0x001C8EF0 */
+    g_seh_ebp = _seh_hold; }
 
     sub_001C9003(); return; /* DOA3: restored dropped fall-through to sub_001C9003 */
 }
@@ -7496,7 +7507,14 @@ loc_001C9C92: ;
     if (TEST_Z(MEM8(ecx + 8), 1)) goto loc_001C9CA1; /* je: equal / zero */
 
 loc_001C9C98: ;
-    /* DOA3: hw busy-wait forced through (was: if (TEST_NZ(MEM32(ecx + 8), 0x10000000)) goto loc_001C9C98) */
+    /* Wait until DirectSound's interrupt handler has retired the voice (it
+     * clears 0x10000000 in 0x1C84D0 after unlinking the buffer from its voice
+     * list). DOA3: this wait used to be forced through, so a buffer the game
+     * stopped and immediately refilled was relinked while still on the list,
+     * and the completion drain looped forever on the resulting cycle. The APU
+     * interrupt reaches the game thread from the present hook otherwise, so
+     * the wait delivers it itself, as the hardware interrupt would arrive. */
+    { extern void doa3_apu_wait_retire(uint32_t); doa3_apu_wait_retire(ecx); }
 
 loc_001C9CA1: ;
     esp += 4; return; /* ret */
@@ -15503,6 +15521,7 @@ loc_001CCC90: ;
     eax = MEM32(ebp + 8);
     esp = ebp;
     POP32(esp, ebp); /* leave */
+    g_seh_ebp = ebp; /* DOA3: leave restores the caller's frame; the carrier kept this helper's frame, so sub_001C9B9A returned esp 28 bytes low, sub_001CAB2B popped esi = 0 and every one-shot Play failed 0x8007000E */
     esp += 8; return; /* ret 4 */
 
 }

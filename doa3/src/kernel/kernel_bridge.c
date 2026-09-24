@@ -764,6 +764,35 @@ static void bridge_NtCreateEvent(void)
     g_eax = (uint32_t)status;
 }
 
+/* ── KeSynchronizeExecution (ordinal 153) ─────────────────
+ * BOOLEAN KeSynchronizeExecution(PKINTERRUPT, PKSYNCHRONIZE_ROUTINE, PVOID ctx):
+ * runs the routine with the interrupt masked and returns its result. The
+ * interrupt service routine here only ever runs from the game thread
+ * (doa3_apu_deliver_irq), so nothing can preempt the routine and a plain guest
+ * call is the whole job. DirectSound's completion DPC (0x1C8D05) uses this to
+ * collect the ISR's status bits (0x1C8478); with no bridge it got 0 and never
+ * drained a finished buffer, so every one-shot sound effect kept its slot. */
+static void bridge_KeSynchronizeExecution(void)
+{
+    uint32_t routine = STACK_ARG(1), context = STACK_ARG(2);
+    recomp_func_t fn = recomp_lookup_manual(routine);
+    if (!fn) fn = recomp_lookup(routine);
+    if (!fn) {
+        fprintf(stderr, "  [KERNEL] KeSynchronizeExecution: routine 0x%08X not in dispatch\n", routine);
+        fflush(stderr);
+        g_eax = 0;
+        return;
+    }
+    {
+        uint32_t saved_esp = g_esp;
+        g_esp -= 4; BRIDGE_MEM32(g_esp) = context;
+        g_esp -= 4; BRIDGE_MEM32(g_esp) = 0;          /* dummy return address */
+        fn();
+        g_esp = saved_esp;                           /* stdcall ret 4 */
+    }
+    g_eax &= 0xFF;                                   /* BOOLEAN */
+}
+
 /* ── KeSetEvent (ordinal 145) ──────────────────────────────
  * Set the KEVENT's signal-state and wake any fiber blocked on it (the CRI worker
  * that's parked in KeWaitForSingleObject). Returns the previous signal-state. */
@@ -2805,6 +2834,7 @@ static bridge_func_t bridge_for_ordinal(ULONG ordinal)
     /* Synchronization */
     case 189: return bridge_NtCreateEvent;
     case 145: return bridge_KeSetEvent;
+    case 153: return bridge_KeSynchronizeExecution;
     case 159: return bridge_KeWaitForSingleObject;
     case 238: return bridge_NtYieldExecution;
 

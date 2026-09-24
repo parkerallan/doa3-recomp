@@ -7674,7 +7674,7 @@ loc_0001FF72: ;
     if (TEST_NZ(LO8(eax), 0x40)) goto loc_0001FF9B; /* jne: not equal / not zero */
 
 loc_0001FF76: ;
-    if (((int32_t)(LO8(eax) & LO8(eax)) >= 0)) goto loc_0001FF81; /* jns: not sign (positive) */
+    if (((int8_t)LO8(eax) >= 0) /* DOA3 group D: byte sign test (was an unsigned byte cast to int32_t, never negative) */) goto loc_0001FF81; /* jns: not sign (positive) */
 
 loc_0001FF7A: ;
     MEM8(esp + 0xC) = 2;
