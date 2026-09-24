@@ -677,9 +677,10 @@ static void swap_resize_if_needed(void)
     d3d11_create_swap_rtv(s);
 }
 
-/* The aspect setting changed: rebuild the guest target at the new size and
- * tell the game. Runs right after a flip, so nothing is mid-frame. */
-static void d3d8_apply_aspect_change(void)
+/* The aspect or internal-resolution setting changed: rebuild the guest target
+ * at the new size and tell the game. Runs right after a flip, so nothing is
+ * mid-frame. */
+static void d3d8_apply_target_size_change(void)
 {
     D3D8DeviceState *s = &g_device_state;
     unsigned w, h;
@@ -803,7 +804,7 @@ static HRESULT d3d8_compose_and_present(void)
     }
 
     hr = IDXGISwapChain_Present(s->swap_chain, 0, 0);
-    d3d8_apply_aspect_change();
+    d3d8_apply_target_size_change();
     return hr;
 }
 

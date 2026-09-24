@@ -203,10 +203,12 @@ void DrawVideoSection()
 {
     static const char *kWindow[] = { "Windowed", "Borderless fullscreen" };
     static const char *kAspect[] = { "4:3", "16:9" };
+    static const char *kScale[]  = { "1x (480p)", "2x (960p)", "3x (1440p)" };
 
     if (ImGui::Button("Reset to defaults")) {
         video_set_window_mode(VIDEO_BORDERLESS);
         video_set_aspect(VIDEO_ASPECT_16_9);
+        video_set_scale(3);
         SetStatus("Video settings reset to defaults");
     }
     ImGui::SameLine();
@@ -220,6 +222,7 @@ void DrawVideoSection()
         int found = video_settings_load();
         video_set_window_mode(video_get_window_mode());
         video_set_aspect(video_get_aspect());
+        video_set_scale(video_get_scale());
         SetStatus(found ? "Loaded doa3_settings.ini"
                         : "No doa3_settings.ini to load");
     }
@@ -236,6 +239,11 @@ void DrawVideoSection()
     if (ImGui::Combo("Aspect ratio", &ar, kAspect, IM_ARRAYSIZE(kAspect)) &&
         ar != video_get_aspect())
         video_set_aspect(ar);
+
+    int sc = video_get_scale() - 1;
+    if (ImGui::Combo("Internal resolution", &sc, kScale, IM_ARRAYSIZE(kScale)) &&
+        sc + 1 != video_get_scale())
+        video_set_scale(sc + 1);
 }
 
 void DrawMenu()
