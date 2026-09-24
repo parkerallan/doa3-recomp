@@ -1102,18 +1102,27 @@ static void bridge_KeSetTimer(void)
     g_eax = 0;
 }
 
-/* ── ExQueryPoolBlockSize (ordinal 24) ────────────────────
- * ULONG ExQueryPoolBlockSize(PVOID PoolBlock)
+/* ── Ordinal 24 ───────────────────────────────────────────
+ * Named ExQueryPoolBlockSize in this table, but every DOA3 caller pushes the
+ * five arguments of ExQueryNonVolatileSetting(ValueIndex, &Type, &Value,
+ * ValueLength, &ResultLength) -- sub_00163C84/CB1/CDA/D05/D49 are XAPI's
+ * XGetLanguage / XGetAVPack / XGetVideoFlags / XGetAudioFlags / parental
+ * getters. The stub writes nothing, so each getter reads back whatever its
+ * `push ecx` left in the value slot.
  *
- * Returns the size of a pool memory block.
- * Since we use HeapAlloc, we can query the Windows heap.
+ * Only XC_VIDEO (index 8) is answered, from the video settings: bit 16 is
+ * XC_VIDEO_FLAGS_WIDESCREEN, which switches the game to its own widescreen
+ * projection. The other indices keep the old behaviour.
  */
+extern unsigned video_xc_video_value(void);
 static void bridge_ExQueryPoolBlockSize(void)
 {
-    uint32_t block = STACK_ARG(0);
-    /* Return a reasonable default size. Actual pool blocks are managed
-     * by the kernel; for recompilation, returning 0 might be OK since
-     * code usually uses this for debugging/stats. */
+    uint32_t index = STACK_ARG(0);
+    if (index == 8 && STACK_ARG(2)) {
+        BRIDGE_MEM32(STACK_ARG(2)) = video_xc_video_value();
+        if (STACK_ARG(1)) BRIDGE_MEM32(STACK_ARG(1)) = 4;   /* REG_DWORD */
+        if (STACK_ARG(4)) BRIDGE_MEM32(STACK_ARG(4)) = 4;
+    }
     g_eax = 0;
 }
 

@@ -26,12 +26,11 @@
 #include "recomp/gen/recomp_funcs.h"
 #include "recomp/recomp_dispatch.h"   /* recomp_lookup for the CRT initializers */
 #include "ui/doa3_ui.h"
+#include "video_settings.h"
 
 #define DOA3_ENTRY_POINT   0x001651A5
 #define DOA3_XBE_PATH      "../doa3gamefiles/default.xbe"
 #define DOA3_GAME_DIR      "../doa3gamefiles"
-#define DOA3_WIN_W         640
-#define DOA3_WIN_H         480
 
 /* Host window + D3D8->D3D11 device (mirrors burnout3's graphics init). The NV2A
  * pgraph->D3D11 translator renders through this device via xbox_GetD3DDevice(). */
@@ -52,19 +51,24 @@ static LRESULT CALLBACK doa3_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 static HWND doa3_create_window(void)
 {
-    WNDCLASSA wc; RECT r = { 0, 0, DOA3_WIN_W, DOA3_WIN_H };
+    WNDCLASSA wc; RECT r = { 0, 0, 640, 480 };
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = doa3_wndproc;
     wc.hInstance = GetModuleHandleA(NULL);
     wc.lpszClassName = "DOA3Window";
     wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+    /* Black until the first frame: a borderless window covers the whole
+     * monitor, and an unpainted one shows white blocks during boot. */
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     RegisterClassA(&wc);
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     HWND h = CreateWindowExA(0, "DOA3Window", "Dead or Alive 3",
                              WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                              r.right - r.left, r.bottom - r.top, NULL, NULL,
                              wc.hInstance, NULL);
-    if (h) { ShowWindow(h, SW_SHOW); UpdateWindow(h); }
+    /* Windowed or borderless fullscreen, from doa3_settings.ini. This sizes the
+     * client area before the swap chain is created from it. */
+    if (h) { video_apply_window_mode(h, video_get_window_mode()); UpdateWindow(h); }
     return h;
 }
 
@@ -73,7 +77,10 @@ static int doa3_init_graphics(void)
 {
     D3DPRESENT_PARAMETERS pp;
     HRESULT hr;
+    unsigned gw, gh;
 
+    video_settings_load();
+    video_guest_target_size(video_get_aspect(), &gw, &gh);
     g_hwnd = doa3_create_window();
     if (!g_hwnd) { fprintf(stderr, "WARNING: window creation failed\n"); }
 
@@ -81,8 +88,9 @@ static int doa3_init_graphics(void)
     if (!g_d3d8) { fprintf(stderr, "WARNING: xbox_Direct3DCreate8 failed\n"); return 0; }
 
     memset(&pp, 0, sizeof(pp));
-    pp.BackBufferWidth = DOA3_WIN_W;
-    pp.BackBufferHeight = DOA3_WIN_H;
+    /* The guest frame buffer; the swap chain itself follows the window. */
+    pp.BackBufferWidth = gw;
+    pp.BackBufferHeight = gh;
     pp.BackBufferFormat = D3DFMT_X8R8G8B8;
     pp.BackBufferCount = 1;
     pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
@@ -95,8 +103,9 @@ static int doa3_init_graphics(void)
     if (FAILED(hr)) { fprintf(stderr, "WARNING: CreateDevice failed 0x%08lX\n", (unsigned long)hr); return 0; }
 
     { extern void pgraph_d3d11_init(void); pgraph_d3d11_init(); }
-    fprintf(stderr, "  Graphics: D3D8->D3D11 device created (host window %dx%d)\n",
-            DOA3_WIN_W, DOA3_WIN_H);
+    fprintf(stderr, "  Graphics: D3D8->D3D11 device created (guest target %ux%u, %s, %s)\n",
+            gw, gh, video_get_aspect() == VIDEO_ASPECT_16_9 ? "16:9" : "4:3",
+            video_get_window_mode() == VIDEO_BORDERLESS ? "borderless" : "windowed");
     return 1;
 }
 

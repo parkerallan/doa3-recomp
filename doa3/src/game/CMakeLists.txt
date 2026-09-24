@@ -27,6 +27,7 @@ set(NV2A_SOURCES
 set(GAME_SOURCES
     main.c
     movie_present.c
+    video_settings.c
     recomp/recomp_manual.c
     burnout_compat_stubs.c   # inert stubs for burnout-only symbols the nv2a srcs need
     ${NV2A_SOURCES}

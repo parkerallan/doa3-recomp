@@ -11,6 +11,10 @@
 
 extern "C" {
 #include "pad_mapping.h"
+#include "../game/video_settings.h"
+ID3D11RenderTargetView *d3d8_GetPresentRTV(void);
+UINT                    d3d8_GetPresentWidth(void);
+UINT                    d3d8_GetPresentHeight(void);
 ID3D11Device           *d3d8_GetD3D11Device(void);
 ID3D11DeviceContext    *d3d8_GetD3D11Context(void);
 ID3D11RenderTargetView *d3d8_GetDefaultRTV(void);
@@ -193,6 +197,47 @@ void DrawControlsSection()
 
 }
 
+/* ── Video section ────────────────────────────────────────────────────────*/
+
+void DrawVideoSection()
+{
+    static const char *kWindow[] = { "Windowed", "Borderless fullscreen" };
+    static const char *kAspect[] = { "4:3", "16:9" };
+
+    if (ImGui::Button("Reset to defaults")) {
+        video_set_window_mode(VIDEO_BORDERLESS);
+        video_set_aspect(VIDEO_ASPECT_16_9);
+        SetStatus("Video settings reset to defaults");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save")) {
+        SetStatus(video_settings_save() ? "Saved doa3_settings.ini"
+                                        : "Could not write doa3_settings.ini");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reload")) {
+        /* Load falls back to defaults for anything the file lacks; apply it. */
+        int found = video_settings_load();
+        video_set_window_mode(video_get_window_mode());
+        video_set_aspect(video_get_aspect());
+        SetStatus(found ? "Loaded doa3_settings.ini"
+                        : "No doa3_settings.ini to load");
+    }
+    if (g_status[0]) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_status); }
+
+    ImGui::Separator();
+
+    int wm = video_get_window_mode();
+    if (ImGui::Combo("Window type", &wm, kWindow, IM_ARRAYSIZE(kWindow)) &&
+        wm != video_get_window_mode())
+        video_set_window_mode(wm);
+
+    int ar = video_get_aspect();
+    if (ImGui::Combo("Aspect ratio", &ar, kAspect, IM_ARRAYSIZE(kAspect)) &&
+        ar != video_get_aspect())
+        video_set_aspect(ar);
+}
+
 void DrawMenu()
 {
     const ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -206,6 +251,10 @@ void DrawMenu()
         if (ImGui::BeginTabBar("##tabs")) {
             if (ImGui::BeginTabItem("Controls")) {
                 DrawControlsSection();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Video")) {
+                DrawVideoSection();
                 ImGui::EndTabItem();
             }
 
@@ -323,7 +372,9 @@ extern "C" void doa3_ui_render(void)
     if (!g_ready && !doa3_ui_init()) return;
 
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
-    ID3D11RenderTargetView *rtv = d3d8_GetDefaultRTV();
+    /* Drawn after the guest frame has been scaled into the window, so the
+     * overlay is at window resolution and lines up with the mouse. */
+    ID3D11RenderTargetView *rtv = d3d8_GetPresentRTV();
     if (!ctx || !rtv) return;
 
     /* The overlay replaces the output-merger targets and the viewport below.
@@ -346,8 +397,8 @@ extern "C" void doa3_ui_render(void)
      * whatever the last draw left set. */
     D3D11_VIEWPORT vp;
     vp.TopLeftX = 0.0f; vp.TopLeftY = 0.0f;
-    vp.Width  = (FLOAT)d3d8_GetBackbufferWidth();
-    vp.Height = (FLOAT)d3d8_GetBackbufferHeight();
+    vp.Width  = (FLOAT)d3d8_GetPresentWidth();
+    vp.Height = (FLOAT)d3d8_GetPresentHeight();
     vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
     ctx->OMSetRenderTargets(1, &rtv, nullptr);
     ctx->RSSetViewports(1, &vp);

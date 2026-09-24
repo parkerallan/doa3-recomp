@@ -1,0 +1,134 @@
+/**
+ * Video settings (see video_settings.h).
+ */
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include <stddef.h>
+
+#include "video_settings.h"
+
+extern HWND d3d8_GetHWND(void);
+extern ptrdiff_t g_xbox_mem_offset;
+
+static int g_window_mode = VIDEO_BORDERLESS;
+static int g_aspect      = VIDEO_ASPECT_16_9;
+
+int video_get_window_mode(void) { return g_window_mode; }
+int video_get_aspect(void)      { return g_aspect; }
+
+static const char *video_ini_path(void)
+{
+    static char path[MAX_PATH];
+    char *slash;
+    if (path[0]) return path;
+    if (!GetModuleFileNameA(NULL, path, MAX_PATH)) {
+        strcpy_s(path, sizeof(path), "doa3_settings.ini");
+        return path;
+    }
+    slash = strrchr(path, '\\');
+    if (slash) slash[1] = 0; else path[0] = 0;
+    strcat_s(path, sizeof(path), "doa3_settings.ini");
+    return path;
+}
+
+int video_settings_load(void)
+{
+    const char *p = video_ini_path();
+    int wm = (int)GetPrivateProfileIntA("Video", "WindowMode", VIDEO_BORDERLESS, p);
+    int ar = (int)GetPrivateProfileIntA("Video", "Widescreen", VIDEO_ASPECT_16_9, p);
+    g_window_mode = (wm == VIDEO_WINDOWED) ? VIDEO_WINDOWED : VIDEO_BORDERLESS;
+    g_aspect      = (ar == VIDEO_ASPECT_4_3) ? VIDEO_ASPECT_4_3 : VIDEO_ASPECT_16_9;
+    return GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
+}
+
+int video_settings_save(void)
+{
+    const char *p = video_ini_path();
+    /* WindowMode: 0 = windowed, 1 = borderless fullscreen.
+     * Widescreen: 0 = 4:3, 1 = 16:9. */
+    return WritePrivateProfileStringA("Video", "WindowMode",
+                                      g_window_mode ? "1" : "0", p) &&
+           WritePrivateProfileStringA("Video", "Widescreen",
+                                      g_aspect ? "1" : "0", p);
+}
+
+void video_guest_target_size(int aspect, unsigned *w, unsigned *h)
+{
+    *h = 480;
+    *w = (aspect == VIDEO_ASPECT_16_9) ? 854 : 640;
+}
+
+/* XC_VIDEO dword: XGetVideoFlags returns (value >> 16) & 0x5F, and
+ * XC_VIDEO_FLAGS_WIDESCREEN is bit 0 of that. */
+unsigned video_xc_video_value(void)
+{
+    return (g_aspect == VIDEO_ASPECT_16_9) ? 0x00010000u : 0u;
+}
+
+void video_set_aspect(int aspect)
+{
+    /* The d3d8 layer notices the change at the next frame boundary and
+     * rebuilds the guest target (d3d8_device.c, present path). */
+    g_aspect = (aspect == VIDEO_ASPECT_4_3) ? VIDEO_ASPECT_4_3 : VIDEO_ASPECT_16_9;
+}
+
+/* Called by the d3d8 layer when it switches the guest target: bring the
+ * game's own widescreen state in line with the new aspect.
+ *
+ * sub_001539C0 queries XC_VIDEO once and caches the result in three places
+ * the rest of the game reads from then on: its widescreen flag 0x90F544
+ * bit 0 (read by the per-frame projection code), the present-parameter
+ * flags 0x90F4D0 (D3DPRESENTFLAG_WIDESCREEN = 0x10) and the raw video flags
+ * 0x90F4E0 bit 0. Before that init has run (present width 0x90F4A8 not yet
+ * 720) there is nothing to update -- the kernel query answers from
+ * g_aspect directly. */
+void video_sync_guest_widescreen(void)
+{
+    volatile uint8_t *m = (volatile uint8_t *)(uintptr_t)g_xbox_mem_offset;
+    volatile uint32_t *pp_w  = (volatile uint32_t *)(m + 0x90F4A8);
+    volatile uint32_t *pp_fl = (volatile uint32_t *)(m + 0x90F4D0);
+    volatile uint32_t *vflag = (volatile uint32_t *)(m + 0x90F4E0);
+    volatile uint32_t *ws    = (volatile uint32_t *)(m + 0x90F544);
+    int on = (g_aspect == VIDEO_ASPECT_16_9);
+    if (!g_xbox_mem_offset || *pp_w != 0x2D0u) return;
+    if (on) { *ws |= 1u;  *pp_fl |= 0x10u;  *vflag |= 1u; }
+    else    { *ws &= ~1u; *pp_fl &= ~0x10u; *vflag &= ~1u; }
+}
+
+void video_apply_window_mode(HWND hwnd, int mode)
+{
+    MONITORINFO mi;
+    HMONITOR mon;
+    if (!hwnd) return;
+    mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoA(mon, &mi)) return;
+
+    if (mode == VIDEO_BORDERLESS) {
+        RECT r = mi.rcMonitor;
+        SetWindowLongPtrA(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    } else {
+        unsigned cw, ch;
+        RECT r, wa = mi.rcWork;
+        video_guest_target_size(g_aspect, &cw, &ch);
+        r.left = 0; r.top = 0; r.right = (LONG)cw; r.bottom = (LONG)ch;
+        AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+        SetWindowLongPtrA(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPos(hwnd, HWND_NOTOPMOST,
+                     wa.left + ((wa.right - wa.left) - (r.right - r.left)) / 2,
+                     wa.top + ((wa.bottom - wa.top) - (r.bottom - r.top)) / 2,
+                     r.right - r.left, r.bottom - r.top,
+                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+}
+
+void video_set_window_mode(int mode)
+{
+    g_window_mode = (mode == VIDEO_WINDOWED) ? VIDEO_WINDOWED : VIDEO_BORDERLESS;
+    video_apply_window_mode(d3d8_GetHWND(), g_window_mode);
+}

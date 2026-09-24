@@ -34,13 +34,15 @@
 
 extern ID3D11Device        *d3d8_GetD3D11Device(void);
 extern ID3D11DeviceContext *d3d8_GetD3D11Context(void);
-extern IDXGISwapChain      *d3d8_GetSwapChain(void);
+extern ID3D11RenderTargetView *d3d8_GetDefaultRTV(void);
+extern ID3D11Texture2D     *d3d8_GetGuestTexture(void);
+extern UINT                 d3d8_GetBackbufferWidth(void);
+extern UINT                 d3d8_GetBackbufferHeight(void);
 extern void                 d3d8_PresentFrame(void);
 extern void                 d3d8_RestoreDefaultTarget(void);
 
 static ID3D11Texture2D          *s_tex;
 static ID3D11ShaderResourceView *s_srv;
-static ID3D11RenderTargetView   *s_rtv;
 static ID3D11VertexShader       *s_vs;
 static ID3D11PixelShader        *s_ps;
 static ID3D11SamplerState       *s_smp;
@@ -112,16 +114,6 @@ static int movie_present_init(ID3D11Device *dev, int w, int h)
     if (FAILED(ID3D11Device_CreateSamplerState(dev, &sd, &s_smp)))
         return 0;
 
-    IDXGISwapChain *sc = d3d8_GetSwapChain();
-    ID3D11Texture2D *bb = NULL;
-    if (!sc || FAILED(IDXGISwapChain_GetBuffer(sc, 0, &IID_ID3D11Texture2D,
-                                               (void **)&bb)) || !bb)
-        return 0;
-    HRESULT hr = ID3D11Device_CreateRenderTargetView(dev, (ID3D11Resource *)bb,
-                                                     NULL, &s_rtv);
-    ID3D11Texture2D_Release(bb);
-    if (FAILED(hr))
-        return 0;
     s_w = w; s_h = h;
     fprintf(stderr, "[MVPRES] initialized (%dx%d -> window)\n", w, h);
     fflush(stderr);
@@ -457,6 +449,48 @@ int doa3_movie_host_owns_screen(void)
     return !s_host_stopped;
 }
 
+/* Draw the uploaded movie frame into the guest frame buffer, inside a centred
+ * 4:3 area. The guest target is 16:9 in widescreen mode; the movie is 4:3 and
+ * must not be stretched, so it is pillarboxed there and fills the target at
+ * 4:3. The present path then scales the guest frame into the window. The
+ * translator's full-target viewport is put back afterwards. */
+static void movie_draw_to_guest(ID3D11DeviceContext *ctx)
+{
+    ID3D11RenderTargetView *rtv = d3d8_GetDefaultRTV();
+    const FLOAT black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    FLOAT gw = (FLOAT)d3d8_GetBackbufferWidth(), gh = (FLOAT)d3d8_GetBackbufferHeight();
+    D3D11_VIEWPORT vp;
+    if (!rtv || gw <= 0.0f || gh <= 0.0f) return;
+    vp.Height = gh;
+    vp.Width = gh * 4.0f / 3.0f;
+    if (vp.Width > gw) vp.Width = gw;
+    vp.TopLeftX = (FLOAT)(int)((gw - vp.Width) * 0.5f);
+    vp.TopLeftY = 0.0f;
+    vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
+
+    ID3D11DeviceContext_OMSetRenderTargets(ctx, 1, &rtv, NULL);
+    ID3D11DeviceContext_ClearRenderTargetView(ctx, rtv, black);
+    ID3D11DeviceContext_RSSetViewports(ctx, 1, &vp);
+    ID3D11DeviceContext_IASetInputLayout(ctx, NULL);
+    ID3D11DeviceContext_IASetPrimitiveTopology(ctx,
+        D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_VSSetShader(ctx, s_vs, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(ctx, s_ps, NULL, 0);
+    ID3D11DeviceContext_PSSetShaderResources(ctx, 0, 1, &s_srv);
+    ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &s_smp);
+    ID3D11DeviceContext_Draw(ctx, 3, 0);
+}
+
+static void movie_restore_guest_viewport(ID3D11DeviceContext *ctx)
+{
+    D3D11_VIEWPORT vp;
+    vp.TopLeftX = 0.0f; vp.TopLeftY = 0.0f;
+    vp.Width = (FLOAT)d3d8_GetBackbufferWidth();
+    vp.Height = (FLOAT)d3d8_GetBackbufferHeight();
+    vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
+    ID3D11DeviceContext_RSSetViewports(ctx, 1, &vp);
+}
+
 /* True only while the presenter has actually started showing a movie and
  * has not finished: the game leaving the movie early (START during the
  * intro) must stop it, but the same game path runs before any movie exists
@@ -469,19 +503,20 @@ int doa3_movie_presenter_active(void)
 void doa3_movie_present_finish(void)
 {
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
-    IDXGISwapChain *sc = d3d8_GetSwapChain();
+    ID3D11RenderTargetView *rtv = d3d8_GetDefaultRTV();
     int i;
     if (s_host_stopped && !s_tex)
         return;
     s_host_stopped = 1;
-    if (!ctx || !sc || !s_rtv)
+    if (!ctx || !rtv || !s_tex)
         return;
     /* clear each buffer in the chain, not just the current one */
     for (i = 0; i < 3; i++) {
         const FLOAT black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-        ID3D11DeviceContext_ClearRenderTargetView(ctx, s_rtv, black);
+        ID3D11DeviceContext_ClearRenderTargetView(ctx, rtv, black);
         d3d8_PresentFrame();
     }
+    movie_restore_guest_viewport(ctx);
     d3d8_RestoreDefaultTarget();
     fprintf(stderr, "[MVPRES] movie finished -- screen released to the game\n");
     fflush(stderr);
@@ -491,13 +526,11 @@ void doa3_capture_backbuffer(const char *path)
 {
     ID3D11Device *dev = d3d8_GetD3D11Device();
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
-    IDXGISwapChain *sc = d3d8_GetSwapChain();
-    ID3D11Texture2D *bb = NULL, *stg = NULL;
+    ID3D11Texture2D *bb = d3d8_GetGuestTexture(), *stg = NULL;
     D3D11_TEXTURE2D_DESC td, sd;
     D3D11_MAPPED_SUBRESOURCE map;
-    if (!dev || !ctx || !sc) return;
-    if (FAILED(IDXGISwapChain_GetBuffer(sc, 0, &IID_ID3D11Texture2D, (void **)&bb)) || !bb)
-        return;
+    if (!dev || !ctx || !bb) return;
+    ID3D11Texture2D_AddRef(bb);
     ID3D11Texture2D_GetDesc(bb, &td);
     sd = td;
     sd.Usage = D3D11_USAGE_STAGING;
@@ -572,28 +605,9 @@ void doa3_movie_repaint(void)
             movie_upload(ctx, host, 720 * 4);
     }
 
-    D3D11_VIEWPORT vp;
-    IDXGISwapChain *sc = d3d8_GetSwapChain();
-    DXGI_SWAP_CHAIN_DESC scd;
-    vp.TopLeftX = 0; vp.TopLeftY = 0;
-    vp.Width = 640; vp.Height = 480;
-    if (sc && SUCCEEDED(IDXGISwapChain_GetDesc(sc, &scd))) {
-        vp.Width = (FLOAT)scd.BufferDesc.Width;
-        vp.Height = (FLOAT)scd.BufferDesc.Height;
-    }
-    vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
-
-    ID3D11DeviceContext_OMSetRenderTargets(ctx, 1, &s_rtv, NULL);
-    ID3D11DeviceContext_RSSetViewports(ctx, 1, &vp);
-    ID3D11DeviceContext_IASetInputLayout(ctx, NULL);
-    ID3D11DeviceContext_IASetPrimitiveTopology(ctx,
-        D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ID3D11DeviceContext_VSSetShader(ctx, s_vs, NULL, 0);
-    ID3D11DeviceContext_PSSetShader(ctx, s_ps, NULL, 0);
-    ID3D11DeviceContext_PSSetShaderResources(ctx, 0, 1, &s_srv);
-    ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &s_smp);
-    ID3D11DeviceContext_Draw(ctx, 3, 0);
+    movie_draw_to_guest(ctx);
     d3d8_PresentFrame();
+    movie_restore_guest_viewport(ctx);
     /* Hand the output merger back with the depth buffer attached. The
      * movie binds its own render-target view and no depth-stencil view;
      * leaving that bound means every guest draw afterwards runs with no
@@ -633,29 +647,9 @@ void doa3_present_movie_surface(const void *src, int w, int h, int pitch)
     }
     movie_upload(ctx, src, pitch);
 
-    D3D11_VIEWPORT vp;
-    IDXGISwapChain *sc = d3d8_GetSwapChain();
-    DXGI_SWAP_CHAIN_DESC scd;
-    vp.TopLeftX = 0; vp.TopLeftY = 0;
-    vp.Width = 640; vp.Height = 480;      /* window size fallback */
-    if (sc && SUCCEEDED(IDXGISwapChain_GetDesc(sc, &scd))) {
-        vp.Width = (FLOAT)scd.BufferDesc.Width;
-        vp.Height = (FLOAT)scd.BufferDesc.Height;
-    }
-    vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
-
-    ID3D11DeviceContext_OMSetRenderTargets(ctx, 1, &s_rtv, NULL);
-    ID3D11DeviceContext_RSSetViewports(ctx, 1, &vp);
-    ID3D11DeviceContext_IASetInputLayout(ctx, NULL);
-    ID3D11DeviceContext_IASetPrimitiveTopology(ctx,
-        D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ID3D11DeviceContext_VSSetShader(ctx, s_vs, NULL, 0);
-    ID3D11DeviceContext_PSSetShader(ctx, s_ps, NULL, 0);
-    ID3D11DeviceContext_PSSetShaderResources(ctx, 0, 1, &s_srv);
-    ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &s_smp);
-    ID3D11DeviceContext_Draw(ctx, 3, 0);
-
+    movie_draw_to_guest(ctx);
     d3d8_PresentFrame();                   /* message pump + vsync present */
+    movie_restore_guest_viewport(ctx);
     d3d8_RestoreDefaultTarget();           /* see doa3_present_movie_frame */
 
     s_frames++;
