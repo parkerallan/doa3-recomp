@@ -5837,9 +5837,9 @@ static int doa3_pb_recording(uint32_t dev)
     return (MEM8(dev + 0xC) & 4) != 0;
 }
 
-/* Pass stage-0 COLOROP/ARG1/ARG2 (TSS table 0x1C0180) to the translator as an
- * NV2A NOP before each draw: the combiner words are zero because
- * sub_001BCC00 never completes. */
+/* Pass stage-0 COLOROP/ARG1/ARG2 (TSS table 0x1C0180) and whether stage 1 is
+ * disabled (bit 17) to the translator as an NV2A NOP before each draw: the
+ * combiner words are zero because sub_001BCC00 never completes. */
 void doa3_pb_tss_marker(void)
 {
     uint32_t dev = MEM32(0x1C3390), cursor;
@@ -5847,7 +5847,8 @@ void doa3_pb_tss_marker(void)
     cursor = MEM32(dev);
     if (cursor < g_doa3_pb_base || cursor + 0x1000 >= g_doa3_pb_end) return;
     MEM32(cursor) = 0x00040100u;
-    MEM32(cursor + 4) = 0xA3000000u | ((MEM32(0x1C0180) & 0x1Fu) << 12) |
+    MEM32(cursor + 4) = 0xA3000000u | (MEM32(0x1C0200) == 1 ? 1u << 17 : 0) |
+                        ((MEM32(0x1C0180) & 0x1Fu) << 12) |
                         ((MEM32(0x1C0188) & 0x3Fu) << 6) | (MEM32(0x1C018C) & 0x3Fu);
     MEM32(dev) = cursor + 8;
 }

@@ -220,7 +220,7 @@ static struct {
     uint32_t alpha_ref;    /* NV097_SET_ALPHA_REF, 0..255 */
     uint32_t color_mask;
     uint32_t comb_factor0[8];
-    /* stage-0 colour op from doa3_pb_tss_marker: 0xA3 | op<<12 | arg1<<6 | arg2 */
+    /* from doa3_pb_tss_marker: 0xA3<<24 | stage1-off<<17 | op<<12 | arg1<<6 | arg2 */
     uint32_t gtss;
     int      gtss_valid;
     uint32_t comb_control;  /* NV097_SET_COMBINER_CONTROL: bits 7:0 = stage count */
@@ -1596,8 +1596,10 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/,
                                               tex_alpha_only ? 0 /*DIFFUSE*/ : 2 /*TEXTURE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
-            /* SELECTARG1(TEXTURE): colour from the texture alone (beach clouds). */
-            if (!g_nv_draw_inline && g_pg.gtss_valid && !tex_alpha_only &&
+            /* SELECTARG1(TEXTURE) with stage 1 disabled: colour from the texture
+             * alone (beach clouds). Characters pair it with a stage-1 env map
+             * and keep texture x diffuse. */
+            if (!g_nv_draw_inline && g_pg.gtss_valid && !tex_alpha_only && (g_pg.gtss & (1u << 17)) &&
                 ((g_pg.gtss >> 12) & 0x1F) == 2 && ((g_pg.gtss >> 6) & 0x3F) == 2) {
                 dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, 2 /*SELECTARG1*/);
                 dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
