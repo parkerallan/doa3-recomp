@@ -64741,6 +64741,7 @@ void sub_001B38A0(void)
     int _flags = 0; /* fallback flag var */
 
 loc_001B38A0: ;
+    { extern void doa3_pb_tss_marker(void); doa3_pb_tss_marker(); }
     PUSH32(esp, ebx);
     ebx = MEM32(0x1C3390);
     PUSH32(esp, esi);

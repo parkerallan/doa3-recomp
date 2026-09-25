@@ -220,6 +220,9 @@ static struct {
     uint32_t alpha_ref;    /* NV097_SET_ALPHA_REF, 0..255 */
     uint32_t color_mask;
     uint32_t comb_factor0[8];
+    /* stage-0 colour op from doa3_pb_tss_marker: 0xA3 | op<<12 | arg1<<6 | arg2 */
+    uint32_t gtss;
+    int      gtss_valid;
     uint32_t comb_control;  /* NV097_SET_COMBINER_CONTROL: bits 7:0 = stage count */
 
     /* Viewport */
@@ -1593,6 +1596,12 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/,
                                               tex_alpha_only ? 0 /*DIFFUSE*/ : 2 /*TEXTURE*/);
             dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
+            /* SELECTARG1(TEXTURE): colour from the texture alone (beach clouds). */
+            if (!g_nv_draw_inline && g_pg.gtss_valid && !tex_alpha_only &&
+                ((g_pg.gtss >> 12) & 0x1F) == 2 && ((g_pg.gtss >> 6) & 0x3F) == 2) {
+                dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, 2 /*SELECTARG1*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
+            }
             if (use_diffuse && tex_has_alpha && (g_pg.blend_enable || g_pg.alpha_test)) {
                 /* A draw whose image has its own alpha wants texture *
                  * diffuse, the Xbox default. Selecting the diffuse alpha
@@ -2073,6 +2082,7 @@ static void submit_array_draw(void)
     g_nv_draw_has_uv = 1;            /* array path: unchanged */
     g_nv_draw_inline = 0;
     nv_apply_draw_state(dev, out, out_n);
+    g_pg.gtss_valid = 0;
     nv_fit_to_backbuffer(out, out_n, 0);
 
     if ((prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
@@ -2473,6 +2483,7 @@ static void submit_draw(void)
     g_nv_draw_has_uv = (lay_uv >= 0);
     g_nv_draw_inline = 1;
     nv_apply_draw_state(dev, out, out_vert_count);
+    g_pg.gtss_valid = 0;
     g_nv_draw_inline = 0;
     nv_fit_to_backbuffer(out, out_vert_count, 1);
     /* Begin scene if needed */
@@ -2616,6 +2627,11 @@ static void submit_draw(void)
 int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
 {
     if (method == 0x1E60) g_pg.comb_control = param;
+    if (method == 0x0100 && (param >> 24) == 0xA3u) {
+        g_pg.gtss = param;
+        g_pg.gtss_valid = 1;
+        return 1;
+    }
     /* Combiner factors: recorded, not executed. */
     if (method >= 0x0A60 && method <= 0x0A7C) {
         g_pg.comb_factor0[(method - 0x0A60) >> 2] = param;

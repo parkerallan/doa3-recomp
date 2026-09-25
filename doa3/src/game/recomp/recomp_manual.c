@@ -4129,9 +4129,11 @@ void sub_00157700(void) {
  *
  * (sub_001B2520, the other callee whose result feeds this call site, is
  * already ABI-enforced through ESP_PROBE above.) */
+void doa3_pb_tss_marker(void);
 void sub_001B3940_gen(void);
 void sub_001B3940(void) {
     uint32_t s_edi = edi, s_esi = esi, s_ebx = ebx;
+    doa3_pb_tss_marker();
     static unsigned draw_probe_count = 0;
     if (draw_probe_count < 8 || (MEM32(esp + 8) > 0x100000 && draw_probe_count < 16)) {
         fprintf(stderr, "[INDEX-ENTRY] esp=%08X mode=%X count=%X src=%08X ebx=%08X record=%X,%X,%X,%X,%X\n",
@@ -5833,6 +5835,21 @@ static void doa3_translate_pb(uint32_t from, uint32_t to)
 static int doa3_pb_recording(uint32_t dev)
 {
     return (MEM8(dev + 0xC) & 4) != 0;
+}
+
+/* Pass stage-0 COLOROP/ARG1/ARG2 (TSS table 0x1C0180) to the translator as an
+ * NV2A NOP before each draw: the combiner words are zero because
+ * sub_001BCC00 never completes. */
+void doa3_pb_tss_marker(void)
+{
+    uint32_t dev = MEM32(0x1C3390), cursor;
+    if (!dev || doa3_pb_recording(dev) || !g_doa3_pb_base) return;
+    cursor = MEM32(dev);
+    if (cursor < g_doa3_pb_base || cursor + 0x1000 >= g_doa3_pb_end) return;
+    MEM32(cursor) = 0x00040100u;
+    MEM32(cursor + 4) = 0xA3000000u | ((MEM32(0x1C0180) & 0x1Fu) << 12) |
+                        ((MEM32(0x1C0188) & 0x3Fu) << 6) | (MEM32(0x1C018C) & 0x3Fu);
+    MEM32(dev) = cursor + 8;
 }
 static uint32_t doa3_pb_makespace_recording(uint32_t dev)
 {

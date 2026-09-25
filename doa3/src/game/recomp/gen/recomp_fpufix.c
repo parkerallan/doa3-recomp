@@ -249055,7 +249055,8 @@ loc_001590FB: ;
     /* cmp edx, eax - flags set for next jcc */
 
 loc_001590FF: ;
-    if (CMP_GE(edx, eax)) goto loc_00159117; /* jge: greater or equal (signed >=) */
+    /* DOA3: on loop-back this jge uses the flags of `cmp edx, [ebp+8]`; eax is stale. */
+    if (CMP_GE(edx, MEM32(ebp + 8))) goto loc_00159117; /* jge: j >= ir */
 
 loc_00159101: ;
     eax = edx + edx * 4;
