@@ -161,6 +161,12 @@ static uint32_t nv2a_blend_to_d3d(uint32_t nv) {
 
 /* Inline vertex buffer - max 16K vertices per draw */
 #define MAX_INLINE_VERTS 16384
+/* Indexed / DRAW_ARRAYS batches. The snow stage's deformable ground is one
+ * DrawIndexedVertices of far more than 16K indices; capping the index list
+ * at the inline limit silently dropped the rest of the mesh (holes in the
+ * snow). Kept separate from the inline cap, which sizes a 5-dword-per-vertex
+ * accumulator. */
+#define MAX_IDX 65536
 #define INLINE_VERT_DWORDS 5  /* X, Y, U, V, Color */
 
 /* RwIm2DVertex-compatible output vertex (28 bytes) */
@@ -224,6 +230,16 @@ static struct {
     uint32_t gtss;
     int      gtss_valid;
     uint32_t comb_control;  /* NV097_SET_COMBINER_CONTROL: bits 7:0 = stage count */
+    /* Point sprites (the snow stage's falling snow). SET_POINT_PARAMS_ENABLE
+     * 0x0318, SET_POINT_SMOOTH_ENABLE 0x031C (the sprite-coordinate switch:
+     * the NV2A feeds a point's 0..1 coordinates to texture unit 3 only),
+     * SET_POINT_SIZE 0x043C in 1/8 pixel units, SET_POINT_PARAMS 0x0A30. */
+    uint32_t point_params_en, point_smooth, point_size;
+    float    point_params[8];
+    /* Stage-3 texture ops from the guest's TSS table (doa3_pb_tss_marker
+     * 0xA4 = colour, 0xA5 = alpha: op<<12 | arg1<<6 | arg2). */
+    uint32_t tss3_color, tss3_alpha;
+    int      tss3_valid;
 
     /* Viewport */
     float vp_offset[4];
@@ -309,8 +325,9 @@ static struct {
      * every one of which this translator previously ignored -- so the whole
      * screen was silently dropped. */
     uint32_t attr_off[16];      /* SET_VERTEX_DATA_ARRAY_OFFSET per slot */
-    uint32_t idx[MAX_INLINE_VERTS];
+    uint32_t idx[MAX_IDX];
     uint32_t idx_count;
+    uint32_t idx_dropped;       /* indices past MAX_IDX in the current batch */
     float    composite[16];     /* NV097_SET_COMPOSITE_MATRIX */
     int      composite_seen;
     uint32_t lighting;          /* NV097_SET_LIGHTING_ENABLE 0x0314 */
@@ -1312,7 +1329,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
      * rather than to guessing. */
     {
         DWORD cm = 1 /*NONE*/;
-        if (g_pg.cull_enable && g_pg.cull_face != 0x408) {
+        if (g_pg.cull_enable && g_pg.cull_face != 0x408 && g_pg.draw_mode != 1 /* points never cull */) {
             int front_cw = (g_pg.front_face == 0x900);
             int cull_front = (g_pg.cull_face == 0x404);
             /* front CW: front faces are CW, so culling front discards CW */
@@ -1959,6 +1976,39 @@ static void nv_sync_render_target(void)
     }
 }
 
+/* Growable heap scratch for the array path's vertex batches. A 65K-vertex
+ * batch is 1.8 MB and its clip output up to three times that: far too much
+ * for _alloca on a fiber stack. Slot 0 = transformed batch, 1 = clipped. */
+static OutputVertex *nv_scratch_verts(int slot, uint32_t count)
+{
+    static OutputVertex *buf[2]; static uint32_t cap[2];
+    if (cap[slot] < count) {
+        OutputVertex *nb = (OutputVertex *)realloc(buf[slot], (size_t)count * sizeof(OutputVertex));
+        if (!nb) return NULL;
+        buf[slot] = nb; cap[slot] = count;
+    }
+    return buf[slot];
+}
+
+/* Xbox D3DTOP -> the compat layer's D3DTOP. Identical through
+ * BLENDDIFFUSEALPHA (12); above that the Xbox orders the blend ops
+ * differently (BLENDCURRENTALPHA 13, BLENDTEXTUREALPHA 14, BLENDFACTORALPHA
+ * 15, DOTPRODUCT3 22), and the shader implements ops 2..15 and 24. Anything
+ * it lacks falls back to MODULATE, as the shader itself does. */
+static uint32_t nv_xbox_texop(uint32_t x)
+{
+    static const uint8_t map[] = {
+        4, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,   /* 0..12 as-is */
+        15,   /* 13 BLENDCURRENTALPHA */
+        13,   /* 14 BLENDTEXTUREALPHA */
+        14,   /* 15 BLENDFACTORALPHA */
+        13,   /* 16 BLENDTEXTUREALPHAPM: nearest supported */
+        4, 4, 4, 4, 4,   /* 17..21 PREMODULATE / MODULATE*_ADD*: unsupported */
+        24,   /* 22 DOTPRODUCT3 */
+        4, 4, 4, 4 };    /* 23..26 MULTIPLYADD / LERP / bump: unsupported */
+    return (x < sizeof map) ? map[x] : 4u;
+}
+
 /* Draw from the bound vertex arrays (the title-screen path). */
 static void submit_array_draw(void)
 {
@@ -1968,8 +2018,9 @@ static void submit_array_draw(void)
     uint32_t n = g_pg.idx_count, i, prim_count, out_n;
     int prim = g_pg.d3d_prim_type;
     int is_quads = (g_pg.draw_mode == 8);
+    int is_points = (g_pg.draw_mode == 1);
 
-    if (n < 3) { g_pg.idx_count = 0; return; }
+    if (n < (uint32_t)(is_points ? 1 : 3)) { g_pg.idx_count = 0; return; }
 
     out_n = is_quads ? (n / 4) * 6 : n;
     if (is_quads) prim = D3DPT_TRIANGLELIST;
@@ -1987,88 +2038,146 @@ static void submit_array_draw(void)
     dev = xbox_GetD3DDevice();
     if (!dev) { g_pg.idx_count = 0; return; }
 
-    out = (OutputVertex *)_alloca(out_n * sizeof(OutputVertex));
-    { extern int g_vpn; g_vpn = 0; }   /* reset the per-batch program-output range */
-    if (is_quads) {
-        uint32_t q, o = 0;
-        for (q = 0; q + 3 < n; q += 4) {
-            nv_build_array_vertex(g_pg.idx[q + 0], &out[o + 0]);
-            nv_build_array_vertex(g_pg.idx[q + 1], &out[o + 1]);
-            nv_build_array_vertex(g_pg.idx[q + 2], &out[o + 2]);
-            out[o + 3] = out[o + 0];
-            out[o + 4] = out[o + 2];
-            nv_build_array_vertex(g_pg.idx[q + 3], &out[o + 5]);
+    if (is_points) {
+        /* Point sprites -> screen-space quads. D3D11 has no sized points, so
+         * each point becomes two triangles centred on its transformed
+         * position, sized by the NV2A point rule (xemu vsh-ff.c):
+         *   d = |eye-space position|
+         *   t = 1/sqrt(P0 + P1 d + P2 d^2) + P6
+         *   s = clamp(t P3 + P7, min(P7, 63.875), min(P3 + P7, 63.875))
+         * or SET_POINT_SIZE / 8 when the params are off. Sizes are in guest
+         * render-target pixels; nv_fit_to_backbuffer scales the corners with
+         * everything else. The hardware feeds the sprite's 0..1 coordinates
+         * to texture unit 3 only, which is why DOA3 binds the flake there
+         * (cxbx remaps stage 3 onto its host stage 0 for the same reason).
+         * A point behind the eye (w <= 0) or outside the depth range has no
+         * XYZRHW form and is dropped, so the batch never needs the near-plane
+         * clipper (whose scratch space would be several MB for 3,500 quads).
+         * The quads live in a heap buffer: six vertices per point is too much
+         * for the stack. */
+        const float *pp = g_pg.point_params, *mv = g_mv;
+        uint32_t o = 0;
+        out = nv_scratch_verts(0, n * 6);
+        if (!out) { g_pg.idx_count = 0; g_pg.idx_dropped = 0; g_pg.gtss_valid = 0; g_pg.tss3_valid = 0; return; }
+        { extern int g_vpn; g_vpn = 0; }
+        for (i = 0; i < n; i++) {
+            OutputVertex v; float pos[4], s, h;
+            nv_build_array_vertex(g_pg.idx[i], &v);
+            if (!(v.rhw > 1e-6f) || !(v.x == v.x) || !(v.y == v.y) || !(v.z >= 0.0f) || v.z > 1.0f) continue;
+            if (g_pg.point_params_en && nv_fetch_attr(0, g_pg.idx[i], pos, NULL)) {
+                float e, d2 = 0.0f, d, q, t, lo, hi; int r;
+                for (r = 0; r < 3; r++) {
+                    e = mv[r * 4 + 0] * pos[0] + mv[r * 4 + 1] * pos[1] + mv[r * 4 + 2] * pos[2] + mv[r * 4 + 3];
+                    d2 += e * e;
+                }
+                d = sqrtf(d2);
+                q = pp[0] + pp[1] * d + pp[2] * d2;
+                t = (q > 0.0f) ? 1.0f / sqrtf(q) + pp[6] : 1e9f;
+                lo = (pp[7] < 63.875f) ? pp[7] : 63.875f;
+                hi = (pp[3] + pp[7] < 63.875f) ? pp[3] + pp[7] : 63.875f;
+                s = t * pp[3] + pp[7];
+                if (!(s >= lo)) s = lo;
+                if (s > hi) s = hi;
+            } else {
+                s = (float)(g_pg.point_size & 0x1FF) / 8.0f;
+                if (s < 1.0f) s = 1.0f;
+            }
+            h = s * 0.5f;
+            out[o] = v;     out[o].x = v.x - h;     out[o].y = v.y - h;     out[o].u = 0.0f; out[o].v = 0.0f;
+            out[o + 1] = v; out[o + 1].x = v.x + h; out[o + 1].y = v.y - h; out[o + 1].u = 1.0f; out[o + 1].v = 0.0f;
+            out[o + 2] = v; out[o + 2].x = v.x - h; out[o + 2].y = v.y + h; out[o + 2].u = 0.0f; out[o + 2].v = 1.0f;
+            out[o + 3] = out[o + 2];
+            out[o + 4] = out[o + 1];
+            out[o + 5] = v; out[o + 5].x = v.x + h; out[o + 5].y = v.y + h; out[o + 5].u = 1.0f; out[o + 5].v = 1.0f;
             o += 6;
         }
+        if (o == 0) { g_pg.idx_count = 0; g_pg.gtss_valid = 0; g_pg.tss3_valid = 0; return; }
+        out_n = o; prim = D3DPT_TRIANGLELIST; prim_count = o / 3;
     } else {
-        for (i = 0; i < n; i++)
-            nv_build_array_vertex(g_pg.idx[i], &out[i]);
-    }
-
-    {   /* Post-movie the title screen submits ~500 of these per frame and the
-         * window stays black. pos0 alone cannot separate a degenerate batch
-         * (every vertex on one point) from a shading problem, so report the
-         * screen bounding box, the colour range and the bound texture. */
-        extern volatile int g_doa3_post_movie;
-        static int s_n = 0, s_pm = 0;
-        static DWORD s_next = 0;
-        static int s_burst = 0;
-        int want = (s_n < 8);
-        /* Post-movie: a burst of draws every couple of seconds rather than the
-         * first 20 in a row, so the sample spans different batches. */
-        if (!want && g_doa3_post_movie && s_pm < 80) {
-            DWORD now = GetTickCount();
-            if (now >= s_next) { s_next = now + 2000; s_burst = 0; }
-            if (s_burst < 4) { s_burst++; s_pm++; want = 1; }
-        }
-        if (want) {
-            float x0 = out[0].x, x1 = out[0].x, y0 = out[0].y, y1 = out[0].y;
-            uint32_t cmin = out[0].color, cmax = out[0].color, k;
-            for (k = 1; k < out_n; k++) {
-                if (out[k].x < x0) x0 = out[k].x;
-                if (out[k].x > x1) x1 = out[k].x;
-                if (out[k].y < y0) y0 = out[k].y;
-                if (out[k].y > y1) y1 = out[k].y;
-                if (out[k].color < cmin) cmin = out[k].color;
-                if (out[k].color > cmax) cmax = out[k].color;
+        out = nv_scratch_verts(0, out_n);
+        if (!out) { g_pg.idx_count = 0; g_pg.idx_dropped = 0; g_pg.gtss_valid = 0; g_pg.tss3_valid = 0; return; }
+        { extern int g_vpn; g_vpn = 0; }   /* reset the per-batch program-output range */
+        if (is_quads) {
+            uint32_t q, o = 0;
+            for (q = 0; q + 3 < n; q += 4) {
+                nv_build_array_vertex(g_pg.idx[q + 0], &out[o + 0]);
+                nv_build_array_vertex(g_pg.idx[q + 1], &out[o + 1]);
+                nv_build_array_vertex(g_pg.idx[q + 2], &out[o + 2]);
+                out[o + 3] = out[o + 0];
+                out[o + 4] = out[o + 2];
+                nv_build_array_vertex(g_pg.idx[q + 3], &out[o + 5]);
+                o += 6;
             }
-            if (s_n < 8) s_n++;
-            fprintf(stderr, "[PG-ARRAY] %u idx -> %u verts prim=%d box=(%.1f,%.1f)-(%.1f,%.1f) "
-                            "rhw=%.4f col=%08X..%08X uv0=(%.2f,%.2f) tex=0x%08X fmt=0x%08X comp=%d pm=%d\n",
-                    n, out_n, prim, x0, y0, x1, y1,
-                    out[0].rhw, cmin, cmax, out[0].u, out[0].v,
-                    g_pg.tex[0].offset, g_pg.tex[0].format,
-                    g_pg.composite_seen, g_doa3_post_movie);
-            { extern int g_vp_used, g_vpn;
-              extern float g_vp_in0[4], g_vp_out0[4], g_vp_d0[4], g_vp_t0[4], g_vpbb[8];
-              if (g_vpn)
-                  fprintf(stderr, "          VP n=%d o0x=[%.2f %.2f] o0y=[%.2f %.2f] "
-                                  "o0z=[%.3f %.3f] o0w=[%.4f %.4f] d0=(%.3f %.3f %.3f %.3f) "
-                                  "t0=(%.3f %.3f)\n",
-                          g_vpn, g_vpbb[0], g_vpbb[1], g_vpbb[2], g_vpbb[3],
-                          g_vpbb[4], g_vpbb[5], g_vpbb[6], g_vpbb[7],
-                          g_vp_d0[0], g_vp_d0[1], g_vp_d0[2], g_vp_d0[3],
-                          g_vp_t0[0], g_vp_t0[1]);
-            fprintf(stderr, "          xform=0x%X prog=%d instr=%u start=%u vpused=%d "
-                            "in0=(%.3f %.3f %.3f %.3f) out0=(%.3f %.3f %.3f %.3f) "
-                            "vps=(%.1f %.1f %.1f) vpo=(%.1f %.1f %.1f)\n",
-                    g_pg.xform_mode, g_pg.vp.have_program, g_pg.vp.instr_count,
-                    g_pg.vp.start, g_vp_used,
-                    g_vp_in0[0], g_vp_in0[1], g_vp_in0[2], g_vp_in0[3],
-                    g_vp_out0[0], g_vp_out0[1], g_vp_out0[2], g_vp_out0[3],
-                    g_pg.vp_scale[0], g_pg.vp_scale[1], g_pg.vp_scale[2],
-                    g_pg.vp_offset[0], g_pg.vp_offset[1], g_pg.vp_offset[2]);
-            { extern float g_fix_in0[4];
-              fprintf(stderr, "          fixin0=(%.3f %.3f %.3f %.3f) a0fmt=%08X a0off=%08X "
-                              "M=[%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | "
-                              "%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]\n",
-                    g_fix_in0[0], g_fix_in0[1], g_fix_in0[2], g_fix_in0[3],
-                    g_pg.attr_fmt[0], g_pg.attr_off[0],
-                    g_pg.composite[0], g_pg.composite[1], g_pg.composite[2], g_pg.composite[3],
-                    g_pg.composite[4], g_pg.composite[5], g_pg.composite[6], g_pg.composite[7],
-                    g_pg.composite[8], g_pg.composite[9], g_pg.composite[10], g_pg.composite[11],
-                    g_pg.composite[12], g_pg.composite[13], g_pg.composite[14], g_pg.composite[15]); } }
-            fflush(stderr); }
+        } else {
+            for (i = 0; i < n; i++)
+                nv_build_array_vertex(g_pg.idx[i], &out[i]);
+        }
+
+        {   /* Post-movie the title screen submits ~500 of these per frame and the
+             * window stays black. pos0 alone cannot separate a degenerate batch
+             * (every vertex on one point) from a shading problem, so report the
+             * screen bounding box, the colour range and the bound texture. */
+            extern volatile int g_doa3_post_movie;
+            static int s_n = 0, s_pm = 0;
+            static DWORD s_next = 0;
+            static int s_burst = 0;
+            int want = (s_n < 8);
+            /* Post-movie: a burst of draws every couple of seconds rather than the
+             * first 20 in a row, so the sample spans different batches. */
+            if (!want && g_doa3_post_movie && s_pm < 80) {
+                DWORD now = GetTickCount();
+                if (now >= s_next) { s_next = now + 2000; s_burst = 0; }
+                if (s_burst < 4) { s_burst++; s_pm++; want = 1; }
+            }
+            if (want) {
+                float x0 = out[0].x, x1 = out[0].x, y0 = out[0].y, y1 = out[0].y;
+                uint32_t cmin = out[0].color, cmax = out[0].color, k;
+                for (k = 1; k < out_n; k++) {
+                    if (out[k].x < x0) x0 = out[k].x;
+                    if (out[k].x > x1) x1 = out[k].x;
+                    if (out[k].y < y0) y0 = out[k].y;
+                    if (out[k].y > y1) y1 = out[k].y;
+                    if (out[k].color < cmin) cmin = out[k].color;
+                    if (out[k].color > cmax) cmax = out[k].color;
+                }
+                if (s_n < 8) s_n++;
+                fprintf(stderr, "[PG-ARRAY] %u idx -> %u verts prim=%d box=(%.1f,%.1f)-(%.1f,%.1f) "
+                                "rhw=%.4f col=%08X..%08X uv0=(%.2f,%.2f) tex=0x%08X fmt=0x%08X comp=%d pm=%d\n",
+                        n, out_n, prim, x0, y0, x1, y1,
+                        out[0].rhw, cmin, cmax, out[0].u, out[0].v,
+                        g_pg.tex[0].offset, g_pg.tex[0].format,
+                        g_pg.composite_seen, g_doa3_post_movie);
+                { extern int g_vp_used, g_vpn;
+                  extern float g_vp_in0[4], g_vp_out0[4], g_vp_d0[4], g_vp_t0[4], g_vpbb[8];
+                  if (g_vpn)
+                      fprintf(stderr, "          VP n=%d o0x=[%.2f %.2f] o0y=[%.2f %.2f] "
+                                      "o0z=[%.3f %.3f] o0w=[%.4f %.4f] d0=(%.3f %.3f %.3f %.3f) "
+                                      "t0=(%.3f %.3f)\n",
+                              g_vpn, g_vpbb[0], g_vpbb[1], g_vpbb[2], g_vpbb[3],
+                              g_vpbb[4], g_vpbb[5], g_vpbb[6], g_vpbb[7],
+                              g_vp_d0[0], g_vp_d0[1], g_vp_d0[2], g_vp_d0[3],
+                              g_vp_t0[0], g_vp_t0[1]);
+                fprintf(stderr, "          xform=0x%X prog=%d instr=%u start=%u vpused=%d "
+                                "in0=(%.3f %.3f %.3f %.3f) out0=(%.3f %.3f %.3f %.3f) "
+                                "vps=(%.1f %.1f %.1f) vpo=(%.1f %.1f %.1f)\n",
+                        g_pg.xform_mode, g_pg.vp.have_program, g_pg.vp.instr_count,
+                        g_pg.vp.start, g_vp_used,
+                        g_vp_in0[0], g_vp_in0[1], g_vp_in0[2], g_vp_in0[3],
+                        g_vp_out0[0], g_vp_out0[1], g_vp_out0[2], g_vp_out0[3],
+                        g_pg.vp_scale[0], g_pg.vp_scale[1], g_pg.vp_scale[2],
+                        g_pg.vp_offset[0], g_pg.vp_offset[1], g_pg.vp_offset[2]);
+                { extern float g_fix_in0[4];
+                  fprintf(stderr, "          fixin0=(%.3f %.3f %.3f %.3f) a0fmt=%08X a0off=%08X "
+                                  "M=[%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f | "
+                                  "%.3f %.3f %.3f %.3f | %.3f %.3f %.3f %.3f]\n",
+                        g_fix_in0[0], g_fix_in0[1], g_fix_in0[2], g_fix_in0[3],
+                        g_pg.attr_fmt[0], g_pg.attr_off[0],
+                        g_pg.composite[0], g_pg.composite[1], g_pg.composite[2], g_pg.composite[3],
+                        g_pg.composite[4], g_pg.composite[5], g_pg.composite[6], g_pg.composite[7],
+                        g_pg.composite[8], g_pg.composite[9], g_pg.composite[10], g_pg.composite[11],
+                        g_pg.composite[12], g_pg.composite[13], g_pg.composite[14], g_pg.composite[15]); } }
+                fflush(stderr); }
+        }
     }
 
     {   /* A non-finite transform output cannot be rasterised into anything
@@ -2083,15 +2192,46 @@ static void submit_array_draw(void)
 
     g_nv_draw_has_uv = 1;            /* array path: unchanged */
     g_nv_draw_inline = 0;
-    nv_apply_draw_state(dev, out, out_n);
+    if (is_points && g_pg.point_smooth && g_pg.tex[3].offset) {
+        /* Sprite texture: texture unit 3, combined by the guest's stage-3
+         * ops. Bound on host stage 0 the way cxbx does it. The unit's
+         * control0 enable bit is not consulted: DOA3 never sets it for any
+         * unit but 0 (measured), cxbx's HLE never reads it, and the sprite is
+         * textured on the real console. */
+        unsigned char saved[sizeof g_pg.tex[0]];
+        uint32_t cop, ca1, ca2, aop, aa1, aa2;
+        memcpy(saved, &g_pg.tex[0], sizeof saved);
+        memcpy(&g_pg.tex[0], &g_pg.tex[3], sizeof saved);
+        g_pg.tex[0].enabled = 1;
+        nv_apply_draw_state(dev, out, out_n);
+        memcpy(&g_pg.tex[0], saved, sizeof saved);
+        if (g_pg.tss3_valid) {
+            cop = nv_xbox_texop((g_pg.tss3_color >> 12) & 0x1F); ca1 = (g_pg.tss3_color >> 6) & 0x3F; ca2 = g_pg.tss3_color & 0x3F;
+            aop = nv_xbox_texop((g_pg.tss3_alpha >> 12) & 0x1F); aa1 = (g_pg.tss3_alpha >> 6) & 0x3F; aa2 = g_pg.tss3_alpha & 0x3F;
+            if (cop == 1) { cop = 2; ca1 = 0; }   /* DISABLE: diffuse only */
+            if (aop == 1) { aop = 2; aa1 = 0; }
+        } else {
+            cop = 2; ca1 = 2; ca2 = 0; aop = 2; aa1 = 2; aa2 = 0;
+        }
+        dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/,   cop);
+        dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, ca1);
+        dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, ca2);
+        dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/,   aop);
+        dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, aa1);
+        dev->lpVtbl->SetTextureStageState(dev, 0, 6 /*ALPHAARG2*/, aa2);
+    } else
+        nv_apply_draw_state(dev, out, out_n);
     g_pg.gtss_valid = 0;
+    g_pg.tss3_valid = 0;
     nv_fit_to_backbuffer(out, out_n, 0);
 
-    if ((prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
+    if (!is_points &&
+        (prim == D3DPT_TRIANGLELIST || prim == D3DPT_TRIANGLESTRIP || prim == D3DPT_TRIANGLEFAN) &&
         nv_batch_needs_clip(out, out_n)) {
         uint32_t ntri = (prim == D3DPT_TRIANGLELIST) ? out_n / 3 : out_n - 2;
         /* Two clip planes can turn one triangle into a 5-gon -> 3 triangles. */
-        OutputVertex *cl = (OutputVertex *)_alloca(ntri * 9 * sizeof(OutputVertex));
+        OutputVertex *cl = nv_scratch_verts(1, ntri * 9);
+        if (!cl) { g_pg.idx_count = 0; g_pg.idx_dropped = 0; return; }
         uint32_t cn = nv_clip_batch(out, out_n, prim, cl);
         {   /* DOA3 DIAG: clip statistics, one line every ~2 s. */
             static DWORD s_next = 0; static uint32_t s_b = 0, s_ti = 0, s_to = 0, s_empty = 0;
@@ -2126,6 +2266,7 @@ static void submit_array_draw(void)
     g_pg.stats.draw_calls++;
     g_pg.stats.vertices_submitted += out_n;
     g_pg.idx_count = 0;
+    g_pg.idx_dropped = 0;
 }
 
 uint32_t g_dbail[8];        /* 0=calls 1=no-inline 2=no-stride 3=too-few 4=drawn 5=movie-gate */
@@ -2634,6 +2775,12 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         g_pg.gtss_valid = 1;
         return 1;
     }
+    if (method == 0x0100 && (param >> 24) == 0xA4u) { g_pg.tss3_color = param; g_pg.tss3_valid = 1; return 1; }
+    if (method == 0x0100 && (param >> 24) == 0xA5u) { g_pg.tss3_alpha = param; return 1; }
+    if (method == 0x0318) g_pg.point_params_en = param;
+    if (method == 0x031C) g_pg.point_smooth = param;
+    if (method == 0x043C) g_pg.point_size = param;
+    if (method >= 0x0A30 && method <= 0x0A4C) g_pg.point_params[(method - 0x0A30) >> 2] = u2f(param);
     /* Combiner factors: recorded, not executed. */
     if (method >= 0x0A60 && method <= 0x0A7C) {
         g_pg.comb_factor0[(method - 0x0A60) >> 2] = param;
@@ -2762,16 +2909,15 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
      * are assembled from the bound arrays at END. */
     case 0x1800:   /* ARRAY_ELEMENT16: two indices per dword */
         if (g_pg.in_draw) {
-            if (g_pg.idx_count < MAX_INLINE_VERTS)
-                g_pg.idx[g_pg.idx_count++] = param & 0xFFFFu;
-            if (g_pg.idx_count < MAX_INLINE_VERTS)
-                g_pg.idx[g_pg.idx_count++] = param >> 16;
+            if (g_pg.idx_count < MAX_IDX) g_pg.idx[g_pg.idx_count++] = param & 0xFFFFu; else g_pg.idx_dropped++;
+            if (g_pg.idx_count < MAX_IDX) g_pg.idx[g_pg.idx_count++] = param >> 16; else g_pg.idx_dropped++;
         }
         return 1;
 
     case 0x1808:   /* ARRAY_ELEMENT32 */
-        if (g_pg.in_draw && g_pg.idx_count < MAX_INLINE_VERTS)
-            g_pg.idx[g_pg.idx_count++] = param;
+        if (g_pg.in_draw) {
+            if (g_pg.idx_count < MAX_IDX) g_pg.idx[g_pg.idx_count++] = param; else g_pg.idx_dropped++;
+        }
         return 1;
 
     case 0x1810: { /* DRAW_ARRAYS: start in bits 0-23, count-1 in 24-31 */
@@ -2779,8 +2925,9 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         uint32_t count = ((param >> 24) & 0xFF) + 1u;
         uint32_t k;
         if (g_pg.in_draw)
-            for (k = 0; k < count && g_pg.idx_count < MAX_INLINE_VERTS; k++)
-                g_pg.idx[g_pg.idx_count++] = start + k;
+            for (k = 0; k < count; k++) {
+                if (g_pg.idx_count < MAX_IDX) g_pg.idx[g_pg.idx_count++] = start + k; else g_pg.idx_dropped++;
+            }
         return 1;
     }
 

@@ -1360,7 +1360,7 @@ static void *convert_fan_or_quad(D3DPRIMITIVETYPE pt, const void *src,
  * DrawPrimitiveUP call, use a persistent ring buffer.
  * ================================================================ */
 
-#define UP_RING_BUFFER_SIZE (4 * 1024 * 1024)  /* 4MB ring buffer */
+#define UP_RING_BUFFER_SIZE (16 * 1024 * 1024) /* 16MB: a 65K-index batch is 1.8 MB, clipped up to 3x */
 
 static ID3D11Buffer *g_up_ring_buffer = NULL;
 static UINT          g_up_ring_offset = 0;

@@ -5850,7 +5850,15 @@ void doa3_pb_tss_marker(void)
     MEM32(cursor + 4) = 0xA3000000u | (MEM32(0x1C0200) == 1 ? 1u << 17 : 0) |
                         ((MEM32(0x1C0180) & 0x1Fu) << 12) |
                         ((MEM32(0x1C0188) & 0x3Fu) << 6) | (MEM32(0x1C018C) & 0x3Fu);
-    MEM32(dev) = cursor + 8;
+    /* Stage 3 (0x80 bytes per stage; ALPHAOP is four entries past COLOROP):
+     * the point-sprite stage, whose ops the snow is combined with. */
+    MEM32(cursor + 8)  = 0x00040100u;
+    MEM32(cursor + 12) = 0xA4000000u | ((MEM32(0x1C0300) & 0x1Fu) << 12) |
+                         ((MEM32(0x1C0308) & 0x3Fu) << 6) | (MEM32(0x1C030C) & 0x3Fu);
+    MEM32(cursor + 16) = 0x00040100u;
+    MEM32(cursor + 20) = 0xA5000000u | ((MEM32(0x1C0310) & 0x1Fu) << 12) |
+                         ((MEM32(0x1C0318) & 0x3Fu) << 6) | (MEM32(0x1C031C) & 0x3Fu);
+    MEM32(dev) = cursor + 24;
 }
 static uint32_t doa3_pb_makespace_recording(uint32_t dev)
 {
