@@ -5858,7 +5858,21 @@ void doa3_pb_tss_marker(void)
     MEM32(cursor + 16) = 0x00040100u;
     MEM32(cursor + 20) = 0xA5000000u | ((MEM32(0x1C0310) & 0x1Fu) << 12) |
                          ((MEM32(0x1C0318) & 0x3Fu) << 6) | (MEM32(0x1C031C) & 0x3Fu);
-    MEM32(dev) = cursor + 24;
+    /* Stage 1 colour / alpha ops (0xA6 / 0xA7) and D3DRS_TEXTUREFACTOR
+     * (0xA9 = low 24 bits, 0xAA = high byte) from the deferred render-state
+     * table at 0x1C0580: the combiner factor the push buffer carries is not
+     * the game's value (see nv2a_pgraph_d3d11.c). */
+    MEM32(cursor + 24) = 0x00040100u;
+    MEM32(cursor + 28) = 0xA6000000u | ((MEM32(0x1C0200) & 0x1Fu) << 12) |
+                         ((MEM32(0x1C0208) & 0x3Fu) << 6) | (MEM32(0x1C020C) & 0x3Fu);
+    MEM32(cursor + 32) = 0x00040100u;
+    MEM32(cursor + 36) = 0xA7000000u | ((MEM32(0x1C0210) & 0x1Fu) << 12) |
+                         ((MEM32(0x1C0218) & 0x3Fu) << 6) | (MEM32(0x1C021C) & 0x3Fu);
+    MEM32(cursor + 40) = 0x00040100u;
+    MEM32(cursor + 44) = 0xA9000000u | (MEM32(0x1C0580) & 0x00FFFFFFu);
+    MEM32(cursor + 48) = 0x00040100u;
+    MEM32(cursor + 52) = 0xAA000000u | (MEM32(0x1C0580) >> 24);
+    MEM32(dev) = cursor + 56;
 }
 static uint32_t doa3_pb_makespace_recording(uint32_t dev)
 {

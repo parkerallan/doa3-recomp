@@ -240,6 +240,14 @@ static struct {
      * 0xA4 = colour, 0xA5 = alpha: op<<12 | arg1<<6 | arg2). */
     uint32_t tss3_color, tss3_alpha;
     int      tss3_valid;
+    /* Stage-1 ops (markers 0xA6 colour / 0xA7 alpha, same packing) and the
+     * guest's D3DRS_TEXTUREFACTOR (markers 0xA9 low 24 bits / 0xAA high 8).
+     * The push buffer's SET_COMBINER_FACTOR0 is NOT this value: the XDK's
+     * combiner compiler never completes in this port, so factor0 reads
+     * FFFFFFFF on every draw while the game's factor is e.g. 0x23FFFFFF. */
+    uint32_t tss1_color, tss1_alpha;
+    int      tss1_valid;
+    uint32_t tfactor_lo, tfactor_hi;
 
     /* Viewport */
     float vp_offset[4];
@@ -1282,9 +1290,40 @@ static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
 static int g_nv_draw_has_uv = 1;
 /* DOA3: 1 while submit_draw (the inline 2D path) is applying state. */
 static int g_nv_draw_inline = 0;
+/* Stage 1 from the guest's texture-stage table when it is CURRENT x TFACTOR
+ * with no texture of its own (the beach's palm shadow is 0x99FFFFFF, the
+ * Kowloon street's additive wet-road sheen 0x23FFFFFF: a pink gradient blended
+ * SRC_ALPHA/ONE whose alpha the factor scales to 14%). Without this stage the
+ * sheen drew at full strength and the road went milky white. Colour and alpha
+ * are honoured separately; any other stage-1 configuration (env maps, texture
+ * args) is left to the existing single-stage rules, and the stage is switched
+ * off for every other draw so nothing leaks. */
+static void nv_apply_stage1_factor(IDirect3DDevice8 *dev)
+{
+    uint32_t cop = (g_pg.tss1_color >> 12) & 0x1F, ca1 = (g_pg.tss1_color >> 6) & 0x3F, ca2 = g_pg.tss1_color & 0x3F;
+    uint32_t aop = (g_pg.tss1_alpha >> 12) & 0x1F, aa1 = (g_pg.tss1_alpha >> 6) & 0x3F, aa2 = g_pg.tss1_alpha & 0x3F;
+#define NV_FACTOR_MOD(op, x, y) ((op) == 4 && ((((x) & 0xF) == 3 && ((y) & 0xF) == 1) || (((x) & 0xF) == 1 && ((y) & 0xF) == 3)))
+    int cf = NV_FACTOR_MOD(cop, ca1, ca2), af = NV_FACTOR_MOD(aop, aa1, aa2);
+    int keep_alpha = (aop == 1) || ((aop == 2 || aop == 3) && ((aop == 2 ? aa1 : aa2) & 0xF) == 1);
+#undef NV_FACTOR_MOD
+    if (!g_pg.tss1_valid || g_nv_draw_inline || !cf || !(af || keep_alpha)) {
+        dev->lpVtbl->SetTextureStageState(dev, 1, 1 /*COLOROP*/, 1 /*DISABLE*/);
+        return;
+    }
+    dev->lpVtbl->SetRenderState(dev, D3DRS_TEXTUREFACTOR, (g_pg.tfactor_hi << 24) | g_pg.tfactor_lo);
+    dev->lpVtbl->SetTexture(dev, 1, NULL);
+    dev->lpVtbl->SetTextureStageState(dev, 1, 1 /*COLOROP*/,   4 /*MODULATE*/);
+    dev->lpVtbl->SetTextureStageState(dev, 1, 2 /*COLORARG1*/, 1 /*CURRENT*/);
+    dev->lpVtbl->SetTextureStageState(dev, 1, 3 /*COLORARG2*/, 3 /*TFACTOR*/);
+    dev->lpVtbl->SetTextureStageState(dev, 1, 4 /*ALPHAOP*/,   af ? 4 /*MODULATE*/ : 1 /*DISABLE: keep current*/);
+    dev->lpVtbl->SetTextureStageState(dev, 1, 5 /*ALPHAARG1*/, 1 /*CURRENT*/);
+    dev->lpVtbl->SetTextureStageState(dev, 1, 6 /*ALPHAARG2*/, 3 /*TFACTOR*/);
+}
+
 static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                                 uint32_t out_vert_count)
 {
+    nv_apply_stage1_factor(dev);
     int diffuse_all_zero = 1;
     /* The fade-to-black quad carries an OPAQUE BLACK diffuse (0xFF000000) with
      * the stage disabled; diffuse_all_zero compares the whole 32-bit colour, so
@@ -2223,6 +2262,7 @@ static void submit_array_draw(void)
         nv_apply_draw_state(dev, out, out_n);
     g_pg.gtss_valid = 0;
     g_pg.tss3_valid = 0;
+    g_pg.tss1_valid = 0;
     nv_fit_to_backbuffer(out, out_n, 0);
 
     if (!is_points &&
@@ -2627,6 +2667,7 @@ static void submit_draw(void)
     g_nv_draw_inline = 1;
     nv_apply_draw_state(dev, out, out_vert_count);
     g_pg.gtss_valid = 0;
+    g_pg.tss1_valid = 0;
     g_nv_draw_inline = 0;
     nv_fit_to_backbuffer(out, out_vert_count, 1);
     /* Begin scene if needed */
@@ -2777,6 +2818,10 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     }
     if (method == 0x0100 && (param >> 24) == 0xA4u) { g_pg.tss3_color = param; g_pg.tss3_valid = 1; return 1; }
     if (method == 0x0100 && (param >> 24) == 0xA5u) { g_pg.tss3_alpha = param; return 1; }
+    if (method == 0x0100 && (param >> 24) == 0xA6u) { g_pg.tss1_color = param; g_pg.tss1_valid = 1; return 1; }
+    if (method == 0x0100 && (param >> 24) == 0xA7u) { g_pg.tss1_alpha = param; return 1; }
+    if (method == 0x0100 && (param >> 24) == 0xA9u) { g_pg.tfactor_lo = param & 0xFFFFFF; return 1; }
+    if (method == 0x0100 && (param >> 24) == 0xAAu) { g_pg.tfactor_hi = param & 0xFF; return 1; }
     if (method == 0x0318) g_pg.point_params_en = param;
     if (method == 0x031C) g_pg.point_smooth = param;
     if (method == 0x043C) g_pg.point_size = param;
