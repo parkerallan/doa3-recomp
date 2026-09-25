@@ -1029,6 +1029,17 @@ int d3d8_SetOffscreenTarget(uint32_t key, UINT w, UINT h)
     if (slot < 0) return 0;
     ID3D11DeviceContext_OMSetRenderTargets(g_device_state.d3d11_context, 1,
                                            &g_offrt[slot].rtv, g_offrt[slot].dsv);
+    {   /* The translator maps the guest surface onto -1..1 NDC, so the
+         * viewport has to be this target's own size. Left at the back
+         * buffer's, a 256x512 target (the beach's palm-shadow surface) got
+         * only a stretched corner of the silhouette, and the sand showed
+         * that crop as random black shapes. */
+        D3D11_VIEWPORT vp;
+        vp.TopLeftX = 0.0f; vp.TopLeftY = 0.0f;
+        vp.Width = (FLOAT)w; vp.Height = (FLOAT)h;
+        vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
+        ID3D11DeviceContext_RSSetViewports(g_device_state.d3d11_context, 1, &vp);
+    }
     g_off_cur = slot;
     g_off_active = 1;
     return 1;
@@ -1039,6 +1050,13 @@ void d3d8_RestoreDefaultTarget(void)
     if (!g_device_state.d3d11_context) return;
     ID3D11DeviceContext_OMSetRenderTargets(g_device_state.d3d11_context, 1,
                                             &g_device_state.default_rtv, g_device_state.default_dsv);
+    {   /* back to the guest frame's viewport (see d3d8_SetOffscreenTarget) */
+        D3D11_VIEWPORT vp;
+        vp.TopLeftX = 0.0f; vp.TopLeftY = 0.0f;
+        vp.Width = (FLOAT)g_device_state.width; vp.Height = (FLOAT)g_device_state.height;
+        vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
+        ID3D11DeviceContext_RSSetViewports(g_device_state.d3d11_context, 1, &vp);
+    }
     g_off_active = 0;
 }
 

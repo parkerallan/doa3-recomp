@@ -220,6 +220,7 @@ static struct {
     uint32_t alpha_ref;    /* NV097_SET_ALPHA_REF, 0..255 */
     uint32_t color_mask;
     uint32_t comb_factor0[8];
+    uint32_t comb_control;  /* NV097_SET_COMBINER_CONTROL: bits 7:0 = stage count */
 
     /* Viewport */
     float vp_offset[4];
@@ -1225,6 +1226,20 @@ static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
         if (g_pg.lighting && (g_pg.light_mask & 0xFF) && nv_composite_usable() &&
             nv_fetch_attr(2, index, nrm, NULL))
             v->color = nv_light_vertex(pos, nrm);
+        /* Lighting on with every light off still lights: the NV2A outputs
+         * scene ambient + emission with the material alpha. The beach's palm
+         * shadow relies on it -- the fronds are drawn into the shadow surface
+         * that way (ambient and emission 0) to get a black silhouette with
+         * the texture's alpha. Left white, they rendered in the palm's own
+         * green and the projected shadow showed green fronds. */
+        else if (g_pg.lighting && !(g_pg.light_mask & 0xFF) && !g_pg.color_material &&
+                 nv_composite_usable()) {
+            float c4[4] = { g_pg.scene_ambient[0] + g_pg.emission[0],
+                            g_pg.scene_ambient[1] + g_pg.emission[1],
+                            g_pg.scene_ambient[2] + g_pg.emission[2],
+                            g_pg.material_alpha };
+            v->color = nv_pack_color(c4);
+        }
     }
     if (nv_fetch_attr(3, index, col, &colour))
         v->color = colour;
@@ -1496,13 +1511,34 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
             if (g_pg.tex[0].offset && !d3d8_OffscreenTargetActive() &&
                 d3d8_HasOffscreenTexture(g_pg.tex[0].offset)) {
                 int use_diffuse = !diffuse_all_zero;
+                /* A second combiner stage with no texture of its own scales
+                 * the result by the combiner factor. The beach's palm shadow
+                 * is drawn that way -- stage 1 = CURRENT x TFACTOR with
+                 * TFACTOR 0x99FFFFFF, i.e. 60% opacity -- and without it every
+                 * shadow landed on the sand as solid black. The texture stage
+                 * below modulates by the diffuse, so folding the factor into
+                 * the vertex colour gives the same product. */
+                if (use_diffuse && (g_pg.comb_control & 0xFF) >= 2 && !g_pg.tex[1].enabled) {
+                    uint32_t f = g_pg.comb_factor0[0], i3;
+                    for (i3 = 0; i3 < out_vert_count; i3++) {
+                        uint32_t c = out[i3].color, r = 0, sh;
+                        for (sh = 0; sh < 32; sh += 8)
+                            r |= ((((c >> sh) & 0xFFu) * ((f >> sh) & 0xFFu) + 127u) / 255u) << sh;
+                        out[i3].color = r;
+                    }
+                }
                 dev->lpVtbl->SetTexture(dev, 0, NULL);
                 if (d3d8_BindOffscreenTexture(g_pg.tex[0].offset, 0)) {
                     dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, use_diffuse ? 4 : 2);
                     dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
                     dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
-                    dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 2 /*SELECTARG1*/);
-                    dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, use_diffuse ? 0 : 2);
+                    /* Alpha is texture x diffuse (the game's ALPHAOP is
+                     * MODULATE). Taking the diffuse alone drew the beach's
+                     * palm-shadow surface -- cleared to transparent black --
+                     * as an opaque black block on the sand. */
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, use_diffuse ? 4 : 2);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, 2 /*TEXTURE*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 6 /*ALPHAARG2*/, 0 /*DIFFUSE*/);
                     nv_apply_tex_address(dev, 0);
                     return;
                 }
@@ -2579,6 +2615,7 @@ static void submit_draw(void)
 
 int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
 {
+    if (method == 0x1E60) g_pg.comb_control = param;
     /* Combiner factors: recorded, not executed. */
     if (method >= 0x0A60 && method <= 0x0A7C) {
         g_pg.comb_factor0[(method - 0x0A60) >> 2] = param;
