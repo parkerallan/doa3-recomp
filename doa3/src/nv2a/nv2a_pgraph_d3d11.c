@@ -1234,7 +1234,10 @@ static void nv_build_array_vertex(uint32_t index, OutputVertex *v)
              * running the fixed-function viewport transform over it. */
             v->x   = out[NV2A_VP_OUT_POS][0];
             v->y   = out[NV2A_VP_OUT_POS][1];
-            v->z   = out[NV2A_VP_OUT_POS][2];
+            /* Program output z is in the viewport's z range (the XDK epilogue
+             * scales by c[-38].z = SET_VIEWPORT_SCALE.z = 2^24-1), exactly as
+             * the fixed-function path's output; normalise it the same way. */
+            v->z   = (g_pg.vp_scale[2] != 0.0f) ? out[NV2A_VP_OUT_POS][2] / g_pg.vp_scale[2] : out[NV2A_VP_OUT_POS][2];
             v->rhw = out[NV2A_VP_OUT_POS][3];
             v->color = nv_pack_color(out[NV2A_VP_OUT_D0]);
             v->u = out[NV2A_VP_OUT_T0][0];
@@ -2810,6 +2813,32 @@ static void submit_draw(void)
 
 int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
 {
+    /* Fixed-function context -> transform constants c[0..95].
+     *
+     * On the NV2A the first 96 transform constants ARE the fixed-function
+     * context: SET_COMPOSITE_MATRIX lands in c[0..3], SET_PROJECTION_MATRIX in
+     * c[4..7], the model-view / inverse model-view matrices in c[8..39], the
+     * texgen planes and texture matrices in c[64..95], the eye position in c[56], the fog
+     * parameters in c[57], SET_VIEWPORT_SCALE in c[58] and SET_VIEWPORT_OFFSET
+     * in c[59] (xemu's NV_IGRAPH_XF_XFCTX_* slots). The XDK's vertex-shader
+     * epilogue reads the viewport back as c[-38]/c[-37] = c[58]/c[59]; no code
+     * ever loads them through SET_TRANSFORM_CONSTANT, so a program that runs
+     * without this mirror scales every position by zero (the pond's water). */
+    {
+        int slot = -1;
+        if      (method >= 0x0680 && method <= 0x06BC) slot = 0x00 + (method - 0x0680) / 16;
+        else if (method >= 0x0440 && method <= 0x047C) slot = 0x04 + (method - 0x0440) / 16;
+        else if (method >= 0x0480 && method <= 0x057C) slot = 0x08 + ((method - 0x0480) / 64) * 8 + ((method - 0x0480) % 64) / 16;
+        else if (method >= 0x0580 && method <= 0x067C) slot = 0x0C + ((method - 0x0580) / 64) * 8 + ((method - 0x0580) % 64) / 16;
+        else if (method >= 0x06C0 && method <= 0x07BC) slot = 0x44 + ((method - 0x06C0) / 64) * 8 + ((method - 0x06C0) % 64) / 16;
+        else if (method >= 0x0840 && method <= 0x093C) slot = 0x40 + ((method - 0x0840) / 64) * 8 + ((method - 0x0840) % 64) / 16;
+        else if (method >= 0x0A50 && method <= 0x0A5C) slot = 0x38;
+        else if (method >= 0x09C0 && method <= 0x09C8) slot = 0x39;
+        else if (method >= 0x0AF0 && method <= 0x0AFC) slot = 0x3A;
+        else if (method >= 0x0A20 && method <= 0x0A2C) slot = 0x3B;
+        if (slot >= 0 && slot < NV2A_VP_NUM_CONST)
+            g_pg.vp.consts[slot][(method / 4) & 3] = u2f(param);
+    }
     if (method == 0x1E60) g_pg.comb_control = param;
     if (method == 0x0100 && (param >> 24) == 0xA3u) {
         g_pg.gtss = param;
@@ -2849,7 +2878,11 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         nv2a_vp_write_program(&g_pg.vp, (method - 0x0B00) / 4, param);
         return 1;
     }
-    if (method >= 0x0B80 && method <= 0x0B9C) {          /* TRANSFORM_CONSTANT */
+    if (method >= 0x0B80 && method <= 0x0BFC) {          /* TRANSFORM_CONSTANT */
+        /* 32 dwords (0x0B80..0x0BFC; 0x0C00 is the next register). The range
+         * used to stop at 0x0B9C, so the third and fourth rows of every 4x4
+         * matrix the XDK uploads in one burst were dropped: the pond's water
+         * program got c2 = c3 = 0 and every vertex came out with w = 0. */
         nv2a_vp_write_constant(&g_pg.vp, (method - 0x0B80) / 4, param);
         return 1;
     }

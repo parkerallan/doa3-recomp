@@ -308,6 +308,17 @@ int nv2a_vp_execute(const Nv2aVertexProgram *vp,
             }
         }
 
+        /* R12 is a mirror of oPos (xemu: "#define R12 oPos"). The XDK's
+         * viewport epilogue reads the clip position back through R12 after the
+         * game's own code wrote o[0]; without the mirror it saw zeros and the
+         * pond's water surface collapsed onto one point. */
+        {   int wrote_o0 = (o_mask && orb == OUTPUT_O && oaddr == 0);
+            int wrote_r12 = (mac != MAC_NOP && mac != MAC_ARL && mac_mask && (out_r & 15) == 12) ||
+                            (ilu != ILU_NOP && ilu_mask && ((mac != MAC_NOP) ? 1 : (out_r & 15)) == 12);
+            if (wrote_o0) memcpy(R[12], out[NV2A_VP_OUT_POS], sizeof(float) * 4);
+            else if (wrote_r12) memcpy(out[NV2A_VP_OUT_POS], R[12], sizeof(float) * 4);
+        }
+
         if (final)
             break;
         pc++;
