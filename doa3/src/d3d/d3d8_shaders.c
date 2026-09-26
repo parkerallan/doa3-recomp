@@ -327,7 +327,15 @@ static const char g_ps_source[] =
     "\n"
     "        // Apply color operation per channel\n"
     "        float3 color;\n"
-    "        if (colorop == 24u) {\n"
+    "        if (colorop == 18u) {\n"          /* MODULATEALPHA_ADDCOLOR: arg1 + arg1.a * arg2 */
+    "            color = saturate(carg1.rgb + carg1.a * carg2.rgb);\n"
+    "        } else if (colorop == 19u) {\n"   /* MODULATECOLOR_ADDALPHA */
+    "            color = saturate(carg1.rgb * carg2.rgb + carg1.a);\n"
+    "        } else if (colorop == 20u) {\n"   /* MODULATEINVALPHA_ADDCOLOR */
+    "            color = saturate(carg1.rgb + (1.0 - carg1.a) * carg2.rgb);\n"
+    "        } else if (colorop == 21u) {\n"   /* MODULATEINVCOLOR_ADDALPHA */
+    "            color = saturate((1.0 - carg1.rgb) * carg2.rgb + carg1.a);\n"
+    "        } else if (colorop == 24u) {\n"
     "            // DOTPRODUCT3: dot of (arg1-0.5)*(arg2-0.5)*4, replicated\n"
     "            float d = saturate(4.0 * dot(carg1.rgb - 0.5, carg2.rgb - 0.5));\n"
     "            color = float3(d, d, d);\n"

@@ -246,6 +246,8 @@ static struct {
      * combiner compiler never completes in this port, so factor0 reads
      * FFFFFFFF on every draw while the game's factor is e.g. 0x23FFFFFF. */
     uint32_t tss1_color, tss1_alpha;
+    uint32_t tss0_alpha;               /* marker 0xAB: guest stage-0 ALPHAOP/args */
+    int      tss0_alpha_valid;
     int      tss1_valid;
     uint32_t tfactor_lo, tfactor_hi;
 
@@ -1648,6 +1650,7 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
              * right shape. The colour has to come from the diffuse, and only
              * the alpha from the image. */
             int tex_alpha_only = (g_pg.dyn_fmt == (uint32_t)D3DFMT_A8);
+            int mask_stage = 0;
             dev->lpVtbl->SetTexture(dev, 0, (IDirect3DBaseTexture8 *)dtex);
             dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/,
                                               (tex_alpha_only || !use_diffuse)
@@ -1663,6 +1666,34 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, OutputVertex *out,
                 dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, 2 /*SELECTARG1*/);
                 dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
             }
+            /* Stage 0 MODULATEALPHA_ADDCOLOR(TEXTURE, DIFFUSE): the castle's
+             * stone walls (DXT5, alpha blend on). The image's alpha is a
+             * lighting mask -- colour = texture + texture.a * lit diffuse --
+             * not opacity. Treating the stage as texture x diffuse made the
+             * walls near-black, and feeding the same alpha into
+             * SRC_ALPHA/INV_SRC_ALPHA made them see-through: the sky showed
+             * where the tower walls should be. The blend alpha comes from the
+             * guest's own stage-0 alpha op (marker 0xAB) below. */
+            if (!g_nv_draw_inline && g_pg.gtss_valid && !tex_alpha_only &&
+                ((g_pg.gtss >> 12) & 0x1F) == 18 && ((g_pg.gtss >> 6) & 0x3F) == 2 && (g_pg.gtss & 0x3F) == 0) {
+                dev->lpVtbl->SetTextureStageState(dev, 0, 1 /*COLOROP*/, 18 /*MODULATEALPHA_ADDCOLOR*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 2 /*COLORARG1*/, 2 /*TEXTURE*/);
+                dev->lpVtbl->SetTextureStageState(dev, 0, 3 /*COLORARG2*/, 0 /*DIFFUSE*/);
+                mask_stage = 1;
+            }
+            if (mask_stage && g_pg.tss0_alpha_valid) {
+                uint32_t aop = (g_pg.tss0_alpha >> 12) & 0x1F;
+                uint32_t aa1 = (g_pg.tss0_alpha >> 6) & 0x3F, aa2 = g_pg.tss0_alpha & 0x3F;
+                uint32_t sel = (aop == 2) ? aa1 : (aop == 3) ? aa2 : 0;
+                if (aop == 4) {                                   /* MODULATE(TEXTURE, DIFFUSE) */
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 4 /*MODULATE*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, 2 /*TEXTURE*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 6 /*ALPHAARG2*/, 0 /*DIFFUSE*/);
+                } else {                                          /* DISABLE / SELECTARGn: one source */
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 4 /*ALPHAOP*/, 2 /*SELECTARG1*/);
+                    dev->lpVtbl->SetTextureStageState(dev, 0, 5 /*ALPHAARG1*/, ((sel & 0xF) == 2) ? 2 /*TEXTURE*/ : 0 /*DIFFUSE*/);
+                }
+            } else
             if (use_diffuse && tex_has_alpha && (g_pg.blend_enable || g_pg.alpha_test)) {
                 /* A draw whose image has its own alpha wants texture *
                  * diffuse, the Xbox default. Selecting the diffuse alpha
@@ -2266,6 +2297,7 @@ static void submit_array_draw(void)
     g_pg.gtss_valid = 0;
     g_pg.tss3_valid = 0;
     g_pg.tss1_valid = 0;
+    g_pg.tss0_alpha_valid = 0;
     nv_fit_to_backbuffer(out, out_n, 0);
 
     if (!is_points &&
@@ -2849,6 +2881,7 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
     if (method == 0x0100 && (param >> 24) == 0xA5u) { g_pg.tss3_alpha = param; return 1; }
     if (method == 0x0100 && (param >> 24) == 0xA6u) { g_pg.tss1_color = param; g_pg.tss1_valid = 1; return 1; }
     if (method == 0x0100 && (param >> 24) == 0xA7u) { g_pg.tss1_alpha = param; return 1; }
+    if (method == 0x0100 && (param >> 24) == 0xABu) { g_pg.tss0_alpha = param; g_pg.tss0_alpha_valid = 1; return 1; }
     if (method == 0x0100 && (param >> 24) == 0xA9u) { g_pg.tfactor_lo = param & 0xFFFFFF; return 1; }
     if (method == 0x0100 && (param >> 24) == 0xAAu) { g_pg.tfactor_hi = param & 0xFF; return 1; }
     if (method == 0x0318) g_pg.point_params_en = param;

@@ -5872,7 +5872,13 @@ void doa3_pb_tss_marker(void)
     MEM32(cursor + 44) = 0xA9000000u | (MEM32(0x1C0580) & 0x00FFFFFFu);
     MEM32(cursor + 48) = 0x00040100u;
     MEM32(cursor + 52) = 0xAA000000u | (MEM32(0x1C0580) >> 24);
-    MEM32(dev) = cursor + 56;
+    /* Stage 0 alpha op / args (0xAB): the castle's stone walls run stage 0 as
+     * MODULATEALPHA_ADDCOLOR, where the DXT5 alpha is a lighting mask, and the
+     * translator needs the guest's own alpha op to know what feeds the blend. */
+    MEM32(cursor + 56) = 0x00040100u;
+    MEM32(cursor + 60) = 0xAB000000u | ((MEM32(0x1C0190) & 0x1Fu) << 12) |
+                         ((MEM32(0x1C0198) & 0x3Fu) << 6) | (MEM32(0x1C019C) & 0x3Fu);
+    MEM32(dev) = cursor + 64;
 }
 static uint32_t doa3_pb_makespace_recording(uint32_t dev)
 {
