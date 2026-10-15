@@ -686,7 +686,7 @@ IF0_BODIES = {0x0009F640, 0x001664D6, 0x001668FA, 0x0016A530, 0x001B88C0, 0x001B
 # DISPATCH_SEARCH_LIMIT entries only: the entries past it (the highest
 # addresses) do not resolve as indirect-call targets. The listed functions
 # are left out of it.
-DISPATCH_SEARCH_LIMIT = 11971
+DISPATCH_SEARCH_LIMIT = 11977
 DISPATCH_EXCLUDE = {0x00157E7C, 0x001726D0, 0x0017D452, 0x00172260, 0x00172330, 0x00172360, 0x00172410, 0x00172470, 0x001724F0, 0x00172520, 0x00172580, 0x001725B0, 0x001725E0, 0x00172610, 0x00172640, 0x00172680, 0x001726B0,}
 
 # CRT static initializers run by main.c's _initterm walk (doa3_crt_lookup),
