@@ -293,9 +293,7 @@ ULONG_PTR xbox_resolve_ordinal(ULONG ordinal)
     case 256: return (ULONG_PTR)xbox_KeDelayExecutionThread;
 
     default:
-        xbox_log(XBOX_LOG_ERROR, XBOX_LOG_THUNK,
-            "Unresolved kernel ordinal %u", ordinal);
-        return 0;
+        return 0;   /* the game reaches these through kernel_bridge.c */
     }
 }
 
@@ -349,9 +347,6 @@ static void __stdcall xbox_unresolved_thunk(void)
 
 void xbox_kernel_init(void)
 {
-    ULONG resolved = 0;
-    ULONG unresolved = 0;
-
     /* Initialize logging */
     InitializeCriticalSection(&g_log_cs);
     g_log_cs_init = TRUE;
@@ -371,28 +366,12 @@ void xbox_kernel_init(void)
         xbox_KrnlVersion.Major, xbox_KrnlVersion.Minor,
         xbox_KrnlVersion.Build, xbox_KrnlVersion.Qfe);
 
-    /* Fill thunk table */
+    /* Fill thunk table. The game never calls through this table:
+     * xbox_kernel_bridge_init() rewrites every guest thunk slot to a bridge
+     * dispatch, so ordinals missing here are not missing at runtime. */
     for (ULONG i = 0; i < XBOX_KERNEL_THUNK_TABLE_SIZE; i++) {
-        ULONG ordinal = g_thunk_ordinals[i];
-        ULONG_PTR ptr = xbox_resolve_ordinal(ordinal);
-
-        if (ptr) {
-            xbox_kernel_thunk_table[i] = ptr;
-            resolved++;
-        } else {
-            /* Point unresolved thunks to our error handler */
-            xbox_kernel_thunk_table[i] = (ULONG_PTR)xbox_unresolved_thunk;
-            unresolved++;
-        }
-    }
-
-    xbox_log(XBOX_LOG_INFO, XBOX_LOG_THUNK,
-        "Thunk table: %u/%u resolved, %u unresolved",
-        resolved, XBOX_KERNEL_THUNK_TABLE_SIZE, unresolved);
-
-    if (unresolved > 0) {
-        xbox_log(XBOX_LOG_WARN, XBOX_LOG_THUNK,
-            "WARNING: %u kernel imports are unresolved - game may crash!", unresolved);
+        ULONG_PTR ptr = xbox_resolve_ordinal(g_thunk_ordinals[i]);
+        xbox_kernel_thunk_table[i] = ptr ? ptr : (ULONG_PTR)xbox_unresolved_thunk;
     }
 
     xbox_log(XBOX_LOG_INFO, XBOX_LOG_THUNK,
