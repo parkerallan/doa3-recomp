@@ -52,3 +52,23 @@ int doa3_log_save(void)
     return WritePrivateProfileStringA("General", "Logging", g_enabled ? "1" : "0",
                                       doa3_settings_ini_path());
 }
+
+static int g_movies = -1;   /* -1 = not read from the ini yet */
+
+int doa3_movies_enabled(void)
+{
+    if (g_movies < 0)
+        g_movies = GetPrivateProfileIntA("General", "Movies", 1,
+                                         doa3_settings_ini_path()) != 0;
+    return g_movies;
+}
+
+void doa3_movies_set_enabled(int on) { g_movies = on ? 1 : 0; }
+
+int doa3_movies_save(void)
+{
+    /* Movies: 0 = skip every FMV, 1 = play them. */
+    return WritePrivateProfileStringA("General", "Movies",
+                                      doa3_movies_enabled() ? "1" : "0",
+                                      doa3_settings_ini_path());
+}

@@ -255,11 +255,12 @@ void DrawGeneralSection()
     switch (ResetSaveRow()) {
     case 1:
         doa3_log_set_enabled(0);
+        doa3_movies_set_enabled(1);
         SetStatus("General settings reset to defaults");
         break;
     case 2:
-        SetStatus(doa3_log_save() ? "Saved doa3_settings.ini"
-                                  : "Could not write doa3_settings.ini");
+        SetStatus(doa3_log_save() && doa3_movies_save() ? "Saved doa3_settings.ini"
+                                                        : "Could not write doa3_settings.ini");
         break;
     }
 
@@ -268,6 +269,10 @@ void DrawGeneralSection()
     bool on = doa3_log_enabled() != 0;
     if (ImGui::Checkbox("Write log files", &on))
         doa3_log_set_enabled(on ? 1 : 0);
+
+    bool no_fmv = doa3_movies_enabled() == 0;
+    if (ImGui::Checkbox("Disable FMV playback", &no_fmv))
+        doa3_movies_set_enabled(no_fmv ? 0 : 1);
 }
 
 /* ── Online section ───────────────────────────────────────────────────────*/

@@ -12,6 +12,7 @@
 
 extern "C" {
 #include "../game/xiso_extract.h"
+#include "../game/log_settings.h"
 }
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -198,6 +199,13 @@ void Draw(bool *quit)
             ImGui::PushStyleColor(ImGuiCol_Text, kRed);
             ImGui::TextWrapped("%s", g_error);
             ImGui::PopStyleColor();
+        }
+
+        ImGui::Spacing();
+        bool no_fmv = doa3_movies_enabled() == 0;
+        if (ImGui::Checkbox("Extract without FMVs", &no_fmv)) {
+            doa3_movies_set_enabled(no_fmv ? 0 : 1);
+            doa3_movies_save();
         }
 
         ImGui::Spacing();

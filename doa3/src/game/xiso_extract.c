@@ -23,6 +23,7 @@
  */
 
 #include "xiso_extract.h"
+#include "log_settings.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -63,6 +64,20 @@ static const struct { const char *name; uint32_t size; } k_required[] = {
 };
 #define N_REQUIRED (sizeof k_required / sizeof k_required[0])
 
+/* The FMV files (every .sfd, and ninja.aix, the intro's music track). With
+ * movies off in the Esc menu they are neither required nor installed. */
+static int is_movie_file(const char *name)
+{
+    size_t n = strlen(name);
+    return (n > 4 && _stricmp(name + n - 4, ".sfd") == 0) ||
+           _stricmp(name, "ninja.aix") == 0;
+}
+
+static int skip_movie_file(const char *name)
+{
+    return !doa3_movies_enabled() && is_movie_file(name);
+}
+
 typedef struct {
     WCHAR    rel[MAX_PATH];   /* path relative to the image root */
     char     name[64];        /* leaf name, for display */
@@ -70,6 +85,12 @@ typedef struct {
     uint32_t sector;
     uint32_t size;
 } XisoEntry;
+
+/* Movie files sit in the disc root; a same-named file in a subfolder is not one. */
+static int skip_root_movie(const XisoEntry *e)
+{
+    return !e->is_dir && !wcschr(e->rel, L'\\') && skip_movie_file(e->name);
+}
 
 typedef struct {
     HANDLE     h;
@@ -359,6 +380,7 @@ int xiso_assets_ready(const WCHAR *assets_dir)
 {
     WCHAR p[MAX_PATH], wn[64];
     for (size_t i = 0; i < N_REQUIRED; i++) {
+        if (skip_movie_file(k_required[i].name)) continue;
         MultiByteToWideChar(CP_ACP, 0, k_required[i].name, -1, wn, 64);
         swprintf_s(p, MAX_PATH, L"%s\\%s", assets_dir, wn);
         if (!file_size_is(p, k_required[i].size)) return 0;
@@ -419,7 +441,7 @@ int xiso_install(const WCHAR *image, const WCHAR *assets_dir,
     }
 
     for (int i = 0; i < x.n; i++)
-        if (!x.e[i].is_dir) { total += x.e[i].size; files++; }
+        if (!x.e[i].is_dir && !skip_root_movie(&x.e[i])) { total += x.e[i].size; files++; }
     prog->bytes_total = (LONG64)total;
     prog->files_total = files;
 
@@ -453,6 +475,7 @@ int xiso_install(const WCHAR *image, const WCHAR *assets_dir,
             }
             continue;
         }
+        if (skip_root_movie(e)) continue;
         strcpy_s(prog->current_name, sizeof prog->current_name, e->name);
         if (!extract_file(&x, e, p, buf, bufsize, prog)) goto done;
         InterlockedIncrement(&prog->files_done);
@@ -460,7 +483,7 @@ int xiso_install(const WCHAR *image, const WCHAR *assets_dir,
 
     /* Verify what landed on disk before it replaces anything. */
     for (int i = 0; i < x.n; i++) {
-        if (x.e[i].is_dir) continue;
+        if (x.e[i].is_dir || skip_root_movie(&x.e[i])) continue;
         swprintf_s(p, MAX_PATH, L"%s\\%s", stage, x.e[i].rel);
         if (!file_size_is(p, x.e[i].size)) {
             fail(&x, "Verification failed: %s did not extract correctly.", x.e[i].name);

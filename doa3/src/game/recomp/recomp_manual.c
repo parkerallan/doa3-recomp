@@ -1075,6 +1075,7 @@ CALL_COUNT_PROBE(sub_00173B20)   /* wxCi cache-copy stream starter */
  * which file to stream; every .sfd is opened once at boot, so the file-open
  * path cannot tell it. */
 void sub_0009DF60_gen(void);
+static int g_doa3_movie_skipped;   /* set by sub_0009DF60, cleared by sub_0009E340 */
 void sub_0009DF60(void)
 {
     extern void doa3_movie_select(const char *name);
@@ -1084,6 +1085,34 @@ void sub_0009DF60(void)
     if (!p) p = MEM32(0x331298u);
     for (i = 0; i < 31; i++) { nm[i] = (char)MEM8(p + i); if (!nm[i]) break; }
     nm[31] = 0;
+    {   /* Movies off, or this movie's file is not installed: never start it.
+         * sub_0009E1F0 then reports it finished and sub_0009E340 stops it. */
+        extern int doa3_movies_enabled(void);
+        extern BOOL xbox_translate_path(const char *xbox_path, WCHAR *win_path_buf,
+                                        DWORD buf_size);
+        WCHAR wp[MAX_PATH];
+        if (!doa3_movies_enabled() ||
+            !xbox_translate_path(nm, wp, MAX_PATH) ||
+            GetFileAttributesW(wp) == INVALID_FILE_ATTRIBUTES) {
+            /* The host presenter owns the screen from boot until a movie
+             * ends; with no movie, hand it back here. */
+            extern void doa3_movie_present_finish(void);
+            doa3_movie_present_finish();
+            /* A movie pauses the background cache install; without one, let the
+             * install finish first so its copy never overlaps the game's loads. */
+            for (;;) {
+                PUSH32(esp, 0); sub_0009D8F0();   /* poll; finalizes when done */
+                PUSH32(esp, 0); sub_0009DB30();   /* install still active? */
+                if (!eax) break;
+                PUSH32(esp, 1);
+                PUSH32(esp, 0); sub_0009E562();   /* wait a frame */
+                esp += 4;
+            }
+            g_doa3_movie_skipped = 1;
+            esp += 4;   /* cdecl: consume fake return, caller cleans args */
+            return;
+        }
+    }
     doa3_movie_select(nm);
     sub_0009DF60_gen();
 }
@@ -3969,6 +3998,7 @@ void sub_0009E340(void) {
         }
     }
     sub_0009E340_gen();
+    g_doa3_movie_skipped = 0;
     g_doa3_post_movie = 1;
     { extern int g_kernel_trace_reads; g_kernel_trace_reads = 1; }
     if (log) {
@@ -4699,6 +4729,11 @@ void sub_00177170(void) {
 }
 void sub_0009E1F0_gen(void);
 void sub_0009E1F0(void) {
+    if (g_doa3_movie_skipped) {   /* no player: the gen calls through a null 0x5E5900 */
+        eax = 1;                  /* finished */
+        esp += 4;
+        return;
+    }
     g_e1f0_calls++;
     sub_0009E1F0_gen();
     if (eax) g_e1f0_nz++;

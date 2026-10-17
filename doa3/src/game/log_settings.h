@@ -23,6 +23,12 @@ void doa3_log_set_enabled(int on);
 /* Returns non-zero on success. */
 int  doa3_log_save(void);
 
+/* Movies on/off, persisted as Movies= in [General] (default on). Off: every
+ * FMV is skipped unopened, so the .sfd files and ninja.aix need not be installed. */
+int  doa3_movies_enabled(void);
+void doa3_movies_set_enabled(int on);
+int  doa3_movies_save(void);
+
 #ifdef __cplusplus
 }
 #endif
