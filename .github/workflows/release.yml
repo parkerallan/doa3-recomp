@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: |
           cmake --version
-          cmake -S doa3 -B doa3/build -A x64
+          cmake -S doa3 -B doa3/build -A x64 -DDOA3_BUILD_NUMBER="$env:GITHUB_RUN_NUMBER"
 
       - name: Build
         shell: pwsh

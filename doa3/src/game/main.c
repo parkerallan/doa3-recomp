@@ -1199,6 +1199,9 @@ int main(int argc, char **argv)
         if (n > 0 && n < MAX_PATH) {
             WCHAR *slash = wcsrchr(exedir, L'\\');
             if (slash) {
+                /* The exe Check for Updates renamed out of the way. */
+                WCHAR old[MAX_PATH];
+                if (swprintf_s(old, MAX_PATH, L"%s.old", exedir) > 0) DeleteFileW(old);
                 *slash = 0;
                 SetCurrentDirectoryW(exedir);
                 swprintf_s(assets_dir, MAX_PATH, L"%s\\assets", exedir);

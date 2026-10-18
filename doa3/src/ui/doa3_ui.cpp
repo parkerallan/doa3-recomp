@@ -8,6 +8,12 @@
 #include <xinput.h>
 #include <stdio.h>
 #include <string.h>
+#include <winhttp.h>
+#include "miniz.h"
+
+#include <atomic>
+#include <string>
+#include <thread>
 
 extern "C" {
 #include "pad_mapping.h"
@@ -248,6 +254,135 @@ void DrawVideoSection()
         video_set_scale(sc + 1);
 }
 
+/* ── Check for Updates ────────────────────────────────────────────────────
+ * Compares the latest GitHub release tag against this build's version and,
+ * if it is higher, downloads the release zip and swaps DOA3.exe in place. */
+
+std::atomic<bool> g_upd_busy{ false };
+char g_upd_msg[256] = { 0 };
+
+void UpdMsg(const char *s) { _snprintf_s(g_upd_msg, sizeof(g_upd_msg), _TRUNCATE, "%s", s); }
+
+bool HttpGet(const std::wstring &url, std::string *out)
+{
+    URL_COMPONENTS uc = { sizeof(uc) };
+    wchar_t host[256], path[2048];
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.lpszUrlPath  = path; uc.dwUrlPathLength  = 2048;
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) return false;
+    if (uc.dwExtraInfoLength) wcsncat_s(path, uc.lpszExtraInfo, uc.dwExtraInfoLength);
+
+    bool ok = false;
+    HINTERNET s = WinHttpOpen(L"DOA3", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET c = s ? WinHttpConnect(s, host, uc.nPort, 0) : NULL;
+    HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, NULL, WINHTTP_NO_REFERER,
+                                         WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE) : NULL;
+    if (r && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+        WinHttpReceiveResponse(r, NULL)) {
+        DWORD status = 0, sz = sizeof(status);
+        WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+        ok = status == 200;
+        char buf[65536];
+        DWORD got = 0;
+        while (ok && WinHttpReadData(r, buf, sizeof(buf), &got) && got)
+            out->append(buf, got);
+    }
+    if (r) WinHttpCloseHandle(r);
+    if (c) WinHttpCloseHandle(c);
+    if (s) WinHttpCloseHandle(s);
+    return ok;
+}
+
+/* The string after "key": in the release JSON, searching from `at`. */
+std::string JsonStr(const std::string &js, const char *key, size_t *at)
+{
+    size_t p = js.find(std::string("\"") + key + "\"", *at);
+    if (p == std::string::npos || (p = js.find('"', js.find(':', p) + 1)) == std::string::npos) return "";
+    size_t e = js.find('"', p + 1);
+    *at = e;
+    return js.substr(p + 1, e - p - 1);
+}
+
+bool VersionHigher(const char *remote, const char *local)
+{
+    int r[3] = { 0 }, l[3] = { 0 };
+    sscanf_s(remote + (*remote == 'v'), "%d.%d.%d", &r[0], &r[1], &r[2]);
+    sscanf_s(local, "%d.%d.%d", &l[0], &l[1], &l[2]);
+    for (int i = 0; i < 3; ++i)
+        if (r[i] != l[i]) return r[i] > l[i];
+    return false;
+}
+
+void CheckForUpdates()
+{
+    std::string js;
+    size_t at = 0;
+    if (!HttpGet(L"https://api.github.com/repos/parkerallan/doa3-recomp/releases/latest", &js)) {
+        UpdMsg("Could not reach GitHub");
+        return;
+    }
+    std::string tag = JsonStr(js, "tag_name", &at);
+    if (tag.empty()) { UpdMsg("No release found"); return; }
+    char msg[256];
+    if (!VersionHigher(tag.c_str(), DOA3_VERSION_STRING)) {
+        _snprintf_s(msg, sizeof(msg), _TRUNCATE, "Already on the latest version (v%s)", DOA3_VERSION_STRING);
+        UpdMsg(msg);
+        return;
+    }
+
+    std::string url;
+    at = 0;
+    while (!(url = JsonStr(js, "browser_download_url", &at)).empty())
+        if (url.size() > 4 && url.compare(url.size() - 4, 4, ".zip") == 0) break;
+    if (url.empty()) { UpdMsg("The release has no download"); return; }
+
+    _snprintf_s(msg, sizeof(msg), _TRUNCATE, "Downloading %s...", tag.c_str());
+    UpdMsg(msg);
+
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    std::wstring exe_path = exe;
+    std::wstring fresh = exe_path + L".new";
+    std::wstring old = exe_path + L".old";
+
+    /* Download the zip into memory and pull DOA3.exe out of it. */
+    std::string zip;
+    bool ok = HttpGet(std::wstring(url.begin(), url.end()), &zip);
+    if (ok) {
+        mz_zip_archive za = {};
+        size_t size = 0;
+        void *data = NULL;
+        if (mz_zip_reader_init_mem(&za, zip.data(), zip.size(), 0)) {
+            data = mz_zip_reader_extract_file_to_heap(&za, "DOA3.exe", &size, 0);
+            mz_zip_reader_end(&za);
+        }
+        DWORD wr = 0;
+        HANDLE f = data ? CreateFileW(fresh.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL)
+                        : INVALID_HANDLE_VALUE;
+        ok = f != INVALID_HANDLE_VALUE && WriteFile(f, data, (DWORD)size, &wr, NULL) && wr == size;
+        if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+        mz_free(data);
+    }
+
+    /* The running exe cannot be overwritten, but it can be renamed. The
+     * renamed one is deleted when the game next starts (main.c). */
+    if (ok) {
+        DeleteFileW(old.c_str());
+        ok = MoveFileExW(exe_path.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+        if (ok && !MoveFileExW(fresh.c_str(), exe_path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            MoveFileExW(old.c_str(), exe_path.c_str(), MOVEFILE_REPLACE_EXISTING);
+            ok = false;
+        }
+    }
+    DeleteFileW(fresh.c_str());
+
+    _snprintf_s(msg, sizeof(msg), _TRUNCATE,
+                ok ? "Updated to %s. Restart the game to use it." : "Update to %s failed", tag.c_str());
+    UpdMsg(msg);
+}
+
 /* ── General section ──────────────────────────────────────────────────────*/
 
 void DrawGeneralSection()
@@ -273,6 +408,20 @@ void DrawGeneralSection()
     bool no_fmv = doa3_movies_enabled() == 0;
     if (ImGui::Checkbox("Disable FMV playback", &no_fmv))
         doa3_movies_set_enabled(no_fmv ? 0 : 1);
+
+    if (g_upd_busy) ImGui::BeginDisabled();
+    if (ImGui::Button("Check for Updates")) {
+        g_upd_busy = true;
+        UpdMsg("Checking for updates...");
+        std::thread([] { CheckForUpdates(); g_upd_busy = false; }).detach();
+    }
+    if (g_upd_busy) ImGui::EndDisabled();
+    if (g_upd_msg[0]) ImGui::TextWrapped("%s", g_upd_msg);
+
+    /* Version in the bottom-left corner of the tab. */
+    float bottom = ImGui::GetCursorPosY() + ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeight();
+    if (bottom > ImGui::GetCursorPosY()) ImGui::SetCursorPosY(bottom);
+    ImGui::TextDisabled("v%s", DOA3_VERSION_STRING);
 }
 
 /* ── Online section ───────────────────────────────────────────────────────*/
