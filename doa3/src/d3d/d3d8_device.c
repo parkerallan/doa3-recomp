@@ -2034,9 +2034,14 @@ static HRESULT __stdcall d3d8_CreateDevice(IDirect3D8 *self, UINT Adapter, DWORD
 
     /* Initialize shader and state subsystems */
     hr = d3d8_shaders_init();
-    if (SUCCEEDED(hr)) hr = d3d8_Nv2aFF_Init();
     if (FAILED(hr)) {
         return hr;
+    }
+    /* Non-fatal: Wine's vkd3d d3dcompiler (Proton 10) rejects SV_ClipDistance;
+     * the NV2A batches then take the CPU vertex path. */
+    if (FAILED(d3d8_Nv2aFF_Init())) {
+        fprintf(stderr, "nv2aff VS unavailable, using the CPU vertex path\n");
+        d3d8_Nv2aFF_Shutdown();
     }
 
     hr = d3d8_states_init();

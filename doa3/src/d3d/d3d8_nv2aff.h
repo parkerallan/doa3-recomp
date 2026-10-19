@@ -50,5 +50,6 @@ long d3d8_DrawNv2aFF(const Nv2aFFVertex *verts, unsigned nverts,
 long d3d8_Nv2aFF_Init(void);
 void d3d8_Nv2aFF_Shutdown(void);
 int  d3d8_Nv2aFF_Bind(const Nv2aFFConstants *cb);
+int  d3d8_Nv2aFF_Available(void);   /* 0 = VS failed to compile; use the CPU path */
 
 #endif
