@@ -74474,6 +74474,7 @@ loc_0005998B: ;
       eax = (uint32_t)((int32_t)(_dividend / (int32_t)ecx));
       edx = (uint32_t)((int32_t)(_dividend % (int32_t)ecx)); }
 
+    sub_000599CC(); return; /* DOA3: restored dropped fall-through to sub_000599CC */
 }
 
 /**
