@@ -6871,6 +6871,33 @@ void sub_0011CE40(void)
     esp += 8; return; /* ret 4 */
 }
 
+/* CRT _except_handler3 (0x194004, and the junk-decoded 0x193FFC that falls
+ * into it) reached through an indirect call. Nothing here dispatches guest
+ * exceptions, so the only way in is a stray call with a garbage frame: a
+ * tester's second launch hung on Start with this handler walking a zeroed
+ * scope table (trylevel 0 -> fs:[0] -> ... never -1) forever. Report "keep
+ * searching" (cdecl, plain ret) instead of walking it, and log the first
+ * caller so the stray call can still be traced. */
+static void eh3_stray_call(void)
+{
+    extern int xbox_fiber_current(void);
+    static int n = 0;
+    if (n < 2) { n++;
+        void *bt[12]; USHORT nb = CaptureStackBackTrace(0, 12, bt, NULL); int k;
+        fprintf(stderr, "[EH3] stray handler call fiber=%d esp=%08X ret=%08X args=%08X %08X host bt:",
+                xbox_fiber_current(), esp, MEM32(esp), MEM32(esp + 4), MEM32(esp + 8));
+        for (k = 0; k < nb; k++) fprintf(stderr, " %p", bt[k]);
+        fprintf(stderr, "\n[EH3] icall trace:");
+        for (k = 0; k < ICALL_TRACE_SIZE; k++)
+            fprintf(stderr, " %08X", g_icall_trace[(g_icall_trace_idx + k) & (ICALL_TRACE_SIZE - 1)]);
+        fprintf(stderr, "\n[EH3] guest stack:");
+        for (k = 0; k < 32; k++) fprintf(stderr, "%s%08X", (k % 8) ? " " : "\n  ", MEM32(esp + k * 4));
+        fprintf(stderr, "\n"); fflush(stderr);
+    }
+    eax = 1;      /* ExceptionContinueSearch */
+    esp += 4;     /* ret */
+}
+
 /* ── Manual override table ──────────────────────────────────────────
  * Map original Xbox VA -> hand-written replacement; the trailing {0,0}
  * sentinel keeps the array valid and is skipped at lookup. */
@@ -6878,6 +6905,8 @@ static const struct {
     uint32_t      xbox_va;
     recomp_func_t func;
 } g_manual_funcs[] = {
+    { 0x00194004u, eh3_stray_call },   /* CRT _except_handler3: stray indirect call (see above) */
+    { 0x00193FFCu, eh3_stray_call },   /* junk bytes that fall into it */
     { 0x0011CE30u, sub_0011CE30 },   /* stage renderer draw thunk: call sub_00157700; ret 4 */
     { 0x0011CE40u, sub_0011CE40 },   /* its no-op variant: ret 4 */
     { 0x001CDCD8u, sub_001CDCD8 },   /* DSOUND page-manager vtable jmp stub */
