@@ -29,6 +29,14 @@ int  doa3_movies_enabled(void);
 void doa3_movies_set_enabled(int on);
 int  doa3_movies_save(void);
 
+/* FPS counter, persisted as FpsCounter= (0/1) and FpsCorner= in [General]. */
+enum { FPS_TOP_LEFT, FPS_TOP_RIGHT, FPS_BOTTOM_LEFT, FPS_BOTTOM_RIGHT };
+int  doa3_fps_enabled(void);
+void doa3_fps_set_enabled(int on);
+int  doa3_fps_corner(void);
+void doa3_fps_set_corner(int corner);
+int  doa3_fps_save(void);
+
 #ifdef __cplusplus
 }
 #endif

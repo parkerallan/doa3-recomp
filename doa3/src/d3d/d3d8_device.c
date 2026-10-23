@@ -125,6 +125,44 @@ void d3d8_DebugDumpTargetState(void)
  * only the host presenter may flip; a non-zero guest count there is the
  * flicker. */
 DWORD g_flip_guest = 0, g_flip_host = 0, g_flip_blocked = 0;
+
+/* FPS counter: frames the game finishes (one dev_Present per D3D_SetFence(2)),
+ * averaged over 0.5 s windows. */
+static LARGE_INTEGER g_fs_freq, g_fs_win_start, g_fs_last;
+static int   g_fs_frames;
+static float g_fs_fps;
+
+static void d3d8_note_game_frame(void)
+{
+    LARGE_INTEGER now;
+    double win_s;
+    QueryPerformanceCounter(&now);
+    if (!g_fs_freq.QuadPart) {
+        QueryPerformanceFrequency(&g_fs_freq);
+        g_fs_win_start = g_fs_last = now;
+        return;
+    }
+    g_fs_last = now;
+    g_fs_frames++;
+    win_s = (double)(now.QuadPart - g_fs_win_start.QuadPart) / (double)g_fs_freq.QuadPart;
+    if (win_s >= 0.5) {
+        g_fs_fps = (float)(g_fs_frames / win_s);
+        g_fs_frames = 0;
+        g_fs_win_start = now;
+    }
+}
+
+float d3d8_GetGameFPS(void)
+{
+    LARGE_INTEGER now;
+    double since_s;
+    if (!g_fs_freq.QuadPart) return 0.0f;
+    /* No frame for a whole window: the game is stalled, not still at the old rate. */
+    QueryPerformanceCounter(&now);
+    since_s = (double)(now.QuadPart - g_fs_last.QuadPart) / (double)g_fs_freq.QuadPart;
+    return since_s >= 0.5 ? (float)(1.0 / since_s) : g_fs_fps;
+}
+
 void d3d8_PresentFrame(void)
 {
     /* Pump Windows messages */
@@ -832,6 +870,7 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
     static DWORD last_tick = 0;
     (void)self; (void)src; (void)dst; (void)hWnd; (void)pDirty;
 
+    d3d8_note_game_frame();
     frame_count++;
     DWORD now = GetTickCount();
     if (last_tick == 0) last_tick = now;

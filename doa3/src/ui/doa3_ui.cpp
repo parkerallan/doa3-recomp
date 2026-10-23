@@ -32,6 +32,7 @@ HWND                    d3d8_GetHWND(void);
 UINT                    d3d8_GetBackbufferWidth(void);
 UINT                    d3d8_GetBackbufferHeight(void);
 void                    d3d8_RestoreDefaultTarget(void);
+float                   d3d8_GetGameFPS(void);
 unsigned int            doa3_dbg_read32(unsigned int va);
 unsigned int            doa3_dbg_read8(unsigned int va);
 }
@@ -43,6 +44,7 @@ namespace {
 
 bool g_ready   = false;
 bool g_visible = false;
+ImFont *g_fps_font = nullptr;   /* large bold font for the FPS counter */
 
 /* Rebind capture state, mirroring MapperPanel's listening_/armed_ pair. */
 int  g_listening = -1;   /* row capturing a binding, or -1 */
@@ -402,11 +404,13 @@ void DrawGeneralSection()
     case 1:
         doa3_log_set_enabled(0);
         doa3_movies_set_enabled(1);
+        doa3_fps_set_enabled(0);
+        doa3_fps_set_corner(FPS_TOP_LEFT);
         SetStatus("General settings reset to defaults");
         break;
     case 2:
-        SetStatus(doa3_log_save() && doa3_movies_save() ? "Saved doa3_settings.ini"
-                                                        : "Could not write doa3_settings.ini");
+        SetStatus(doa3_log_save() && doa3_movies_save() && doa3_fps_save()
+                      ? "Saved doa3_settings.ini" : "Could not write doa3_settings.ini");
         break;
     }
 
@@ -419,6 +423,18 @@ void DrawGeneralSection()
     bool no_fmv = doa3_movies_enabled() == 0;
     if (ImGui::Checkbox("Disable FMV playback", &no_fmv))
         doa3_movies_set_enabled(no_fmv ? 0 : 1);
+
+    static const char *kCorner[] = { "Top left", "Top right", "Bottom left", "Bottom right" };
+    bool fps = doa3_fps_enabled() != 0;
+    if (ImGui::Checkbox("Show FPS counter", &fps))
+        doa3_fps_set_enabled(fps ? 1 : 0);
+    ImGui::SameLine();
+    if (!fps) ImGui::BeginDisabled();
+    int corner = doa3_fps_corner();
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::Combo("##fps_corner", &corner, kCorner, IM_ARRAYSIZE(kCorner)))
+        doa3_fps_set_corner(corner);
+    if (!fps) ImGui::EndDisabled();
 
     if (g_upd_busy) ImGui::BeginDisabled();
     if (ImGui::Button("Check for Updates")) {
@@ -472,6 +488,33 @@ void DrawNetplayBanner()
         ImGui::TextUnformatted(text);
     }
     ImGui::End();
+}
+
+void DrawFpsCounter()
+{
+    char text[16];
+    _snprintf_s(text, sizeof(text), _TRUNCATE, "%.0f", d3d8_GetGameFPS());
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImFont *font = g_fps_font ? g_fps_font : ImGui::GetFont();
+    float size = vp->WorkSize.y * 0.045f;
+    if (size < 24.0f) size = 24.0f;
+    float pad = size * 0.4f;
+    ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
+
+    int c = doa3_fps_corner();
+    bool right = c == FPS_TOP_RIGHT || c == FPS_BOTTOM_RIGHT;
+    bool bottom = c == FPS_BOTTOM_LEFT || c == FPS_BOTTOM_RIGHT;
+    ImVec2 pos(right  ? vp->WorkPos.x + vp->WorkSize.x - pad - ts.x : vp->WorkPos.x + pad,
+               bottom ? vp->WorkPos.y + vp->WorkSize.y - pad - ts.y : vp->WorkPos.y + pad);
+
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    const ImU32 outline = IM_COL32(0, 0, 0, 255);
+    float o = size / 16.0f;
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy)
+            if (dx || dy) dl->AddText(font, size, ImVec2(pos.x + dx * o, pos.y + dy * o), outline, text);
+    dl->AddText(font, size, pos, IM_COL32(255, 255, 0, 255), text);
 }
 
 void DrawOnlineSection()
@@ -701,6 +744,17 @@ extern "C" int doa3_ui_init(void)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     ImGui::StyleColorsDark();
 
+    /* Default font stays first (the menu); a bold system font for the FPS
+     * counter, falling back to the default scaled up if it is not installed. */
+    io.Fonts->AddFontDefault();
+    char font_path[MAX_PATH];
+    UINT n = GetWindowsDirectoryA(font_path, MAX_PATH);
+    if (n && n < MAX_PATH - 32) {
+        strcat_s(font_path, sizeof(font_path), "\\Fonts\\arialbd.ttf");
+        if (GetFileAttributesA(font_path) != INVALID_FILE_ATTRIBUTES)
+            g_fps_font = io.Fonts->AddFontFromFileTTF(font_path, 64.0f);
+    }
+
     if (!ImGui_ImplWin32_Init(hwnd)) { ImGui::DestroyContext(); return 0; }
     if (!ImGui_ImplDX11_Init(dev, ctx)) {
         ImGui_ImplWin32_Shutdown();
@@ -716,6 +770,7 @@ extern "C" void doa3_ui_shutdown(void)
 {
     if (!g_ready) return;
     g_ready = false;
+    g_fps_font = nullptr;
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
@@ -782,9 +837,9 @@ extern "C" int doa3_ui_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 extern "C" void doa3_ui_render(void)
 {
-    /* Nothing to do on a normal frame unless the menu is open or online play
-     * has something to say over the game. */
-    if (!g_visible && !NetplayBannerPending()) return;
+    /* Nothing to do on a normal frame unless the menu is open, the FPS counter
+     * is on, or online play has something to say over the game. */
+    if (!g_visible && !doa3_fps_enabled() && !NetplayBannerPending()) return;
     if (!g_ready && !doa3_ui_init()) return;
 
     ID3D11DeviceContext *ctx = d3d8_GetD3D11Context();
@@ -804,6 +859,7 @@ extern "C" void doa3_ui_render(void)
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
+    if (doa3_fps_enabled()) DrawFpsCounter();
     if (g_visible) DrawMenu();
     DrawNetplayBanner();
 

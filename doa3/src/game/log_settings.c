@@ -72,3 +72,39 @@ int doa3_movies_save(void)
                                       doa3_movies_enabled() ? "1" : "0",
                                       doa3_settings_ini_path());
 }
+
+static int g_fps = -1, g_fps_corner = -1;   /* -1 = not read from the ini yet */
+
+int doa3_fps_enabled(void)
+{
+    if (g_fps < 0)
+        g_fps = GetPrivateProfileIntA("General", "FpsCounter", 0, doa3_settings_ini_path()) != 0;
+    return g_fps;
+}
+
+void doa3_fps_set_enabled(int on) { g_fps = on ? 1 : 0; }
+
+int doa3_fps_corner(void)
+{
+    if (g_fps_corner < 0) {
+        g_fps_corner = (int)GetPrivateProfileIntA("General", "FpsCorner", FPS_TOP_LEFT,
+                                                  doa3_settings_ini_path());
+        if (g_fps_corner < FPS_TOP_LEFT || g_fps_corner > FPS_BOTTOM_RIGHT)
+            g_fps_corner = FPS_TOP_LEFT;
+    }
+    return g_fps_corner;
+}
+
+void doa3_fps_set_corner(int corner)
+{
+    if (corner >= FPS_TOP_LEFT && corner <= FPS_BOTTOM_RIGHT) g_fps_corner = corner;
+}
+
+int doa3_fps_save(void)
+{
+    /* FpsCounter: 0 = off, 1 = on. FpsCorner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right. */
+    char corner[2] = { (char)('0' + doa3_fps_corner()), 0 };
+    return WritePrivateProfileStringA("General", "FpsCounter", doa3_fps_enabled() ? "1" : "0",
+                                      doa3_settings_ini_path()) &&
+           WritePrivateProfileStringA("General", "FpsCorner", corner, doa3_settings_ini_path());
+}
