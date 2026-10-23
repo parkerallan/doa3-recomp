@@ -23,6 +23,7 @@
 #include "../kernel/xbox_memory_layout.h"
 #include "../kernel/xbox_fiber.h"
 #include "../kernel/doa3_guest.h"
+#include "../kernel/perf.h"
 #include "../d3d/d3d8_xbox.h"
 #include "../audio/dsound_xbox.h"
 #include "recomp_funcs.h"            /* this release's generated tree */
@@ -226,7 +227,12 @@ static void doa3_watchdog_start(void)
 void doa3_present_frame(void)
 {
     InterlockedIncrement(&g_doa3_heartbeat);
-    { extern void doa3_apu_deliver_irq(void); doa3_apu_deliver_irq(); }
+    {
+        extern void doa3_apu_deliver_irq(void);
+        perf_begin(PERF_AUDIO);
+        doa3_apu_deliver_irq();
+        perf_end(PERF_AUDIO);
+    }
     if (getenv("DOA3_NO_PRESENT")) return;   /* isolation: skip pump + present entirely */
     MSG msg;
     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
@@ -1213,6 +1219,7 @@ int main(int argc, char **argv)
     /* stderr -> doa3_log.txt when logging is on in the Esc menu, NUL when
      * off (the default). See log_settings.h. */
     doa3_log_init();
+    doa3_perfmon_set_enabled(doa3_perfmon_enabled());
 
     atexit(doa3_atexit);
     SetUnhandledExceptionFilter(doa3_unhandled);

@@ -19,6 +19,7 @@ extern "C" {
 #include "pad_mapping.h"
 #include "../game/video_settings.h"
 #include "../game/log_settings.h"
+#include "../kernel/perf.h"
 #include "../online/netplay_session.h"
 #include "../online/netplay.h"
 #include "../online/net_upnp.h"
@@ -406,10 +407,12 @@ void DrawGeneralSection()
         doa3_movies_set_enabled(1);
         doa3_fps_set_enabled(0);
         doa3_fps_set_corner(FPS_TOP_LEFT);
+        doa3_perfmon_set_threshold(20);
+        doa3_perfmon_set_enabled(0);
         SetStatus("General settings reset to defaults");
         break;
     case 2:
-        SetStatus(doa3_log_save() && doa3_movies_save() && doa3_fps_save()
+        SetStatus(doa3_log_save() && doa3_movies_save() && doa3_fps_save() && doa3_perfmon_save()
                       ? "Saved doa3_settings.ini" : "Could not write doa3_settings.ini");
         break;
     }
@@ -435,6 +438,21 @@ void DrawGeneralSection()
     if (ImGui::Combo("##fps_corner", &corner, kCorner, IM_ARRAYSIZE(kCorner)))
         doa3_fps_set_corner(corner);
     if (!fps) ImGui::EndDisabled();
+
+    bool perfmon = doa3_perfmon_enabled() != 0;
+    if (ImGui::Checkbox("Performance monitor", &perfmon))
+        doa3_perfmon_set_enabled(perfmon ? 1 : 0);
+    ImGui::SameLine();
+    if (!perfmon) ImGui::BeginDisabled();
+    /* Applied when editing ends, so typing "35" does not apply 3 first. */
+    static int s_threshold;
+    static bool s_editing;
+    if (!s_editing) s_threshold = doa3_perfmon_threshold();
+    ImGui::SetNextItemWidth(60.0f);
+    ImGui::InputInt("ms##perf_threshold", &s_threshold, 0, 0);
+    s_editing = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit()) doa3_perfmon_set_threshold(s_threshold);
+    if (!perfmon) ImGui::EndDisabled();
 
     if (g_upd_busy) ImGui::BeginDisabled();
     if (ImGui::Button("Check for Updates")) {
@@ -675,6 +693,83 @@ void DrawOnlineSection()
     }
 }
 
+/* Stacked frame time per subsystem for the last PERF_HISTORY frames, under the menu. */
+void DrawPerfGraph(ImVec2 menu_pos, ImVec2 menu_size)
+{
+    static const ImU32 kColor[PERF_COUNT] = {
+        IM_COL32(110, 130, 160, 255),   /* game logic */
+        IM_COL32(240, 150,  40, 255),   /* GPU command translation */
+        IM_COL32(220,  60,  60, 255),   /* draw submission */
+        IM_COL32(240, 220,  60, 255),   /* texture conversion */
+        IM_COL32( 80, 200,  90, 255),   /* streaming/decode */
+        IM_COL32( 70, 200, 220, 255),   /* audio interrupt */
+        IM_COL32(160, 100, 220, 255),   /* compose */
+        IM_COL32(230, 100, 180, 255),   /* present wait */
+        IM_COL32(200, 200, 200, 255),   /* online wait */
+    };
+    static float s_frames[PERF_HISTORY][PERF_COUNT];
+    int n = perf_history(s_frames, PERF_HISTORY);
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    const float h = 250.0f;
+    float y = menu_pos.y + menu_size.y + 8.0f;
+    if (y + h > vp->WorkPos.y + vp->WorkSize.y) y = vp->WorkPos.y + vp->WorkSize.y - h;
+    ImGui::SetNextWindowPos(ImVec2(menu_pos.x, y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(menu_size.x, h), ImGuiCond_Always);
+    if (ImGui::Begin("Performance", nullptr,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+        float scale_ms = 1000.0f / 30.0f;   /* two frames of headroom, more if needed */
+        for (int i = 0; i < n; ++i) {
+            float t = 0.0f;
+            for (int p = 0; p < PERF_COUNT; ++p) t += s_frames[i][p];
+            if (t > scale_ms) scale_ms = t;
+        }
+
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        ImVec2 o = ImGui::GetCursorScreenPos();
+        float w = ImGui::GetContentRegionAvail().x, ph = 150.0f;
+        float bar = w / (float)PERF_HISTORY;
+        dl->AddRectFilled(o, ImVec2(o.x + w, o.y + ph), IM_COL32(20, 20, 24, 255));
+        for (int i = 0; i < n; ++i) {
+            float x0 = o.x + w - (float)(n - i) * bar, x1 = x0 + (bar > 1.0f ? bar - 0.5f : bar);
+            float base = o.y + ph;
+            for (int p = 0; p < PERF_COUNT; ++p) {
+                float hh = s_frames[i][p] / scale_ms * ph;
+                if (hh <= 0.0f) continue;
+                dl->AddRectFilled(ImVec2(x0, base - hh), ImVec2(x1, base), kColor[p]);
+                base -= hh;
+            }
+        }
+        float budget = o.y + ph - (1000.0f / 60.0f) / scale_ms * ph;
+        dl->AddLine(ImVec2(o.x, budget), ImVec2(o.x + w, budget), IM_COL32(255, 255, 255, 200));
+        dl->AddText(ImVec2(o.x + 4.0f, budget - ImGui::GetTextLineHeight()), IM_COL32(255, 255, 255, 220), "16.7 ms");
+        char top[32];
+        _snprintf_s(top, sizeof(top), _TRUNCATE, "%.0f ms", scale_ms);
+        dl->AddText(ImVec2(o.x + 4.0f, o.y + 2.0f), IM_COL32(200, 200, 200, 220), top);
+        ImGui::Dummy(ImVec2(w, ph + 4.0f));
+
+        /* Colour key. */
+        float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+        for (int p = 0; p < PERF_COUNT; ++p) {
+            const char *name = perf_part_name(p);
+            float item = ImGui::GetTextLineHeight() + 4.0f + ImGui::CalcTextSize(name).x;
+            if (p > 0) {
+                ImGui::SameLine(0.0f, 14.0f);
+                if (ImGui::GetCursorPosX() + item > right) ImGui::NewLine();
+            }
+            ImVec2 c = ImGui::GetCursorScreenPos();
+            float s = ImGui::GetTextLineHeight();
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(c.x, c.y + 2.0f),
+                                                      ImVec2(c.x + s - 4.0f, c.y + s - 2.0f), kColor[p]);
+            ImGui::Dummy(ImVec2(s, s));
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::TextUnformatted(name);
+        }
+    }
+    ImGui::End();
+}
+
 void DrawMenu()
 {
     const ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -710,7 +805,10 @@ void DrawMenu()
             ImGui::EndTabBar();
         }
     }
+    ImVec2 menu_pos = ImGui::GetWindowPos(), menu_size = ImGui::GetWindowSize();
     ImGui::End();
+
+    if (doa3_perfmon_enabled()) DrawPerfGraph(menu_pos, menu_size);
 
     if (!open) {
         g_visible = false;

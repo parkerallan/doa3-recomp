@@ -13,6 +13,7 @@
 #include <windows.h>
 #include "online/netplay_session.h"
 #include "online/netplay.h"
+#include "kernel/perf.h"
 
    /* CaptureStackBackTrace (SBH alloc-loop diagnostics) */
 
@@ -1782,6 +1783,7 @@ static void doa3_translate_pb(uint32_t from, uint32_t to)
     static int drew_since_present = 0;
 
     (void)drew_since_present;
+    perf_begin(PERF_TRANSLATE);
     uint32_t pos = from;
     /* DOA3 DIAG: words the parser cannot read as a method header, and headers
      * whose parameters run past the write cursor. */
@@ -1826,6 +1828,7 @@ static void doa3_translate_pb(uint32_t from, uint32_t to)
     if (g_doa3_post_movie && GetTickCount() >= s_next) {
         s_next = GetTickCount() + 2000;
     }
+    perf_end(PERF_TRANSLATE);
 }
 
 /* Wrap the write cursor back to the base of our RAM push buffer. Burnout's

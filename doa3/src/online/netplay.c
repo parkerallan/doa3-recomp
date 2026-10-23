@@ -26,6 +26,7 @@
 #include <math.h>
 #include "netplay.h"
 #include "kernel/doa3_guest.h"
+#include "kernel/perf.h"
 #include "netplay_session.h"
 #include "net_upnp.h"
 #include "join_code.h"
@@ -1411,7 +1412,35 @@ static int pv_transition(uint32_t index)
     }
 }
 
-const np_provider k_provider = { pv_barrier, pv_exchange, pv_digest, pv_end, pv_transition };
+/* The three calls that can wait on the other player, timed for the performance monitor. */
+static int pv_barrier_t(int at_barrier, int tag)
+{
+    int r;
+    perf_begin(PERF_ONLINE);
+    r = pv_barrier(at_barrier, tag);
+    perf_end(PERF_ONLINE);
+    return r;
+}
+
+static int pv_exchange_t(const np_pad *local, np_pad out[2])
+{
+    int r;
+    perf_begin(PERF_ONLINE);
+    r = pv_exchange(local, out);
+    perf_end(PERF_ONLINE);
+    return r;
+}
+
+static int pv_transition_t(uint32_t index)
+{
+    int r;
+    perf_begin(PERF_ONLINE);
+    r = pv_transition(index);
+    perf_end(PERF_ONLINE);
+    return r;
+}
+
+const np_provider k_provider = { pv_barrier_t, pv_exchange_t, pv_digest, pv_end, pv_transition_t };
 
 /* ── per-frame poll and UI requests ────────────────────────────────── */
 

@@ -7,6 +7,7 @@
 #include "log_settings.h"
 #include "video_settings.h"
 #include "../kernel/kernel.h"
+#include "../kernel/perf.h"
 
 static int g_enabled = 0;
 static int g_own_stderr = 0;   /* stderr was a console or absent, so it is ours to route */
@@ -107,4 +108,52 @@ int doa3_fps_save(void)
     return WritePrivateProfileStringA("General", "FpsCounter", doa3_fps_enabled() ? "1" : "0",
                                       doa3_settings_ini_path()) &&
            WritePrivateProfileStringA("General", "FpsCorner", corner, doa3_settings_ini_path());
+}
+
+static int g_perfmon = -1;   /* -1 = not read from the ini yet */
+
+int doa3_perfmon_enabled(void)
+{
+    if (g_perfmon < 0)
+        g_perfmon = GetPrivateProfileIntA("General", "PerfMonitor", 0, doa3_settings_ini_path()) != 0;
+    return g_perfmon;
+}
+
+void doa3_perfmon_set_enabled(int on)
+{
+    g_perfmon = on ? 1 : 0;
+    perf_set_threshold_ms(doa3_perfmon_threshold());
+    perf_set_enabled(g_perfmon);
+}
+
+static int g_perf_threshold = -1;   /* -1 = not read from the ini yet */
+
+int doa3_perfmon_threshold(void)
+{
+    if (g_perf_threshold < 0) {
+        g_perf_threshold = (int)GetPrivateProfileIntA("General", "PerfThreshold", 20,
+                                                      doa3_settings_ini_path());
+        if (g_perf_threshold < 17) g_perf_threshold = 17;
+        if (g_perf_threshold > 200) g_perf_threshold = 200;
+    }
+    return g_perf_threshold;
+}
+
+void doa3_perfmon_set_threshold(int ms)
+{
+    if (ms < 17) ms = 17;
+    if (ms > 200) ms = 200;
+    g_perf_threshold = ms;
+    perf_set_threshold_ms(ms);
+}
+
+int doa3_perfmon_save(void)
+{
+    /* PerfMonitor: 0 = off, 1 = measure, graph in the Esc menu, write doa3_perf.log.
+     * PerfThreshold: frames longer than this many ms are logged. */
+    char ms[8];
+    _snprintf_s(ms, sizeof(ms), _TRUNCATE, "%d", doa3_perfmon_threshold());
+    return WritePrivateProfileStringA("General", "PerfMonitor", doa3_perfmon_enabled() ? "1" : "0",
+                                      doa3_settings_ini_path()) &&
+           WritePrivateProfileStringA("General", "PerfThreshold", ms, doa3_settings_ini_path());
 }

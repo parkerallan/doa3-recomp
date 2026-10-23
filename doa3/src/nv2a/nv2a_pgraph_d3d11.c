@@ -24,6 +24,7 @@
 #include "../d3d/d3d8_swizzle.h"
 #include "nv2a_vertex_program.h"
 #include "../d3d/d3d8_nv2aff.h"
+#include "../kernel/perf.h"
 extern IDirect3DDevice8 *xbox_GetD3DDevice(void);
 
 /* Global.txd texture lookup */
@@ -1815,7 +1816,9 @@ static void nv_apply_draw_state(IDirect3DDevice8 *dev, const NvDrawSummary *sum,
                 }
             }
         }
+        perf_begin(PERF_TEXTURE);
         dtex = get_dynamic_texture(dev);
+        perf_end(PERF_TEXTURE);
         /* DOA3: a 2D draw whose texture stage is DISABLED is flat colour,
          * whatever its vertex layout carries. The fight UI submits its
          * health-bar fills, the pause menu's highlight bar and title box
@@ -3571,7 +3574,9 @@ int pgraph_d3d11_method(int subchannel, uint32_t method, uint32_t param)
         if (param == 0) {
             /* END: submit accumulated vertices */
             if (g_pg.in_draw) {
+                perf_begin(PERF_DRAW);
                 submit_draw();
+                perf_end(PERF_DRAW);
                 g_pg.in_draw = 0;
             }
         } else {
@@ -3987,7 +3992,9 @@ void pgraph_diag_dump_ignored(void)
 void pgraph_d3d11_flush(void)
 {
     if (g_pg.in_draw) {
+        perf_begin(PERF_DRAW);
         submit_draw();
+        perf_end(PERF_DRAW);
         g_pg.in_draw = 0;
     }
     g_pg.stats.frames++;

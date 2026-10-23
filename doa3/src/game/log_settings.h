@@ -37,6 +37,15 @@ int  doa3_fps_corner(void);
 void doa3_fps_set_corner(int corner);
 int  doa3_fps_save(void);
 
+/* Performance monitor, persisted as PerfMonitor= in [General] (default off).
+ * Setting it starts or stops measuring and doa3_perf.log at once. */
+int  doa3_perfmon_enabled(void);
+void doa3_perfmon_set_enabled(int on);
+/* Log threshold in ms, persisted as PerfThreshold= (default 20). */
+int  doa3_perfmon_threshold(void);
+void doa3_perfmon_set_threshold(int ms);
+int  doa3_perfmon_save(void);
+
 #ifdef __cplusplus
 }
 #endif

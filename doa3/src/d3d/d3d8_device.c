@@ -20,6 +20,7 @@
 static ID3D11Buffer *g_nv2aff_idx_ring;   /* NV2A FF index ring, see d3d8_DrawNv2aFF */
 static UINT          g_nv2aff_idx_off;
 #include "ui/doa3_ui.h"
+#include "../kernel/perf.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -747,6 +748,7 @@ static HRESULT d3d8_compose_and_present(void)
     ID3D11DeviceContext *ctx = s->d3d11_context;
     HRESULT hr;
     if (!s->swap_chain || !ctx) return E_FAIL;
+    perf_begin(PERF_COMPOSE);
     d3d8_keep_prev_frame();
 
     swap_resize_if_needed();
@@ -851,8 +853,11 @@ static HRESULT d3d8_compose_and_present(void)
         if (dsv) ID3D11DepthStencilView_Release(dsv);
     }
 
+    perf_begin(PERF_PRESENT);
     hr = IDXGISwapChain_Present(s->swap_chain, 0, 0);
+    perf_end(PERF_PRESENT);
     d3d8_apply_target_size_change();
+    perf_end(PERF_COMPOSE);
     return hr;
 }
 
@@ -938,12 +943,17 @@ static HRESULT __stdcall dev_Present(IDirect3DDevice8 *self, const RECT *src, co
         extern int doa3_movie_host_owns_screen(void);
         if (doa3_movie_host_owns_screen()) {
             g_flip_blocked++;
+            if (g_perf_on) perf_frame();
             return S_OK;
         }
     }
     g_flip_guest++;
     /* The overlay is drawn by the compose step, onto the window-sized frame. */
-    return d3d8_compose_and_present();
+    {
+        HRESULT hr = d3d8_compose_and_present();
+        if (g_perf_on) perf_frame();
+        return hr;
+    }
 }
 
 static HRESULT __stdcall dev_GetBackBuffer(IDirect3DDevice8 *self, INT iBackBuffer, DWORD Type, IDirect3DSurface8 **ppSurface)
