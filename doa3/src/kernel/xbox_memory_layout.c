@@ -272,6 +272,23 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         }
     }
 
+    /* Reserve the AC97 codec page (Xbox VA 0xFEC00000) too: the VEH only sets
+     * its codec-ready bits on a fault, so a host allocation here made
+     * DirectSoundCreate fail (no game audio). */
+    {
+        void *ac97 = (void *)((uintptr_t)0xFEC00000u + g_memory_offset);
+        LPVOID r = VirtualAlloc(ac97, 0x00010000u, MEM_RESERVE, PAGE_NOACCESS);
+        if (r == ac97) {
+            fprintf(stderr, "xbox_MemoryLayoutInit: AC97 codec page reserved at %p "
+                            "(Xbox VA 0xFEC00000, 64 KB)\n", ac97);
+        } else {
+            fprintf(stderr, "xbox_MemoryLayoutInit: WARNING could not reserve the AC97 "
+                            "codec page at %p (got %p, error %lu) -- DirectSound may "
+                            "fail to start\n", ac97, r, GetLastError());
+            if (r) VirtualFree(r, 0, MEM_RELEASE);
+        }
+    }
+
     /*
      * Helper macro: convert Xbox VA to actual mapped address.
      * When g_memory_offset == 0 (ideal case), this is identity.
