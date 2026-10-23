@@ -53,6 +53,17 @@ char g_status[128] = { 0 };
 
 void SetStatus(const char *s) { _snprintf_s(g_status, sizeof(g_status), _TRUNCATE, "%s", s); }
 
+/* Re-run WM_SETCURSOR now so the cursor shows/hides without waiting for a mouse move. */
+void RefreshCursor()
+{
+    HWND hwnd = d3d8_GetHWND();
+    POINT pt;
+    RECT rc;
+    if (!hwnd || !GetCursorPos(&pt) || !ScreenToClient(hwnd, &pt) || !GetClientRect(hwnd, &rc)) return;
+    if (PtInRect(&rc, pt))
+        SendMessageA(hwnd, WM_SETCURSOR, (WPARAM)hwnd, MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+}
+
 /* ── Capture ───────────────────────────────────────────────────────────────
  * Returns true when a source was pressed. A key arrives via the wndproc (so we
  * get a real VK rather than translating back out of ImGuiKey); controller
@@ -661,6 +672,7 @@ void DrawMenu()
     if (!open) {
         g_visible = false;
         pad_mapping_set_menu_open(0);
+        RefreshCursor();
     }
 }
 
@@ -719,6 +731,7 @@ extern "C" void doa3_ui_toggle(void)
     g_pending_vk = 0;
     /* Keyboard sources are suppressed while the menu owns the keyboard. */
     pad_mapping_set_menu_open(g_visible ? 1 : 0);
+    RefreshCursor();
 }
 
 extern "C" int doa3_ui_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -734,6 +747,12 @@ extern "C" int doa3_ui_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         } else {
             doa3_ui_toggle();
         }
+        return 1;
+    }
+
+    /* No cursor over the game while the overlay is closed. */
+    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT && !g_visible) {
+        SetCursor(NULL);
         return 1;
     }
 

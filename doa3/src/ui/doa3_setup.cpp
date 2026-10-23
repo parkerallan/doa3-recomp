@@ -257,7 +257,11 @@ extern "C" int doa3_setup_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
     /* Keys stop here so the Esc menu cannot open underneath. Everything else,
      * including Alt+F4 (WM_SYSKEYDOWN) and the frame, still reaches
-     * DefWindowProc. */
+     * DefWindowProc. The cursor stays visible on this screen. */
+    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+        SetCursor(LoadCursorA(NULL, IDC_ARROW));
+        return 1;
+    }
     return msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_CHAR;
 }
 
