@@ -116,6 +116,15 @@ BOOL xbox_InputIsConnected(DWORD dwPort);
  */
 DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps);
 
+/* Host pads: XInput slots 0-3, then DirectInput pads. */
+#define XBOX_INPUT_HOST_PADS 12
+
+/* Unmapped host pad state as an XINPUT_STATE (Controls tab capture). */
+BOOL xbox_InputReadHostPad(DWORD index, void *xinput_state);
+
+/* WM_DEVICECHANGE: re-enumerate DirectInput pads. */
+void xbox_InputDevicesChanged(void);
+
 #ifdef __cplusplus
 }
 #endif

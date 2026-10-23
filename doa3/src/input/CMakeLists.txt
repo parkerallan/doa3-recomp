@@ -2,6 +2,7 @@
 
 add_library(input_compat STATIC
     xinput_device.c
+    dinput_device.c
     pad_mapping.c
 )
 
@@ -11,6 +12,8 @@ target_include_directories(input_compat PUBLIC
 
 target_link_libraries(input_compat
     xinput
+    dinput8
+    dxguid
 )
 
 if(MSVC)

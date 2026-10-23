@@ -67,8 +67,8 @@ bool CaptureBinding(PadBinding &out)
     }
 
     XINPUT_STATE xi;
-    for (DWORD port = 0; port < 4; ++port) {
-        if (XInputGetState(port, &xi) != ERROR_SUCCESS) continue;
+    for (DWORD pad = 0; pad < XBOX_INPUT_HOST_PADS; ++pad) {
+        if (!xbox_InputReadHostPad(pad, &xi)) continue;
 
         static const int kButtons[] = {
             XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
@@ -418,9 +418,19 @@ void DrawGeneralSection()
     if (g_upd_busy) ImGui::EndDisabled();
     if (g_upd_msg[0]) ImGui::TextWrapped("%s", g_upd_msg);
 
-    /* Version in the bottom-left corner of the tab. */
-    float bottom = ImGui::GetCursorPosY() + ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeight();
+    /* Quit centred above the bottom edge, version bottom-left. */
+    const float gap = 24.0f;
+    float bottom = ImGui::GetCursorPosY() + ImGui::GetContentRegionAvail().y -
+                   ImGui::GetFrameHeight() - gap - ImGui::GetTextLineHeight();
     if (bottom > ImGui::GetCursorPosY()) ImGui::SetCursorPosY(bottom);
+    float quit_w = ImGui::CalcTextSize("Quit Game").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - quit_w) * 0.5f);
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.12f, 0.12f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.18f, 0.18f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.55f, 0.08f, 0.08f, 1.0f));
+    if (ImGui::Button("Quit Game")) PostMessageA(d3d8_GetHWND(), WM_CLOSE, 0, 0);
+    ImGui::PopStyleColor(3);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeight());
     ImGui::TextDisabled("v%s", DOA3_VERSION_STRING);
 }
 
@@ -614,14 +624,22 @@ void DrawOnlineSection()
 void DrawMenu()
 {
     const ImGuiViewport *vp = ImGui::GetMainViewport();
+    /* Re-centre when the window is resized (window type change). */
+    static ImVec2 s_last_size;
+    bool resized = vp->WorkSize.x != s_last_size.x || vp->WorkSize.y != s_last_size.y;
+    s_last_size = vp->WorkSize;
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
                                    vp->WorkPos.y + vp->WorkSize.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                            resized ? ImGuiCond_Always : ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(560, 460), ImGuiCond_Appearing);
 
     bool open = true;
     if (ImGui::Begin("Dead or Alive 3", &open, ImGuiWindowFlags_NoCollapse)) {
         if (ImGui::BeginTabBar("##tabs")) {
+            if (ImGui::BeginTabItem("General")) {
+                DrawGeneralSection();
+                ImGui::EndTabItem();
+            }
             if (ImGui::BeginTabItem("Online")) {
                 DrawOnlineSection();
                 ImGui::EndTabItem();
@@ -632,10 +650,6 @@ void DrawMenu()
             }
             if (ImGui::BeginTabItem("Video")) {
                 DrawVideoSection();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("General")) {
-                DrawGeneralSection();
                 ImGui::EndTabItem();
             }
 

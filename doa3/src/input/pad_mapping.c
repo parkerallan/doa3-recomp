@@ -69,8 +69,8 @@ void pad_mapping_reset_defaults(void)
         { PADCTL_X,          PADSRC_PAD_BUTTON,  XINPUT_GAMEPAD_X },
         { PADCTL_Y,          PADSRC_PAD_BUTTON,  XINPUT_GAMEPAD_Y },
         /* Xbox Black/White sit where XInput has the shoulder buttons. */
-        { PADCTL_BLACK,      PADSRC_PAD_BUTTON,  XINPUT_GAMEPAD_LEFT_SHOULDER },
-        { PADCTL_WHITE,      PADSRC_PAD_BUTTON,  XINPUT_GAMEPAD_RIGHT_SHOULDER },
+        { PADCTL_BLACK,      PADSRC_PAD_BUTTON,  XINPUT_GAMEPAD_RIGHT_SHOULDER },
+        { PADCTL_WHITE,      PADSRC_PAD_BUTTON,  XINPUT_GAMEPAD_LEFT_SHOULDER },
         { PADCTL_LTRIGGER,   PADSRC_PAD_TRIGGER, 0 },
         { PADCTL_RTRIGGER,   PADSRC_PAD_TRIGGER, 1 },
 

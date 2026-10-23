@@ -640,6 +640,7 @@ static int blit_init(void)
     rd.FillMode = D3D11_FILL_SOLID;
     rd.CullMode = D3D11_CULL_NONE;
     rd.DepthClipEnable = TRUE;
+    rd.ScissorEnable = TRUE;
     if (FAILED(ID3D11Device_CreateRasterizerState(dev, &rd, &g_blit_rs))) return 0;
 
     g_blit_failed = 0;
@@ -725,7 +726,8 @@ static HRESULT d3d8_compose_and_present(void)
         UINT nsc = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
         const FLOAT black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
         D3D11_VIEWPORT vp;
-        float dar = (video_get_aspect() == VIDEO_ASPECT_16_9) ? (16.0f / 9.0f) : (4.0f / 3.0f);
+        D3D11_RECT clip;
+        float dar =(video_get_aspect() == VIDEO_ASPECT_16_9) ? (16.0f / 9.0f) : (4.0f / 3.0f);
         float sw = (float)s->swap_w, sh = (float)s->swap_h;
 
         ID3D11DeviceContext_IAGetInputLayout(ctx, &il);
@@ -748,9 +750,25 @@ static HRESULT d3d8_compose_and_present(void)
         vp.TopLeftY = (float)(int)((sh - vp.Height) * 0.5f);
         vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
 
+        /* Zoom one 480p line past each edge to hide the 2D overlays' border gap. */
+        {
+            float lines = (float)(s->height / (unsigned)video_get_scale());
+            float zoom  = lines / (lines - 2.0f);
+            float zw = vp.Width * zoom, zh = vp.Height * zoom;
+            clip.left   = (LONG)vp.TopLeftX;
+            clip.top    = (LONG)vp.TopLeftY;
+            clip.right  = (LONG)(vp.TopLeftX + vp.Width + 0.5f);
+            clip.bottom = (LONG)(vp.TopLeftY + vp.Height + 0.5f);
+            vp.TopLeftX -= (zw - vp.Width) * 0.5f;
+            vp.TopLeftY -= (zh - vp.Height) * 0.5f;
+            vp.Width  = zw;
+            vp.Height = zh;
+        }
+
         ID3D11DeviceContext_OMSetRenderTargets(ctx, 1, &s->swap_rtv, NULL);
         ID3D11DeviceContext_ClearRenderTargetView(ctx, s->swap_rtv, black);
         ID3D11DeviceContext_RSSetViewports(ctx, 1, &vp);
+        ID3D11DeviceContext_RSSetScissorRects(ctx, 1, &clip);
         ID3D11DeviceContext_RSSetState(ctx, g_blit_rs);
         ID3D11DeviceContext_OMSetBlendState(ctx, NULL, NULL, 0xFFFFFFFFu);
         ID3D11DeviceContext_OMSetDepthStencilState(ctx, NULL, 0);
