@@ -239,12 +239,25 @@ static const XisoEntry *find_root_file(const Xiso *x, const char *name)
     return NULL;
 }
 
+/* Names a non-supported DOA3 release from its certificate. Microsoft published
+ * the European disc (MS-045, title ID 4D53002D); Tecmo published USA, Japan and
+ * Korea (TC-001). Japan and Korea are both region 2: the Korean certificate is
+ * version 0x120206, the Japanese one version 1. */
+static const char *release_name(uint32_t title_id, uint32_t region, uint32_t version)
+{
+    if ((title_id >> 16) == 0x4D53)                return "European";
+    if (title_id != DOA3_TITLE_ID || region != 2) return NULL;
+    return version == 0x120206 ? "Korean" : "Japanese";
+}
+
 /* default.xbe must be the exact executable the port was recompiled from. */
 static int check_xbe(Xiso *x)
 {
     const XisoEntry *xbe = find_root_file(x, "default.xbe");
     uint8_t *d;
-    uint32_t base, cert, title_id;
+    uint32_t base, cert, title_id, region, version;
+    WCHAR wt[41];
+    char title[128], lower[128];
     uint64_t h = 0xCBF29CE484222325ull;
 
     if (!xbe)
@@ -259,30 +272,38 @@ static int check_xbe(Xiso *x)
     }
     memcpy(&base, d + 0x104, 4);
     memcpy(&cert, d + 0x118, 4);
-    if (memcmp(d, "XBEH", 4) || cert < base || (uint64_t)cert - base + 0xC + 80 > xbe->size) {
+    if (memcmp(d, "XBEH", 4) || cert < base || (uint64_t)cert - base + 0xB0 > xbe->size) {
         free(d);
         return fail(x, "This disc image's default.xbe is damaged.");
     }
     cert -= base;
     memcpy(&title_id, d + cert + 8, 4);
-    if (title_id != DOA3_TITLE_ID) {
-        WCHAR wt[41];
-        char title[128];
-        memcpy(wt, d + cert + 0xC, 80);
-        wt[40] = 0;
-        if (!WideCharToMultiByte(CP_UTF8, 0, wt, -1, title, sizeof title, NULL, NULL) || !title[0])
-            strcpy_s(title, sizeof title, "another game");
-        free(d);
-        return fail(x, "This disc image is \"%s\", not Dead or Alive 3.", title);
-    }
+    memcpy(&region, d + cert + 0xA0, 4);
+    memcpy(&version, d + cert + 0xAC, 4);
+    memcpy(wt, d + cert + 0xC, 80);
+    wt[40] = 0;
+    if (!WideCharToMultiByte(CP_UTF8, 0, wt, -1, title, sizeof title, NULL, NULL) || !title[0])
+        strcpy_s(title, sizeof title, "another game");
     for (uint32_t i = 0; i < xbe->size; i++)
         h = (h ^ d[i]) * 0x100000001B3ull;
     free(d);
-    if (xbe->size != DOA3_XBE_SIZE || h != DOA3_XBE_FNV64)
-        return fail(x, "This is a different release of Dead or Alive 3. The port is built "
-                       "from the USA release (Dead or Alive 3 (USA) (En,Ja)) and cannot run "
-                       "any other version.");
-    return 1;
+    if (title_id == DOA3_TITLE_ID && xbe->size == DOA3_XBE_SIZE && h == DOA3_XBE_FNV64)
+        return 1;
+    strcpy_s(lower, sizeof lower, title);
+    _strlwr_s(lower, sizeof lower);
+    if (title_id != DOA3_TITLE_ID && !strstr(lower, "dead or alive"))
+        return fail(x, "This disc image is \"%s\", not Dead or Alive 3.", title);
+    if (title_id == DOA3_TITLE_ID && region == 1)
+        return fail(x, "This disc image is the USA release of Dead or Alive 3, but its "
+                       "default.xbe has been modified. Use an unmodified dump of "
+                       "Dead or Alive 3 (USA) (En,Ja).");
+    if (release_name(title_id, region, version))
+        return fail(x, "This disc image is the %s release of Dead or Alive 3. Only the USA "
+                       "release, Dead or Alive 3 (USA) (En,Ja), is supported.",
+                    release_name(title_id, region, version));
+    return fail(x, "This disc image is an unrecognised release of Dead or Alive 3 "
+                   "(title ID %08X, region %X). Only the USA release, "
+                   "Dead or Alive 3 (USA) (En,Ja), is supported.", title_id, region);
 }
 
 /* ── Writing ──────────────────────────────────────────────────────────── */
