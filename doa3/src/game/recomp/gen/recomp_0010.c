@@ -1,12 +1,160 @@
 /**
  * Dead or Alive 3 - Recompiled code chunk 10
- * Functions: 1000 (0x0018C6F8 - 0x001B9C8A)
+ * Functions: 1000 (0x0018C611 - 0x001B9C72)
  */
 
 #define RECOMP_GENERATED_CODE
 #include "recomp_funcs.h"
 #include <math.h>
 #include <stdio.h>
+
+/**
+ * sub_0018C611
+ * Original: 0x0018C611 - 0x0018C654 (67 bytes, 21 insns)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_0018C611(void)
+{
+    uint32_t ebp;
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
+
+loc_0018C611: ;
+    ebp = MEM32(esp + 0x1C);
+    ebp = MEM32(ebp + 0x34);
+    ebp = (uint32_t)(int32_t)SMEM16(ebp + ecx * 2);
+    ebx = (uint32_t)((int32_t)ebx >> 4);
+    ebx--;
+    ebx = ebx | 1;
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)ebp);
+    ebp = 0x400;
+    ebp = ebp - ebx;
+    ebx = MEM32(edx + 0x1C);
+    ebp = (uint32_t)((int32_t)ebp >> 0xB);
+    MEM16(ebx + ecx * 2) = LO16(ebp);
+    eax++;
+    g_seh_ebp = ebp; sub_0018C7E0(); return; /* tail jmp 0x0018C7E0 */
+
+    ecx = (uint32_t)(int32_t)SMEM8(eax + 1);
+    eax++;
+    MEM32(edx + 0x14) = ecx;
+    ebx = MEM32(edx + 0x20);
+    ebx = ZX8(MEM8(ebx + ecx));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)MEM32(edx + 0x24));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)7);
+
+}
+
+/**
+ * sub_0018C654
+ * Original: 0x0018C654 - 0x0018C6F8 (164 bytes, 48 insns)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_0018C654(void)
+{
+    uint32_t ebp;
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
+
+loc_0018C654: ;
+    ebp = MEM32(esp + 0x1C);
+    ebp = MEM32(ebp + 0x34);
+    ebp = (uint32_t)(int32_t)SMEM16(ebp + ecx * 2);
+    ebx = (uint32_t)((int32_t)ebx >> 4);
+    ebx--;
+    ebx = ebx | 1;
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)ebp);
+    ebp = 0x400;
+    ebp = ebp - ebx;
+    ebx = MEM32(edx + 0x1C);
+    ebp = (uint32_t)((int32_t)ebp >> 0xB);
+    MEM16(ebx + ecx * 2) = LO16(ebp);
+    g_seh_ebp = ebp; sub_0018AED2(); return; /* tail jmp 0x0018AED2 */
+
+    ecx = (uint32_t)(int32_t)SMEM8(eax + 1);
+    eax++;
+    MEM32(edx + 0x14) = ecx;
+    ebx = MEM32(edx + 0x20);
+    ebx = ZX8(MEM8(ebx + ecx));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)MEM32(edx + 0x24));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)7);
+    ebp = MEM32(esp + 0x1C);
+    ebp = MEM32(ebp + 0x34);
+    ebp = (uint32_t)(int32_t)SMEM16(ebp + ecx * 2);
+    ebx = (uint32_t)((int32_t)ebx >> 4);
+    ebx--;
+    ebx = ebx | 1;
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)ebp);
+    ebp = MEM32(edx + 0x1C);
+    ebx = ebx + 0x400;
+    ebx = (uint32_t)((int32_t)ebx >> 0xB);
+    MEM16(ebp + ecx * 2) = LO16(ebx);
+    g_seh_ebp = ebp; sub_0018ABCD(); return; /* tail jmp 0x0018ABCD */
+
+    ecx = (uint32_t)(int32_t)SMEM8(eax + 1);
+    eax++;
+    MEM32(edx + 0x14) = ecx;
+    ebx = MEM32(edx + 0x20);
+    ebx = ZX8(MEM8(ebx + ecx));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)MEM32(edx + 0x24));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)7);
+    g_seh_ebp = ebp; sub_0018AE2C(); return; /* tail jmp 0x0018AE2C */
+
+    ecx = (uint32_t)(int32_t)SMEM8(eax + 1);
+    eax++;
+    MEM32(edx + 0x14) = ecx;
+    ebx = MEM32(edx + 0x20);
+    ebx = ZX8(MEM8(ebx + ecx));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)MEM32(edx + 0x24));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)7);
+    g_seh_ebp = ebp; sub_0018AEAB(); return; /* tail jmp 0x0018AEAB */
+
+}
+
+/**
+ * sub_0018C696
+ * Original: 0x0018C696 - 0x0018C6F8 (98 bytes, 28 insns)
+ * CC: cdecl, 0 params, returns int_or_void
+ * Frame: fpo_leaf
+ */
+void sub_0018C696(void)
+{
+    uint32_t ebp;
+    ebp = g_seh_ebp; /* fpo_leaf: inherit caller's frame */
+
+loc_0018C696: ;
+    ebp = MEM32(esp + 0x1C);
+    ebp = MEM32(ebp + 0x34);
+    ebp = (uint32_t)(int32_t)SMEM16(ebp + ecx * 2);
+    ebx = (uint32_t)((int32_t)ebx >> 4);
+    ebx--;
+    ebx = ebx | 1;
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)ebp);
+    ebp = MEM32(edx + 0x1C);
+    ebx = ebx + 0x400;
+    ebx = (uint32_t)((int32_t)ebx >> 0xB);
+    MEM16(ebp + ecx * 2) = LO16(ebx);
+    g_seh_ebp = ebp; sub_0018ABCD(); return; /* tail jmp 0x0018ABCD */
+
+    ecx = (uint32_t)(int32_t)SMEM8(eax + 1);
+    eax++;
+    MEM32(edx + 0x14) = ecx;
+    ebx = MEM32(edx + 0x20);
+    ebx = ZX8(MEM8(ebx + ecx));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)MEM32(edx + 0x24));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)7);
+    g_seh_ebp = ebp; sub_0018AE2C(); return; /* tail jmp 0x0018AE2C */
+
+    ecx = (uint32_t)(int32_t)SMEM8(eax + 1);
+    eax++;
+    MEM32(edx + 0x14) = ecx;
+    ebx = MEM32(edx + 0x20);
+    ebx = ZX8(MEM8(ebx + ecx));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)MEM32(edx + 0x24));
+    ebx = (uint32_t)((int32_t)ebx * (int32_t)7);
+    g_seh_ebp = ebp; sub_0018AEAB(); return; /* tail jmp 0x0018AEAB */
+
+}
 
 /**
  * sub_0018C6F8
@@ -123144,51 +123292,6 @@ void sub_001B9C72(void)
 
 loc_001B9C72: ;
     eax = 0x1C;
-    esp += 8; return; /* ret 4 */
-
-}
-
-/**
- * sub_001B9C7A
- * Original: 0x001B9C7A - 0x001B9C82 (8 bytes, 2 insns)
- * CC: cdecl, 0 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_001B9C7A(void)
-{
-
-loc_001B9C7A: ;
-    eax = 0x10;
-    esp += 8; return; /* ret 4 */
-
-}
-
-/**
- * sub_001B9C82
- * Original: 0x001B9C82 - 0x001B9C8A (8 bytes, 2 insns)
- * CC: cdecl, 0 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_001B9C82(void)
-{
-
-loc_001B9C82: ;
-    eax = 0x30;
-    esp += 8; return; /* ret 4 */
-
-}
-
-/**
- * sub_001B9C8A
- * Original: 0x001B9C8A - 0x001B9C92 (8 bytes, 2 insns)
- * CC: cdecl, 0 params, returns int_or_void
- * Frame: fpo_leaf
- */
-void sub_001B9C8A(void)
-{
-
-loc_001B9C8A: ;
-    eax = 0x2E;
     esp += 8; return; /* ret 4 */
 
 }
