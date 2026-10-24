@@ -52,7 +52,7 @@ PHYS_MASK_RANGE = (0x001B0DE0, 0x001C35C0)   # D3D section
 # boot; 0x1C883B in DSOUND recursed). History: NOTES.md "Dropped fall-throughs".
 FALLTHROUGH_RANGES = [(0x00011000, 0x001B0DE0), (0x001C35C0, 0x001C64A0)]
 FALLTHROUGH_KEEP_XDK = {0x1B4611, 0x1C3FDD, 0x1B1388, 0x1B18C9, 0x1BB96C,
-                        0x1B60A3, 0x1E6774,
+                        0x1B60A3, 0x1E6774, 0x1BB561,
     # restored by hand in the generated tree (D3D, XGRPH, DSOUND, PSGSFD)
     0x1B1EC0, 0x1B29A2, 0x1B29A7, 0x1B3066, 0x1B3116, 0x1B429A,
     0x1B560E, 0x1B632C, 0x1B71A3, 0x1B9258, 0x1BA0FD, 0x1BA5B2,

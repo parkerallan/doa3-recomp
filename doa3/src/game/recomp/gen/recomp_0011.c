@@ -4285,6 +4285,7 @@ loc_001BB581: ;
     eax = MEM32(ebp + 0x10);
     MEM32(eax) = 1;
 
+    g_seh_ebp = ebp; sub_001BB591(); return; /* DOA3: restored dropped fall-through to sub_001BB591 */
 }
 
 /**
